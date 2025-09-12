@@ -68,7 +68,7 @@ python build.py validate
 
 ### Prerequisites
 
-- Go 1.21 or later
+- Go 1.23 or later
 - Network access to BMCs you want to manage
 
 ### Building
@@ -515,7 +515,7 @@ Download pre-built binaries from [GitHub Releases](https://github.com/mattcburns
 curl -L -o shoal "https://github.com/mattcburns/shoal/releases/latest/download/shoal-linux-amd64"
 chmod +x shoal && ./shoal
 
-# macOS ARM64 (Apple Silicon)  
+# macOS ARM64 (Apple Silicon)
 curl -L -o shoal "https://github.com/mattcburns/shoal/releases/latest/download/shoal-darwin-arm64"
 chmod +x shoal && ./shoal
 ```
