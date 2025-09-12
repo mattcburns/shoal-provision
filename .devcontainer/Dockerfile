@@ -7,7 +7,7 @@ FROM golang:1.23
 RUN useradd -ms /bin/bash vscode
 
 # Install git, which is required for 'go mod' and other development tasks.
-RUN apt-get update && apt-get install -y git python3
+RUN apt-get update && apt-get install -y --no-install-recommends git python3 && rm -rf /var/lib/apt/lists/*
 
 # Switch to the non-root user.
 USER vscode
