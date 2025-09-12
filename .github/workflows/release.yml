@@ -1,0 +1,148 @@
+name: Release
+
+on:
+  # Automatic release creation when tags are pushed
+  push:
+    tags:
+      - 'v*'
+  
+  # Allow manual release creation for testing
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g., v1.0.0-beta)'
+        required: true
+        default: 'v0.0.1-test'
+      prerelease:
+        description: 'Mark as pre-release'
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  validate-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetch full history for proper release notes
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'  # Updated to match project requirements
+
+      - name: Validate code quality
+        run: |
+          echo "🔍 Running full validation pipeline..."
+          python build.py validate
+
+      - name: Build all platform binaries
+        id: build
+        run: |
+          echo "🏗️ Building binaries for all supported platforms..."
+          python build.py build-all
+          echo "artifact_path=build" >> $GITHUB_OUTPUT
+
+      - name: Generate checksums
+        run: |
+          cd build
+          echo "📋 Generating SHA256 checksums..."
+          sha256sum shoal-* > SHA256SUMS
+          echo "Generated checksums:"
+          cat SHA256SUMS
+
+      - name: Determine release type
+        id: release-type
+        run: |
+          VERSION="${{ github.event.inputs.version || github.ref_name }}"
+          
+          # Determine if this should be a prerelease
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            # Manual dispatch - use the checkbox input
+            PRERELEASE="${{ github.event.inputs.prerelease }}"
+          elif [[ "$VERSION" =~ -(alpha|beta|rc|test|dev) ]]; then
+            # Tag contains pre-release identifiers
+            PRERELEASE="true"
+          else
+            # Regular release tag
+            PRERELEASE="false"
+          fi
+          
+          echo "prerelease=$PRERELEASE" >> $GITHUB_OUTPUT
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Release version: $VERSION"
+          echo "Pre-release: $PRERELEASE"
+
+      - name: Generate release notes
+        id: release-notes
+        run: |
+          VERSION="${{ steps.release-type.outputs.version }}"
+          
+          # Create release notes
+          cat << EOF > release_notes.md
+          ## Shoal $VERSION
+          
+          ### 📦 Pre-built Binaries
+          
+          This release includes pre-built binaries for multiple platforms:
+          
+          | Platform | Architecture | Binary |
+          |----------|--------------|--------|
+          | Linux | x86_64 | \`shoal-linux-amd64\` |
+          | Linux | ARM64 | \`shoal-linux-arm64\` |
+          | macOS | x86_64 | \`shoal-darwin-amd64\` |
+          | macOS | ARM64 | \`shoal-darwin-arm64\` |
+          | Windows | x86_64 | \`shoal-windows-amd64.exe\` |
+          
+          ### 🔐 Security
+          
+          - **SHA256 Checksums**: All binaries include SHA256 checksums in \`SHA256SUMS\`
+          - **Verify downloads**: \`sha256sum -c SHA256SUMS\` (Linux/macOS) or check manually
+          
+          ### 🚀 Installation
+          
+          1. Download the appropriate binary for your platform
+          2. Verify the checksum (recommended)
+          3. Make executable: \`chmod +x shoal-*\` (Linux/macOS)
+          4. Run: \`./shoal-linux-amd64 -port 8080\`
+          
+          ### 📖 Documentation
+          
+          For usage instructions, configuration options, and API documentation, see the [README.md](https://github.com/mattcburns/shoal/blob/master/README.md).
+          
+          ---
+          
+          **Built from**: \`${{ github.sha }}\`  
+          **Build Date**: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
+          EOF
+          
+          echo "Generated release notes:"
+          cat release_notes.md
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.release-type.outputs.version }}
+          name: ${{ steps.release-type.outputs.version }}
+          body_path: release_notes.md
+          prerelease: ${{ steps.release-type.outputs.prerelease }}
+          files: |
+            build/shoal-*
+            build/SHA256SUMS
+          token: ${{ secrets.GITHUB_TOKEN }}
+          
+      - name: Release Summary
+        run: |
+          echo "✅ Release created successfully!"
+          echo "📦 Version: ${{ steps.release-type.outputs.version }}"
+          echo "🏷️ Pre-release: ${{ steps.release-type.outputs.prerelease }}"
+          echo "🔗 View at: https://github.com/${{ github.repository }}/releases/tag/${{ steps.release-type.outputs.version }}"
