@@ -1,0 +1,23 @@
+{
+	"name": "Shoal Dev Container",
+	"build": {
+		"dockerfile": "Dockerfile",
+		"context": ".."
+	},
+	"customizations": {
+		"vscode": {
+			"extensions": [
+				"golang.go"
+			],
+			"settings": {
+				"go.toolsManagement.autoUpdate": true,
+				"go.useLanguageServer": true,
+				"go.gopath": "/go",
+				"go.goroot": "/usr/local/go"
+			}
+		}
+	},
+	"forwardPorts": [8080],
+	"postCreateCommand": "python3 build.py deps",
+	"remoteUser": "vscode"
+}
