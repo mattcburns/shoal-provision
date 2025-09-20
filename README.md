@@ -335,6 +335,55 @@ curl -H "X-Auth-Token: <token>" http://localhost:8080/redfish/v1/
 - `GET /redfish/v1/Systems/{bmc-name}` - Proxy to specific system
 - `POST /redfish/v1/SessionService/Sessions` - Create authentication session
 
+### AggregationService Management API
+
+Shoal implements Redfish AggregationService for managing external BMCs:
+
+- Service: `/redfish/v1/AggregationService`
+- Sources collection: `/redfish/v1/AggregationService/AggregationSources`
+- Member resource: `/redfish/v1/AggregationService/AggregationSources/{id}`
+- Compatibility: `/redfish/v1/AggregationService/ManagedNodes` redirects to AggregationSources
+
+Only users with `admin` or `operator` roles may create, update, or delete sources; all authenticated users can read.
+
+Examples:
+
+```bash
+# Create session and capture token
+TOKEN=$(curl -s -i -X POST http://localhost:8080/redfish/v1/SessionService/Sessions \
+   -H 'Content-Type: application/json' \
+   -d '{"UserName":"admin","Password":"admin"}' | awk -F': ' '/^X-Auth-Token:/ {print $2}' | tr -d '\r')
+
+# List sources
+curl -s -H "X-Auth-Token: $TOKEN" \
+   http://localhost:8080/redfish/v1/AggregationService/AggregationSources | jq
+
+# Add a source
+curl -s -X POST -H 'Content-Type: application/json' -H "X-Auth-Token: $TOKEN" \
+   -d '{
+      "Name": "bmc-01",
+      "HostName": "192.168.1.50",
+      "UserName": "root",
+      "Password": "calvin",
+      "Description": "Rack A Node 1",
+      "Enabled": true
+   }' \
+   http://localhost:8080/redfish/v1/AggregationService/AggregationSources | jq
+
+# Get a source
+curl -s -H "X-Auth-Token: $TOKEN" \
+   http://localhost:8080/redfish/v1/AggregationService/AggregationSources/1 | jq
+
+# Update a source
+curl -s -X PATCH -H 'Content-Type: application/json' -H "X-Auth-Token: $TOKEN" \
+   -d '{"HostName":"192.168.1.51","Enabled":false}' \
+   http://localhost:8080/redfish/v1/AggregationService/AggregationSources/1 | jq
+
+# Delete a source
+curl -s -X DELETE -H "X-Auth-Token: $TOKEN" \
+   http://localhost:8080/redfish/v1/AggregationService/AggregationSources/1 -i
+```
+
 ## Development
 
 ### Database Schema

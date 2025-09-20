@@ -56,3 +56,26 @@ type ErrorDetail struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
 }
+
+// AggregationService represents the Redfish AggregationService
+type AggregationService struct {
+	ODataContext       string     `json:"@odata.context"`
+	ODataID            string     `json:"@odata.id"`
+	ODataType          string     `json:"@odata.type"`
+	ID                 string     `json:"Id"`
+	Name               string     `json:"Name"`
+	AggregationSources ODataIDRef `json:"AggregationSources"`
+}
+
+// AggregationSource represents a managed external Redfish service (e.g., a BMC)
+// Note: Password is write-only; it is accepted on create/update but never returned.
+type AggregationSource struct {
+	ODataID     string `json:"@odata.id"`
+	ODataType   string `json:"@odata.type"`
+	ID          string `json:"Id"`
+	Name        string `json:"Name"`
+	HostName    string `json:"HostName"`
+	UserName    string `json:"UserName"`
+	Description string `json:"Description,omitempty"`
+	Enabled     bool   `json:"Enabled"`
+}

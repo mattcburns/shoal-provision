@@ -12,6 +12,7 @@ import (
 	"shoal/internal/auth"
 	"shoal/internal/bmc"
 	"shoal/internal/database"
+	rbac "shoal/pkg/auth"
 	"shoal/pkg/models"
 	"shoal/pkg/redfish"
 )
@@ -38,6 +39,7 @@ func New(db *database.DB) http.Handler {
 
 	// BMC management endpoints (aggregator-specific)
 	mux.HandleFunc("/redfish/v1/AggregationService/ManagedNodes/", h.auth.RequireAuth(http.HandlerFunc(h.handleManagedNodes)).ServeHTTP)
+	mux.HandleFunc("/redfish/v1/AggregationService/ManagedNodes", h.auth.RequireAuth(http.HandlerFunc(h.handleManagedNodes)).ServeHTTP)
 
 	return mux
 }
@@ -350,14 +352,301 @@ func (h *Handler) handleSessions(w http.ResponseWriter, r *http.Request) {
 
 // handleManagedNodes handles BMC management operations
 func (h *Handler) handleManagedNodes(w http.ResponseWriter, r *http.Request) {
-	// TODO: Implement BMC management endpoints
-	h.writeErrorResponse(w, http.StatusNotImplemented, "Base.1.0.NotImplemented", "Managed nodes endpoint not yet implemented")
+	// Temporary compatibility: redirect ManagedNodes to AggregationSources
+	// DMTF Redfish uses AggregationSources under AggregationService
+	target := strings.Replace(r.URL.Path, "/ManagedNodes", "/AggregationSources", 1)
+	http.Redirect(w, r, target, http.StatusTemporaryRedirect)
 }
 
 // handleAggregationService handles aggregation service endpoints
 func (h *Handler) handleAggregationService(w http.ResponseWriter, r *http.Request, path string) {
-	// TODO: Implement aggregation service endpoints
-	h.writeErrorResponse(w, http.StatusNotImplemented, "Base.1.0.NotImplemented", "Aggregation service not yet implemented")
+	// Routes:
+	// GET /redfish/v1/AggregationService
+	// GET, POST /redfish/v1/AggregationService/AggregationSources
+	// GET, PATCH, DELETE /redfish/v1/AggregationService/AggregationSources/{id}
+
+	// Normalize
+	if !strings.HasPrefix(path, "/v1/AggregationService") {
+		h.writeErrorResponse(w, http.StatusNotFound, "Base.1.0.ResourceNotFound", "Resource not found")
+		return
+	}
+
+	// Service root
+	if path == "/v1/AggregationService" || path == "/v1/AggregationService/" {
+		if r.Method != http.MethodGet {
+			h.writeErrorResponse(w, http.StatusMethodNotAllowed, "Base.1.0.MethodNotAllowed", "Method not allowed")
+			return
+		}
+
+		svc := redfish.AggregationService{
+			ODataContext:       "/redfish/v1/$metadata#AggregationService.AggregationService",
+			ODataID:            "/redfish/v1/AggregationService",
+			ODataType:          "#AggregationService.v1_5_0.AggregationService",
+			ID:                 "AggregationService",
+			Name:               "Aggregation Service",
+			AggregationSources: redfish.ODataIDRef{ODataID: "/redfish/v1/AggregationService/AggregationSources"},
+		}
+		h.writeJSONResponse(w, http.StatusOK, svc)
+		return
+	}
+
+	// AggregationSources collection
+	if path == "/v1/AggregationService/AggregationSources" || path == "/v1/AggregationService/AggregationSources/" {
+		switch r.Method {
+		case http.MethodGet:
+			h.handleAggregationSourcesCollectionGet(w, r)
+		case http.MethodPost:
+			h.handleAggregationSourcesCollectionPost(w, r)
+		default:
+			h.writeErrorResponse(w, http.StatusMethodNotAllowed, "Base.1.0.MethodNotAllowed", "Method not allowed")
+		}
+		return
+	}
+
+	// Member
+	if strings.HasPrefix(path, "/v1/AggregationService/AggregationSources/") {
+		segs := strings.Split(strings.Trim(path, "/"), "/")
+		if len(segs) != 4 {
+			h.writeErrorResponse(w, http.StatusNotFound, "Base.1.0.ResourceNotFound", "Resource not found")
+			return
+		}
+		id := segs[3]
+
+		switch r.Method {
+		case http.MethodGet:
+			h.handleAggregationSourceGet(w, r, id)
+		case http.MethodPatch:
+			h.handleAggregationSourcePatch(w, r, id)
+		case http.MethodDelete:
+			h.handleAggregationSourceDelete(w, r, id)
+		default:
+			h.writeErrorResponse(w, http.StatusMethodNotAllowed, "Base.1.0.MethodNotAllowed", "Method not allowed")
+		}
+		return
+	}
+
+	h.writeErrorResponse(w, http.StatusNotFound, "Base.1.0.ResourceNotFound", "Resource not found")
+}
+
+// handleAggregationSourcesCollectionGet returns all managed BMCs as AggregationSources
+func (h *Handler) handleAggregationSourcesCollectionGet(w http.ResponseWriter, r *http.Request) {
+	bmcs, err := h.db.GetBMCs(r.Context())
+	if err != nil {
+		slog.Error("Failed to get BMCs", "error", err)
+		h.writeErrorResponse(w, http.StatusInternalServerError, "Base.1.0.InternalError", "Failed to retrieve BMCs")
+		return
+	}
+
+	members := make([]redfish.ODataIDRef, 0, len(bmcs))
+	for _, b := range bmcs {
+		if !b.Enabled {
+			// Still include disabled sources for management visibility per Redfish
+		}
+		members = append(members, redfish.ODataIDRef{ODataID: fmt.Sprintf("/redfish/v1/AggregationService/AggregationSources/%d", b.ID)})
+	}
+
+	collection := redfish.Collection{
+		ODataContext: "/redfish/v1/$metadata#AggregationSourceCollection.AggregationSourceCollection",
+		ODataID:      "/redfish/v1/AggregationService/AggregationSources",
+		ODataType:    "#AggregationSourceCollection.AggregationSourceCollection",
+		Name:         "Aggregation Source Collection",
+		Members:      members,
+		MembersCount: len(members),
+	}
+
+	h.writeJSONResponse(w, http.StatusOK, collection)
+}
+
+// handleAggregationSourcesCollectionPost creates a new AggregationSource (BMC)
+func (h *Handler) handleAggregationSourcesCollectionPost(w http.ResponseWriter, r *http.Request) {
+	// RBAC: operators and admins can manage BMCs
+	user, err := h.auth.AuthenticateRequest(r)
+	if err != nil || !rbac.CanManageBMCs(user) {
+		h.writeErrorResponse(w, http.StatusForbidden, "Base.1.0.InsufficientPrivilege", "Insufficient privilege")
+		return
+	}
+
+	var req struct {
+		HostName    string `json:"HostName"`
+		UserName    string `json:"UserName"`
+		Password    string `json:"Password"`
+		Name        string `json:"Name"`
+		Description string `json:"Description"`
+		Enabled     *bool  `json:"Enabled"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		h.writeErrorResponse(w, http.StatusBadRequest, "Base.1.0.MalformedJSON", "Invalid JSON in request body")
+		return
+	}
+
+	if req.HostName == "" || req.UserName == "" || req.Password == "" || req.Name == "" {
+		h.writeErrorResponse(w, http.StatusBadRequest, "Base.1.0.PropertyValueRequired", "Name, HostName, UserName, and Password are required")
+		return
+	}
+
+	enabled := true
+	if req.Enabled != nil {
+		enabled = *req.Enabled
+	}
+
+	b := &models.BMC{
+		Name:        req.Name,
+		Address:     req.HostName,
+		Username:    req.UserName,
+		Password:    req.Password,
+		Description: req.Description,
+		Enabled:     enabled,
+	}
+
+	if err := h.db.CreateBMC(r.Context(), b); err != nil {
+		slog.Error("Failed to create BMC", "error", err)
+		h.writeErrorResponse(w, http.StatusBadRequest, "Base.1.0.GeneralError", fmt.Sprintf("Failed to create source: %v", err))
+		return
+	}
+
+	// Optional: test connectivity (non-fatal)
+	go func(name string, bmcCopy models.BMC) {
+		if err := h.bmcSvc.TestConnection(r.Context(), &bmcCopy); err != nil {
+			slog.Warn("New source connectivity test failed", "bmc", name, "error", err)
+		}
+	}(b.Name, *b)
+
+	// Build response without password
+	src := redfish.AggregationSource{
+		ODataID:     fmt.Sprintf("/redfish/v1/AggregationService/AggregationSources/%d", b.ID),
+		ODataType:   "#AggregationSource.v1_4_0.AggregationSource",
+		ID:          fmt.Sprintf("%d", b.ID),
+		Name:        b.Name,
+		HostName:    b.Address,
+		UserName:    b.Username,
+		Enabled:     b.Enabled,
+		Description: b.Description,
+	}
+
+	w.Header().Set("Location", src.ODataID)
+	h.writeJSONResponse(w, http.StatusCreated, src)
+}
+
+// handleAggregationSourceGet returns a single AggregationSource
+func (h *Handler) handleAggregationSourceGet(w http.ResponseWriter, r *http.Request, id string) {
+	// Look up by numeric ID
+	var idNum int64
+	_, err := fmt.Sscanf(id, "%d", &idNum)
+	if err != nil {
+		h.writeErrorResponse(w, http.StatusNotFound, "Base.1.0.ResourceNotFound", "Resource not found")
+		return
+	}
+
+	b, err := h.db.GetBMC(r.Context(), idNum)
+	if err != nil {
+		slog.Error("Failed to get BMC", "error", err)
+		h.writeErrorResponse(w, http.StatusInternalServerError, "Base.1.0.InternalError", "Failed to retrieve aggregation source")
+		return
+	}
+	if b == nil {
+		h.writeErrorResponse(w, http.StatusNotFound, "Base.1.0.ResourceNotFound", "AggregationSource not found")
+		return
+	}
+
+	src := redfish.AggregationSource{
+		ODataID:     fmt.Sprintf("/redfish/v1/AggregationService/AggregationSources/%d", b.ID),
+		ODataType:   "#AggregationSource.v1_4_0.AggregationSource",
+		ID:          fmt.Sprintf("%d", b.ID),
+		Name:        b.Name,
+		HostName:    b.Address,
+		UserName:    b.Username,
+		Description: b.Description,
+		Enabled:     b.Enabled,
+	}
+	h.writeJSONResponse(w, http.StatusOK, src)
+}
+
+// handleAggregationSourcePatch updates fields of an AggregationSource
+func (h *Handler) handleAggregationSourcePatch(w http.ResponseWriter, r *http.Request, id string) {
+	user, err := h.auth.AuthenticateRequest(r)
+	if err != nil || !rbac.CanManageBMCs(user) {
+		h.writeErrorResponse(w, http.StatusForbidden, "Base.1.0.InsufficientPrivilege", "Insufficient privilege")
+		return
+	}
+
+	var idNum int64
+	_, err = fmt.Sscanf(id, "%d", &idNum)
+	if err != nil {
+		h.writeErrorResponse(w, http.StatusNotFound, "Base.1.0.ResourceNotFound", "Resource not found")
+		return
+	}
+
+	b, err := h.db.GetBMC(r.Context(), idNum)
+	if err != nil || b == nil {
+		h.writeErrorResponse(w, http.StatusNotFound, "Base.1.0.ResourceNotFound", "AggregationSource not found")
+		return
+	}
+
+	var req struct {
+		HostName    *string `json:"HostName"`
+		UserName    *string `json:"UserName"`
+		Password    *string `json:"Password"`
+		Name        *string `json:"Name"`
+		Description *string `json:"Description"`
+		Enabled     *bool   `json:"Enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		h.writeErrorResponse(w, http.StatusBadRequest, "Base.1.0.MalformedJSON", "Invalid JSON in request body")
+		return
+	}
+
+	if req.Name != nil {
+		b.Name = *req.Name
+	}
+	if req.HostName != nil {
+		b.Address = *req.HostName
+	}
+	if req.UserName != nil {
+		b.Username = *req.UserName
+	}
+	if req.Password != nil {
+		b.Password = *req.Password
+	}
+	if req.Description != nil {
+		b.Description = *req.Description
+	}
+	if req.Enabled != nil {
+		b.Enabled = *req.Enabled
+	}
+
+	if err := h.db.UpdateBMC(r.Context(), b); err != nil {
+		slog.Error("Failed to update BMC", "error", err)
+		h.writeErrorResponse(w, http.StatusBadRequest, "Base.1.0.GeneralError", fmt.Sprintf("Failed to update source: %v", err))
+		return
+	}
+
+	// Return updated resource
+	h.handleAggregationSourceGet(w, r, id)
+}
+
+// handleAggregationSourceDelete removes an AggregationSource
+func (h *Handler) handleAggregationSourceDelete(w http.ResponseWriter, r *http.Request, id string) {
+	user, err := h.auth.AuthenticateRequest(r)
+	if err != nil || !rbac.CanManageBMCs(user) {
+		h.writeErrorResponse(w, http.StatusForbidden, "Base.1.0.InsufficientPrivilege", "Insufficient privilege")
+		return
+	}
+
+	var idNum int64
+	_, err = fmt.Sscanf(id, "%d", &idNum)
+	if err != nil {
+		h.writeErrorResponse(w, http.StatusNotFound, "Base.1.0.ResourceNotFound", "Resource not found")
+		return
+	}
+
+	if err := h.db.DeleteBMC(r.Context(), idNum); err != nil {
+		slog.Error("Failed to delete BMC", "error", err)
+		h.writeErrorResponse(w, http.StatusInternalServerError, "Base.1.0.InternalError", "Failed to delete aggregation source")
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // writeErrorResponse writes a Redfish-compliant error response
