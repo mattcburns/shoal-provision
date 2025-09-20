@@ -870,11 +870,7 @@ func (s *Service) getStorageDevices(ctx context.Context, bmc *models.BMC) ([]mod
 	// Then, try to get devices from SimpleStorage collection
 	storageDevices = append(storageDevices, s.getStorageDevicesFromSimpleStorage(ctx, bmc, systemID)...)
 
-	// If we didn't find any storage devices, return an error
-	if len(storageDevices) == 0 {
-		return nil, fmt.Errorf("no storage devices found in either Storage or SimpleStorage collections")
-	}
-
+	// Return the (possibly empty) list of storage devices
 	return storageDevices, nil
 }
 
