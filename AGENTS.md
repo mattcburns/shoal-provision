@@ -50,6 +50,7 @@ This section outlines development tasks.
 1.  **Documentation Maintenance**
     - **ALWAYS update README.md** with any changes to features, build process, or usage.
     - **ALWAYS update DEPLOYMENT.md** with any changes to build process, deployment, or production configuration.
+    - **ALWAYS write tests for new code, when appropriate.
     - Keep API documentation current with endpoint changes.
     - Update troubleshooting guides based on user feedback.
     - Maintain build instruction accuracy across platforms.

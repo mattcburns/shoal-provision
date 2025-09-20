@@ -79,6 +79,12 @@ func (h *Handler) handleRedfish(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Handle AggregationService endpoints
+	if strings.HasPrefix(path, "/v1/AggregationService") {
+		h.handleAggregationService(w, r, path, user)
+		return
+	}
+
 	// Handle aggregator-specific endpoints
 	h.handleAggregatorEndpoints(w, r, path, user)
 }
@@ -244,11 +250,6 @@ func (h *Handler) isBMCProxyRequest(path string) bool {
 
 // handleAggregatorEndpoints handles aggregator-specific endpoints
 func (h *Handler) handleAggregatorEndpoints(w http.ResponseWriter, r *http.Request, path string, user *models.User) {
-	if strings.HasPrefix(path, "/v1/AggregationService") {
-		h.handleAggregationService(w, r, path)
-		return
-	}
-
 	if path == "/v1/Managers" || path == "/v1/Managers/" {
 		h.handleManagersCollection(w, r)
 		return
@@ -269,6 +270,7 @@ func (h *Handler) handleManagersCollection(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	// Get both regular BMCs and ConnectionMethods
 	bmcs, err := h.db.GetBMCs(r.Context())
 	if err != nil {
 		slog.Error("Failed to get BMCs", "error", err)
@@ -276,12 +278,39 @@ func (h *Handler) handleManagersCollection(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	methods, err := h.bmcSvc.GetConnectionMethods(r.Context())
+	if err != nil {
+		slog.Error("Failed to get connection methods", "error", err)
+		// Don't fail entirely if we can't get connection methods
+	}
+
 	var members []redfish.ODataIDRef
+
+	// Add regular BMCs
 	for _, bmc := range bmcs {
 		if bmc.Enabled {
 			members = append(members, redfish.ODataIDRef{
 				ODataID: fmt.Sprintf("/redfish/v1/Managers/%s", bmc.Name),
 			})
+		}
+	}
+
+	// Add aggregated managers from ConnectionMethods
+	for _, method := range methods {
+		if method.Enabled && method.AggregatedManagers != "" {
+			// Parse the aggregated managers JSON
+			var managers []map[string]interface{}
+			if err := json.Unmarshal([]byte(method.AggregatedManagers), &managers); err == nil {
+				for _, manager := range managers {
+					if odataID, ok := manager["@odata.id"].(string); ok {
+						// Prefix with the connection method ID to make it unique
+						modifiedID := fmt.Sprintf("/redfish/v1/Managers/%s%s", method.ID, odataID)
+						members = append(members, redfish.ODataIDRef{
+							ODataID: modifiedID,
+						})
+					}
+				}
+			}
 		}
 	}
 
@@ -304,6 +333,7 @@ func (h *Handler) handleSystemsCollection(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	// Get both regular BMCs and ConnectionMethods
 	bmcs, err := h.db.GetBMCs(r.Context())
 	if err != nil {
 		slog.Error("Failed to get BMCs", "error", err)
@@ -311,12 +341,39 @@ func (h *Handler) handleSystemsCollection(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	methods, err := h.bmcSvc.GetConnectionMethods(r.Context())
+	if err != nil {
+		slog.Error("Failed to get connection methods", "error", err)
+		// Don't fail entirely if we can't get connection methods
+	}
+
 	var members []redfish.ODataIDRef
+
+	// Add regular BMCs
 	for _, bmc := range bmcs {
 		if bmc.Enabled {
 			members = append(members, redfish.ODataIDRef{
 				ODataID: fmt.Sprintf("/redfish/v1/Systems/%s", bmc.Name),
 			})
+		}
+	}
+
+	// Add aggregated systems from ConnectionMethods
+	for _, method := range methods {
+		if method.Enabled && method.AggregatedSystems != "" {
+			// Parse the aggregated systems JSON
+			var systems []map[string]interface{}
+			if err := json.Unmarshal([]byte(method.AggregatedSystems), &systems); err == nil {
+				for _, system := range systems {
+					if odataID, ok := system["@odata.id"].(string); ok {
+						// Prefix with the connection method ID to make it unique
+						modifiedID := fmt.Sprintf("/redfish/v1/Systems/%s%s", method.ID, odataID)
+						members = append(members, redfish.ODataIDRef{
+							ODataID: modifiedID,
+						})
+					}
+				}
+			}
 		}
 	}
 
@@ -355,9 +412,192 @@ func (h *Handler) handleManagedNodes(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleAggregationService handles aggregation service endpoints
-func (h *Handler) handleAggregationService(w http.ResponseWriter, r *http.Request, path string) {
-	// TODO: Implement aggregation service endpoints
-	h.writeErrorResponse(w, http.StatusNotImplemented, "Base.1.0.NotImplemented", "Aggregation service not yet implemented")
+func (h *Handler) handleAggregationService(w http.ResponseWriter, r *http.Request, path string, user *models.User) {
+	// Remove /v1/AggregationService prefix
+	subPath := strings.TrimPrefix(path, "/v1/AggregationService")
+
+	if subPath == "" || subPath == "/" {
+		// Handle AggregationService root
+		if r.Method != "GET" {
+			h.writeErrorResponse(w, http.StatusMethodNotAllowed, "Base.1.0.MethodNotAllowed", "Method not allowed")
+			return
+		}
+
+		aggService := redfish.AggregationService{
+			ODataContext: "/redfish/v1/$metadata#AggregationService.AggregationService",
+			ODataID:      "/redfish/v1/AggregationService",
+			ODataType:    "#AggregationService.v1_0_0.AggregationService",
+			ID:           "AggregationService",
+			Name:         "Aggregation Service",
+			Description:  "BMC Aggregation Service",
+			ConnectionMethods: redfish.ODataIDRef{
+				ODataID: "/redfish/v1/AggregationService/ConnectionMethods",
+			},
+		}
+
+		h.writeJSONResponse(w, http.StatusOK, aggService)
+		return
+	}
+
+	if subPath == "/ConnectionMethods" || subPath == "/ConnectionMethods/" {
+		// Handle ConnectionMethods collection
+		h.handleConnectionMethodsCollection(w, r, user)
+		return
+	}
+
+	if strings.HasPrefix(subPath, "/ConnectionMethods/") {
+		// Handle individual ConnectionMethod
+		parts := strings.Split(strings.TrimPrefix(subPath, "/ConnectionMethods/"), "/")
+		if len(parts) == 1 && parts[0] != "" {
+			h.handleConnectionMethod(w, r, parts[0], user)
+			return
+		}
+	}
+
+	h.writeErrorResponse(w, http.StatusNotFound, "Base.1.0.ResourceNotFound", "Resource not found")
+}
+
+// handleConnectionMethodsCollection handles the ConnectionMethods collection
+func (h *Handler) handleConnectionMethodsCollection(w http.ResponseWriter, r *http.Request, user *models.User) {
+	switch r.Method {
+	case "GET":
+		// Get all connection methods
+		methods, err := h.bmcSvc.GetConnectionMethods(r.Context())
+		if err != nil {
+			slog.Error("Failed to get connection methods", "error", err)
+			h.writeErrorResponse(w, http.StatusInternalServerError, "Base.1.0.InternalError", "Failed to retrieve connection methods")
+			return
+		}
+
+		var members []redfish.ODataIDRef
+		for _, method := range methods {
+			members = append(members, redfish.ODataIDRef{
+				ODataID: fmt.Sprintf("/redfish/v1/AggregationService/ConnectionMethods/%s", method.ID),
+			})
+		}
+
+		collection := redfish.Collection{
+			ODataContext: "/redfish/v1/$metadata#ConnectionMethodCollection.ConnectionMethodCollection",
+			ODataID:      "/redfish/v1/AggregationService/ConnectionMethods",
+			ODataType:    "#ConnectionMethodCollection.ConnectionMethodCollection",
+			Name:         "Connection Method Collection",
+			Members:      members,
+			MembersCount: len(members),
+		}
+
+		h.writeJSONResponse(w, http.StatusOK, collection)
+
+	case "POST":
+		// Create a new connection method
+		var req struct {
+			Name                 string `json:"Name"`
+			ConnectionMethodType string `json:"ConnectionMethodType"`
+			Address              string `json:"ConnectionMethodVariant.Address"`
+			Authentication       struct {
+				Username string `json:"Username"`
+				Password string `json:"Password"`
+			} `json:"ConnectionMethodVariant.Authentication"`
+		}
+
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			h.writeErrorResponse(w, http.StatusBadRequest, "Base.1.0.MalformedJSON", "Invalid JSON in request body")
+			return
+		}
+
+		// Validate required fields
+		if req.Name == "" || req.Address == "" || req.Authentication.Username == "" || req.Authentication.Password == "" {
+			h.writeErrorResponse(w, http.StatusBadRequest, "Base.1.0.PropertyMissing", "Required properties missing")
+			return
+		}
+
+		// Default to Redfish if not specified
+		if req.ConnectionMethodType == "" {
+			req.ConnectionMethodType = "Redfish"
+		}
+
+		// Create the connection method
+		method, err := h.bmcSvc.AddConnectionMethod(
+			r.Context(),
+			req.Name,
+			req.Address,
+			req.Authentication.Username,
+			req.Authentication.Password,
+		)
+		if err != nil {
+			slog.Error("Failed to create connection method", "error", err)
+			if strings.Contains(err.Error(), "failed to connect") {
+				h.writeErrorResponse(w, http.StatusBadRequest, "Base.1.0.ResourceCannotBeCreated", "Unable to connect to BMC")
+			} else {
+				h.writeErrorResponse(w, http.StatusInternalServerError, "Base.1.0.InternalError", "Failed to create connection method")
+			}
+			return
+		}
+
+		// Return the created connection method
+		connMethod := redfish.ConnectionMethod{
+			ODataContext:         "/redfish/v1/$metadata#ConnectionMethod.ConnectionMethod",
+			ODataID:              fmt.Sprintf("/redfish/v1/AggregationService/ConnectionMethods/%s", method.ID),
+			ODataType:            "#ConnectionMethod.v1_0_0.ConnectionMethod",
+			ID:                   method.ID,
+			Name:                 method.Name,
+			ConnectionMethodType: method.ConnectionMethodType,
+			ConnectionMethodVariant: redfish.ConnectionMethodVariant{
+				ODataType: "#ConnectionMethod.v1_0_0.ConnectionMethodVariant",
+				Address:   method.Address,
+			},
+		}
+
+		w.Header().Set("Location", fmt.Sprintf("/redfish/v1/AggregationService/ConnectionMethods/%s", method.ID))
+		h.writeJSONResponse(w, http.StatusCreated, connMethod)
+
+	default:
+		h.writeErrorResponse(w, http.StatusMethodNotAllowed, "Base.1.0.MethodNotAllowed", "Method not allowed")
+	}
+}
+
+// handleConnectionMethod handles a specific ConnectionMethod resource
+func (h *Handler) handleConnectionMethod(w http.ResponseWriter, r *http.Request, id string, user *models.User) {
+	switch r.Method {
+	case "GET":
+		method, err := h.bmcSvc.GetConnectionMethod(r.Context(), id)
+		if err != nil {
+			slog.Error("Failed to get connection method", "id", id, "error", err)
+			h.writeErrorResponse(w, http.StatusInternalServerError, "Base.1.0.InternalError", "Failed to retrieve connection method")
+			return
+		}
+		if method == nil {
+			h.writeErrorResponse(w, http.StatusNotFound, "Base.1.0.ResourceNotFound", "Connection method not found")
+			return
+		}
+
+		connMethod := redfish.ConnectionMethod{
+			ODataContext:         "/redfish/v1/$metadata#ConnectionMethod.ConnectionMethod",
+			ODataID:              fmt.Sprintf("/redfish/v1/AggregationService/ConnectionMethods/%s", method.ID),
+			ODataType:            "#ConnectionMethod.v1_0_0.ConnectionMethod",
+			ID:                   method.ID,
+			Name:                 method.Name,
+			ConnectionMethodType: method.ConnectionMethodType,
+			ConnectionMethodVariant: redfish.ConnectionMethodVariant{
+				ODataType: "#ConnectionMethod.v1_0_0.ConnectionMethodVariant",
+				Address:   method.Address,
+			},
+		}
+
+		h.writeJSONResponse(w, http.StatusOK, connMethod)
+
+	case "DELETE":
+		err := h.bmcSvc.RemoveConnectionMethod(r.Context(), id)
+		if err != nil {
+			slog.Error("Failed to delete connection method", "id", id, "error", err)
+			h.writeErrorResponse(w, http.StatusInternalServerError, "Base.1.0.InternalError", "Failed to delete connection method")
+			return
+		}
+
+		w.WriteHeader(http.StatusNoContent)
+
+	default:
+		h.writeErrorResponse(w, http.StatusMethodNotAllowed, "Base.1.0.MethodNotAllowed", "Method not allowed")
+	}
 }
 
 // writeErrorResponse writes a Redfish-compliant error response

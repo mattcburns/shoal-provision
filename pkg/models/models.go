@@ -61,3 +61,20 @@ const (
 type PowerRequest struct {
 	ResetType PowerAction `json:"ResetType"`
 }
+
+// ConnectionMethod represents an aggregation connection to an external BMC
+type ConnectionMethod struct {
+	ID                   string     `json:"id" db:"id"`
+	Name                 string     `json:"Name" db:"name"`
+	ConnectionMethodType string     `json:"ConnectionMethodType" db:"connection_type"`
+	Address              string     `json:"ConnectionMethodVariant.Address" db:"address"`
+	Username             string     `json:"-" db:"username"`
+	Password             string     `json:"-" db:"password"`
+	Enabled              bool       `json:"Enabled" db:"enabled"`
+	CreatedAt            time.Time  `json:"CreatedAt" db:"created_at"`
+	UpdatedAt            time.Time  `json:"UpdatedAt" db:"updated_at"`
+	LastSeen             *time.Time `json:"LastSeen,omitempty" db:"last_seen"`
+	// Cached aggregated data (stored as JSON in database)
+	AggregatedManagers string `json:"-" db:"aggregated_managers"`
+	AggregatedSystems  string `json:"-" db:"aggregated_systems"`
+}

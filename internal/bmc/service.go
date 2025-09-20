@@ -525,3 +525,188 @@ func (s *Service) createProxyRequest(r *http.Request, targetURL string, bmc *mod
 
 	return proxyReq, nil
 }
+
+// ConnectionMethod management methods for AggregationService
+
+// AddConnectionMethod creates a new connection method and fetches initial aggregated data
+func (s *Service) AddConnectionMethod(ctx context.Context, name, address, username, password string) (*models.ConnectionMethod, error) {
+	// Generate a unique ID for the connection method
+	id := fmt.Sprintf("cm-%d", time.Now().UnixNano())
+
+	method := &models.ConnectionMethod{
+		ID:                   id,
+		Name:                 name,
+		ConnectionMethodType: "Redfish",
+		Address:              address,
+		Username:             username,
+		Password:             password,
+		Enabled:              true,
+	}
+
+	// Test the connection first
+	testBMC := &models.BMC{
+		Address:  address,
+		Username: username,
+		Password: password,
+	}
+	if err := s.TestConnection(ctx, testBMC); err != nil {
+		return nil, fmt.Errorf("failed to connect to BMC: %w", err)
+	}
+
+	// Fetch initial aggregated data
+	managers, systems, err := s.FetchAggregatedData(ctx, testBMC)
+	if err != nil {
+		slog.Warn("Failed to fetch initial aggregated data", "error", err)
+		// Continue anyway - we can fetch later
+	}
+
+	// Store the aggregated data as JSON strings
+	if managers != nil {
+		managersJSON, _ := json.Marshal(managers)
+		method.AggregatedManagers = string(managersJSON)
+	}
+	if systems != nil {
+		systemsJSON, _ := json.Marshal(systems)
+		method.AggregatedSystems = string(systemsJSON)
+	}
+
+	// Store in database
+	if err := s.db.CreateConnectionMethod(ctx, method); err != nil {
+		return nil, fmt.Errorf("failed to create connection method: %w", err)
+	}
+
+	return method, nil
+}
+
+// FetchAggregatedData fetches managers and systems from a BMC
+func (s *Service) FetchAggregatedData(ctx context.Context, bmc *models.BMC) ([]map[string]interface{}, []map[string]interface{}, error) {
+	var managers []map[string]interface{}
+	var systems []map[string]interface{}
+
+	// Fetch managers collection
+	managersURL, err := s.buildBMCURL(bmc, "/redfish/v1/Managers")
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to build managers URL: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "GET", managersURL, nil)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create managers request: %w", err)
+	}
+	req.SetBasicAuth(bmc.Username, bmc.Password)
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to fetch managers: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusOK {
+		var collection map[string]interface{}
+		if err := json.NewDecoder(resp.Body).Decode(&collection); err == nil {
+			// Extract member URLs and fetch each manager
+			if members, ok := collection["Members"].([]interface{}); ok {
+				for _, member := range members {
+					if m, ok := member.(map[string]interface{}); ok {
+						if odataID, ok := m["@odata.id"].(string); ok {
+							// Fetch the individual manager resource
+							managerData, _ := s.fetchRedfishResource(ctx, bmc, odataID)
+							if managerData != nil {
+								managers = append(managers, managerData)
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// Fetch systems collection
+	systemsURL, err := s.buildBMCURL(bmc, "/redfish/v1/Systems")
+	if err != nil {
+		return managers, nil, fmt.Errorf("failed to build systems URL: %w", err)
+	}
+
+	req, err = http.NewRequestWithContext(ctx, "GET", systemsURL, nil)
+	if err != nil {
+		return managers, nil, fmt.Errorf("failed to create systems request: %w", err)
+	}
+	req.SetBasicAuth(bmc.Username, bmc.Password)
+	req.Header.Set("Accept", "application/json")
+
+	resp, err = s.client.Do(req)
+	if err != nil {
+		return managers, nil, fmt.Errorf("failed to fetch systems: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusOK {
+		var collection map[string]interface{}
+		if err := json.NewDecoder(resp.Body).Decode(&collection); err == nil {
+			// Extract member URLs and fetch each system
+			if members, ok := collection["Members"].([]interface{}); ok {
+				for _, member := range members {
+					if m, ok := member.(map[string]interface{}); ok {
+						if odataID, ok := m["@odata.id"].(string); ok {
+							// Fetch the individual system resource
+							systemData, _ := s.fetchRedfishResource(ctx, bmc, odataID)
+							if systemData != nil {
+								systems = append(systems, systemData)
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return managers, systems, nil
+}
+
+// fetchRedfishResource fetches a single Redfish resource
+func (s *Service) fetchRedfishResource(ctx context.Context, bmc *models.BMC, path string) (map[string]interface{}, error) {
+	targetURL, err := s.buildBMCURL(bmc, path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build resource URL: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "GET", targetURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create resource request: %w", err)
+	}
+	req.SetBasicAuth(bmc.Username, bmc.Password)
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch resource: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("failed to fetch resource: status %d", resp.StatusCode)
+	}
+
+	var data map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		return nil, fmt.Errorf("failed to decode resource: %w", err)
+	}
+
+	return data, nil
+}
+
+// RemoveConnectionMethod removes a connection method and its aggregated data
+func (s *Service) RemoveConnectionMethod(ctx context.Context, id string) error {
+	return s.db.DeleteConnectionMethod(ctx, id)
+}
+
+// GetConnectionMethods returns all connection methods
+func (s *Service) GetConnectionMethods(ctx context.Context) ([]models.ConnectionMethod, error) {
+	return s.db.GetConnectionMethods(ctx)
+}
+
+// GetConnectionMethod returns a single connection method by ID
+func (s *Service) GetConnectionMethod(ctx context.Context, id string) (*models.ConnectionMethod, error) {
+	return s.db.GetConnectionMethod(ctx, id)
+}

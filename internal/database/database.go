@@ -96,6 +96,21 @@ func (db *DB) Migrate(ctx context.Context) error {
 		`CREATE INDEX IF NOT EXISTS idx_bmcs_enabled ON bmcs(enabled)`,
 		`CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(token)`,
 		`CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at)`,
+		`CREATE TABLE IF NOT EXISTS connection_methods (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL UNIQUE,
+			connection_type TEXT NOT NULL DEFAULT 'Redfish',
+			address TEXT NOT NULL,
+			username TEXT NOT NULL,
+			password TEXT NOT NULL,
+			enabled BOOLEAN DEFAULT true,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			last_seen DATETIME,
+			aggregated_managers TEXT,
+			aggregated_systems TEXT
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_connection_methods_enabled ON connection_methods(enabled)`,
 	}
 
 	tx, err := db.conn.BeginTx(ctx, nil)
@@ -467,4 +482,131 @@ func (db *DB) CountUsers(ctx context.Context) (int, error) {
 	}
 
 	return count, nil
+}
+
+// ConnectionMethod operations
+
+// GetConnectionMethods returns all connection methods from the database
+func (db *DB) GetConnectionMethods(ctx context.Context) ([]models.ConnectionMethod, error) {
+	query := `SELECT id, name, connection_type, address, username, password, enabled, created_at, updated_at, last_seen, aggregated_managers, aggregated_systems FROM connection_methods ORDER BY name`
+
+	rows, err := db.conn.QueryContext(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query connection methods: %w", err)
+	}
+	defer rows.Close()
+
+	var methods []models.ConnectionMethod
+	for rows.Next() {
+		var method models.ConnectionMethod
+		err := rows.Scan(&method.ID, &method.Name, &method.ConnectionMethodType, &method.Address, &method.Username, &method.Password,
+			&method.Enabled, &method.CreatedAt, &method.UpdatedAt, &method.LastSeen, &method.AggregatedManagers, &method.AggregatedSystems)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan connection method: %w", err)
+		}
+
+		// Decrypt password if encryptor is available
+		if db.encryptor != nil && crypto.IsEncrypted(method.Password) {
+			decrypted, err := db.encryptor.Decrypt(method.Password)
+			if err != nil {
+				slog.Error("Failed to decrypt connection method password", "method", method.Name, "error", err)
+			} else {
+				method.Password = decrypted
+			}
+		}
+
+		methods = append(methods, method)
+	}
+
+	return methods, rows.Err()
+}
+
+// GetConnectionMethod returns a single connection method by ID
+func (db *DB) GetConnectionMethod(ctx context.Context, id string) (*models.ConnectionMethod, error) {
+	query := `SELECT id, name, connection_type, address, username, password, enabled, created_at, updated_at, last_seen, aggregated_managers, aggregated_systems FROM connection_methods WHERE id = ?`
+
+	var method models.ConnectionMethod
+	err := db.conn.QueryRowContext(ctx, query, id).Scan(
+		&method.ID, &method.Name, &method.ConnectionMethodType, &method.Address, &method.Username, &method.Password,
+		&method.Enabled, &method.CreatedAt, &method.UpdatedAt, &method.LastSeen, &method.AggregatedManagers, &method.AggregatedSystems)
+
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to get connection method: %w", err)
+	}
+
+	// Decrypt password if encryptor is available
+	if db.encryptor != nil && crypto.IsEncrypted(method.Password) {
+		decrypted, err := db.encryptor.Decrypt(method.Password)
+		if err != nil {
+			slog.Error("Failed to decrypt connection method password", "method", method.Name, "error", err)
+		} else {
+			method.Password = decrypted
+		}
+	}
+
+	return &method, nil
+}
+
+// CreateConnectionMethod creates a new connection method
+func (db *DB) CreateConnectionMethod(ctx context.Context, method *models.ConnectionMethod) error {
+	// Encrypt password if encryptor is available
+	password := method.Password
+	if db.encryptor != nil {
+		encrypted, err := db.encryptor.Encrypt(password)
+		if err != nil {
+			return fmt.Errorf("failed to encrypt connection method password: %w", err)
+		}
+		password = encrypted
+	}
+
+	query := `INSERT INTO connection_methods (id, name, connection_type, address, username, password, enabled, aggregated_managers, aggregated_systems) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+
+	_, err := db.conn.ExecContext(ctx, query, method.ID, method.Name, method.ConnectionMethodType, method.Address, method.Username, password, method.Enabled, method.AggregatedManagers, method.AggregatedSystems)
+	if err != nil {
+		return fmt.Errorf("failed to create connection method: %w", err)
+	}
+
+	method.CreatedAt = time.Now()
+	method.UpdatedAt = time.Now()
+
+	return nil
+}
+
+// UpdateConnectionMethodAggregatedData updates the cached aggregated data for a connection method
+func (db *DB) UpdateConnectionMethodAggregatedData(ctx context.Context, id string, managers, systems string) error {
+	query := `UPDATE connection_methods SET aggregated_managers = ?, aggregated_systems = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
+
+	_, err := db.conn.ExecContext(ctx, query, managers, systems, id)
+	if err != nil {
+		return fmt.Errorf("failed to update connection method aggregated data: %w", err)
+	}
+
+	return nil
+}
+
+// DeleteConnectionMethod deletes a connection method by ID
+func (db *DB) DeleteConnectionMethod(ctx context.Context, id string) error {
+	query := `DELETE FROM connection_methods WHERE id = ?`
+
+	_, err := db.conn.ExecContext(ctx, query, id)
+	if err != nil {
+		return fmt.Errorf("failed to delete connection method: %w", err)
+	}
+
+	return nil
+}
+
+// UpdateConnectionMethodLastSeen updates the last seen timestamp
+func (db *DB) UpdateConnectionMethodLastSeen(ctx context.Context, id string) error {
+	query := `UPDATE connection_methods SET last_seen = CURRENT_TIMESTAMP WHERE id = ?`
+
+	_, err := db.conn.ExecContext(ctx, query, id)
+	if err != nil {
+		return fmt.Errorf("failed to update connection method last seen: %w", err)
+	}
+
+	return nil
 }

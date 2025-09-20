@@ -48,18 +48,18 @@ Shoal is a Go-based Redfish aggregator service that discovers and manages multip
 ├── static/             # Static web assets
 
 # Build for the current platform (recommended)
-python build.py build
+python3 build.py build
 
 # Build for all supported platforms (Linux, Windows, macOS, arm64/x86_64)
-python build.py build-all
+python3 build.py build-all
 
 # Build for a specific platform (e.g., linux/amd64, windows/amd64, darwin/arm64)
-python build.py build --platform linux/amd64
-python build.py build --platform windows/amd64
-python build.py build --platform darwin/arm64
+python3 build.py build --platform linux/amd64
+python3 build.py build --platform windows/amd64
+python3 build.py build --platform darwin/arm64
 
 # Or run the full validation pipeline
-python build.py validate
+python3 build.py validate
 ```
 └── templates/          # HTML templates (embedded in code)
 ```
@@ -79,15 +79,15 @@ git clone <repository-url>
 cd shoal
 
 # Build using the automated build system (recommended)
-python build.py build
+python3 build.py build
 
 # Or run the full validation pipeline
-python build.py validate
+python3 build.py validate
 ```
 
 **Build Requirements:**
 - Go 1.21 or later
-- Python 3.12 or later (for build automation)
+- Python 3.7 or later (for build automation)
 - Network access to download Go modules
 
 The build system uses Python for cross-platform automation without external dependencies.
@@ -96,7 +96,7 @@ The build system uses Python for cross-platform automation without external depe
 
 ```bash
 # Build first (if not already built)
-python build.py build
+python3 build.py build
 
 # Run with default settings (port 8080, shoal.db, info logging)
 ./build/shoal
@@ -120,16 +120,16 @@ Shoal uses a Python-based build automation system (`build.py`) for cross-platfor
 
 ```bash
 # Full validation pipeline (recommended for development)
-python build.py validate
+python3 build.py validate
 
 # Individual commands
-python build.py build      # Build binary only
-python build.py test       # Run tests only
-python build.py coverage   # Run tests with coverage reporting
-python build.py fmt        # Format Go code
-python build.py lint       # Run linting/static analysis
-python build.py deps       # Download and verify dependencies
-python build.py clean      # Clean build artifacts
+python3 build.py build      # Build binary only
+python3 build.py test       # Run tests only
+python3 build.py coverage   # Run tests with coverage reporting
+python3 build.py fmt        # Format Go code
+python3 build.py lint       # Run linting/static analysis
+python3 build.py deps       # Download and verify dependencies
+python3 build.py clean      # Clean build artifacts
 ```
 
 ### Development Workflow
@@ -328,12 +328,59 @@ curl -H "X-Auth-Token: <token>" http://localhost:8080/redfish/v1/
 
 #### API Endpoints
 
+**Core Endpoints:**
 - `GET /redfish/v1/` - Service root
-- `GET /redfish/v1/Managers` - List of managed BMCs
-- `GET /redfish/v1/Systems` - List of managed systems
+- `GET /redfish/v1/Managers` - List of aggregated managers from all BMCs
+- `GET /redfish/v1/Systems` - List of aggregated systems from all BMCs
 - `GET /redfish/v1/Managers/{bmc-name}` - Proxy to specific BMC manager
 - `GET /redfish/v1/Systems/{bmc-name}` - Proxy to specific system
 - `POST /redfish/v1/SessionService/Sessions` - Create authentication session
+
+**AggregationService API (DMTF Standard):**
+- `GET /redfish/v1/AggregationService` - AggregationService resource
+- `GET /redfish/v1/AggregationService/ConnectionMethods` - List connection methods
+- `POST /redfish/v1/AggregationService/ConnectionMethods` - Add new BMC connection
+- `GET /redfish/v1/AggregationService/ConnectionMethods/{id}` - Get specific connection method
+- `DELETE /redfish/v1/AggregationService/ConnectionMethods/{id}` - Remove BMC connection
+
+#### DMTF Standard AggregationService
+
+Shoal implements the DMTF Redfish AggregationService standard, which provides a native Redfish-compliant way to manage aggregated BMC connections. This is the recommended approach for programmatic BMC management.
+
+**Adding a BMC via AggregationService:**
+```bash
+curl -X POST http://localhost:8080/redfish/v1/AggregationService/ConnectionMethods \
+  -H "Content-Type: application/json" \
+  -H "X-Auth-Token: <token>" \
+  -d '{
+    "Name": "Production Server BMC",
+    "ConnectionMethodType": "Redfish",
+    "ConnectionMethodVariant.Address": "192.168.1.100",
+    "ConnectionMethodVariant.Authentication": {
+      "Username": "admin",
+      "Password": "password"
+    }
+  }'
+```
+
+**Testing the AggregationService:**
+```bash
+# Use the included Python test script
+./test_aggregation_service.py --help
+
+# Test without adding a BMC (useful if no real BMC available)
+./test_aggregation_service.py --skip-add
+
+# Test with custom BMC address
+./test_aggregation_service.py --bmc-address 192.168.1.200
+```
+
+**Benefits of AggregationService:**
+- Standards-compliant DMTF Redfish implementation
+- Automatic aggregation of managers and systems collections
+- Transparent integration with existing Redfish clients
+- Read-only cached data for fast response times
+- Action passthrough to original BMCs for power operations
 
 ## Development
 
@@ -358,10 +405,10 @@ Shoal includes a comprehensive test suite with unit tests, integration tests, an
 
 ```bash
 # Run all tests (recommended)
-python build.py test
+python3 build.py test
 
 # Run tests with coverage reporting
-python build.py coverage
+python3 build.py coverage
 
 # Manual Go testing (if needed)
 go test -v ./...
@@ -383,12 +430,12 @@ Every build goes through automated quality gates:
 
 ```bash
 # Full validation (all quality gates)
-python build.py validate
+python3 build.py validate
 
 # Individual quality checks
-python build.py fmt     # Code formatting
-python build.py lint    # Static analysis
-python build.py test    # Test execution
+python3 build.py fmt     # Code formatting
+python3 build.py lint    # Static analysis
+python3 build.py test    # Test execution
 ```
 
 **Quality Gates:**

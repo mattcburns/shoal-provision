@@ -3,7 +3,7 @@
 Shoal Build Automation
 
 A simple Python-based build and test automation system for the Shoal Redfish Aggregator.
-Requires Python 3.12+ with no external dependencies.
+Requires Python 3.7+ with no external dependencies.
 
 Usage:
     python build.py                    # Run full build and test pipeline
