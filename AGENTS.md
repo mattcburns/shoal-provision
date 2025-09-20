@@ -38,6 +38,73 @@ These are the most important rules. They are not suggestions. You MUST follow th
 -   **`DEPLOYMENT.md`**: For deployment and configuration changes.
 -   **`AGENTS.md`**: This file. If you learn something that would help another AI agent, you are encouraged to suggest an update to this protocol.
 
+### 1.4. Source File Licensing: ALWAYS Include License Header
+
+**All new source files MUST include the standard AGPLv3 license header.** This is a mandatory requirement to maintain license compliance.
+
+1.  **Apply to All New Files:** Every new `.go`, `.py`, `.js`, `.css`, or other source file must begin with the license header.
+2.  **Use Correct Copyright:** The copyright line should be `Copyright (C) <year> <name of author>`. For this project, the author is `Matthew Burns`.
+3.  **Use Standard Template:** The header format depends on the file type.
+
+    **For Go (`.go`):**
+    ```go
+    // Shoal is a Redfish aggregator service.
+    // Copyright (C) <year> <name of author>
+    //
+    // This program is free software: you can redistribute it and/or modify
+    // it under the terms of the GNU Affero General Public License as published by
+    // the Free Software Foundation, either version 3 of the License, or
+    // (at your option) any later version.
+    //
+    // This program is distributed in the hope that it will be useful,
+    // but WITHOUT ANY WARRANTY; without even the implied warranty of
+    // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    // GNU Affero General Public License for more details.
+    //
+    // You should have received a copy of the GNU Affero General Public License
+    // along with this program.  If not, see <https://www.gnu.org/licenses/>.
+    ```
+
+    **For Python (`.py`):**
+    ```python
+    # Shoal is a Redfish aggregator service.
+    # Copyright (C) <year> <name of author>
+    #
+    # This program is free software: you can redistribute it and/or modify
+    # it under the terms of the GNU Affero General Public License as published by
+    # the Free Software Foundation, either version 3 of the License, or
+    # (at your option) any later version.
+    #
+    # This program is distributed in the hope that it will be useful,
+    # but WITHOUT ANY WARRANTY; without even the implied warranty of
+    # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    # GNU Affero General Public License for more details.
+    #
+    # You should have received a copy of the GNU Affero General Public License
+    # along with this program.  If not, see <https://www.gnu.org/licenses/>.
+    ```
+
+    **For CSS/JS (`.css`, `.js`):**
+    ```javascript
+    /*
+    Shoal is a Redfish aggregator service.
+    Copyright (C) <year> <name of author>
+
+    This program is free software: you can redistribute it and/or modify
+    it under the terms of the GNU Affero General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU Affero General Public License for more details.
+
+    You should have received a copy of the GNU Affero General Public License
+    along with this program.  If not, see <https://www.gnu.org/licenses/>.
+    */
+    ```
+
 ## 2. Project Overview for AI Agents
 
 ### 2.1. Purpose

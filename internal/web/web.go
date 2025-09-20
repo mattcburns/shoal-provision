@@ -1,3 +1,19 @@
+// Shoal is a Redfish aggregator service.
+// Copyright (C) 2025  Matthew Burns
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
 package web
 
 import (
@@ -318,13 +334,13 @@ function testBMCConnection(bmcId, address, name) {
     const testStatusSpan = document.getElementById('test-status-' + bmcId);
     const globalResultDiv = document.getElementById('test-result-global');
     const testButton = event.target;
-    
+
     // Show loading state
     testButton.disabled = true;
     testButton.textContent = 'Testing...';
     testStatusSpan.innerHTML = '<span style="color: #666;">⏳ Testing...</span>';
     globalResultDiv.innerHTML = '';
-    
+
     // Make AJAX request
     fetch('/api/bmcs/test-connection', {
         method: 'POST',
@@ -342,7 +358,7 @@ function testBMCConnection(bmcId, address, name) {
             testStatusSpan.innerHTML = '<span style="color: #dc3545;">✗ Failed</span>';
             globalResultDiv.innerHTML = '<div class="alert alert-danger">Connection test failed for BMC "' + name + '": ' + data.message + '</div>';
         }
-        
+
         // Clear the inline status after 5 seconds
         setTimeout(() => {
             testStatusSpan.innerHTML = '';
@@ -435,35 +451,35 @@ func (h *Handler) handleAddBMC(w http.ResponseWriter, r *http.Request) {
         <label for="name">Name:</label>
         <input type="text" id="name" name="name" required>
     </div>
-    
+
     <div class="form-group">
         <label for="address">Address:</label>
         <input type="text" id="address" name="address" placeholder="192.168.1.100" required>
         <button type="button" id="test-connection" class="btn btn-success" style="margin-top: 5px;" onclick="testConnection()">Test Connection</button>
         <div id="test-result" style="margin-top: 10px;"></div>
     </div>
-    
+
     <div class="form-group">
         <label for="username">Username:</label>
         <input type="text" id="username" name="username" required>
     </div>
-    
+
     <div class="form-group">
         <label for="password">Password:</label>
         <input type="password" id="password" name="password" required>
     </div>
-    
+
     <div class="form-group">
         <label for="description">Description:</label>
         <textarea id="description" name="description" rows="3"></textarea>
     </div>
-    
+
     <div class="form-group">
         <label>
             <input type="checkbox" name="enabled" checked> Enabled
         </label>
     </div>
-    
+
     <div>
         <button type="submit" class="btn btn-primary">Add BMC</button>
         <a href="/bmcs" class="btn btn-danger">Cancel</a>
@@ -475,18 +491,18 @@ function testConnection() {
     const addressInput = document.getElementById('address');
     const testButton = document.getElementById('test-connection');
     const resultDiv = document.getElementById('test-result');
-    
+
     const address = addressInput.value.trim();
     if (!address) {
         resultDiv.innerHTML = '<div class="alert alert-danger">Please enter a BMC address first</div>';
         return;
     }
-    
+
     // Show loading state
     testButton.disabled = true;
     testButton.textContent = 'Testing...';
     resultDiv.innerHTML = '<div style="color: #666;">Testing connection to ' + address + '...</div>';
-    
+
     // Make AJAX request
     fetch('/api/bmcs/test-connection', {
         method: 'POST',
@@ -614,35 +630,35 @@ func (h *Handler) handleEditBMC(w http.ResponseWriter, r *http.Request) {
         <label for="name">Name:</label>
         <input type="text" id="name" name="name" value="{{.BMC.Name}}" required>
     </div>
-    
+
     <div class="form-group">
         <label for="address">Address:</label>
         <input type="text" id="address" name="address" value="{{.BMC.Address}}" placeholder="192.168.1.100" required>
         <button type="button" id="test-connection" class="btn btn-success" style="margin-top: 5px;" onclick="testConnection()">Test Connection</button>
         <div id="test-result" style="margin-top: 10px;"></div>
     </div>
-    
+
     <div class="form-group">
         <label for="username">Username:</label>
         <input type="text" id="username" name="username" value="{{.BMC.Username}}" required>
     </div>
-    
+
     <div class="form-group">
         <label for="password">Password:</label>
         <input type="password" id="password" name="password" value="{{.BMC.Password}}" required>
     </div>
-    
+
     <div class="form-group">
         <label for="description">Description:</label>
         <textarea id="description" name="description" rows="3">{{.BMC.Description}}</textarea>
     </div>
-    
+
     <div class="form-group">
         <label>
             <input type="checkbox" name="enabled" {{if .BMC.Enabled}}checked{{end}}> Enabled
         </label>
     </div>
-    
+
     <div>
         <button type="submit" class="btn btn-primary">Update BMC</button>
         <a href="/bmcs" class="btn btn-danger">Cancel</a>
@@ -654,18 +670,18 @@ function testConnection() {
     const addressInput = document.getElementById('address');
     const testButton = document.getElementById('test-connection');
     const resultDiv = document.getElementById('test-result');
-    
+
     const address = addressInput.value.trim();
     if (!address) {
         resultDiv.innerHTML = '<div class="alert alert-danger">Please enter a BMC address first</div>';
         return;
     }
-    
+
     // Show loading state
     testButton.disabled = true;
     testButton.textContent = 'Testing...';
     resultDiv.innerHTML = '<div style="color: #666;">Testing connection to ' + address + '...</div>';
-    
+
     // Make AJAX request
     fetch('/api/bmcs/test-connection', {
         method: 'POST',
@@ -1068,7 +1084,7 @@ function displaySELEntries(entries) {
     sortedEntries.forEach(function(entry) {
         const severityClass = entry.severity ? 'severity-' + entry.severity.toLowerCase() : '';
         html += '<div class="log-entry ' + severityClass + '">';
-        
+
         html += '<div class="log-meta">';
         if (entry.created) {
             html += '<span><strong>Date:</strong> ' + entry.created + '</span> | ';
@@ -1080,7 +1096,7 @@ function displaySELEntries(entries) {
             html += '<span><strong>Type:</strong> ' + entry.entry_type + '</span>';
         }
         html += '</div>';
-        
+
         if (entry.message) {
             html += '<div><strong>Message:</strong> ' + entry.message + '</div>';
         }
@@ -1109,7 +1125,7 @@ function loadBMCDetails() {
         .then(function(data) {
             document.getElementById('loading-indicator').style.display = 'none';
             document.getElementById('bmc-details').style.display = 'block';
-            
+
             displaySystemInfo(data.system_info);
             displayNetworkInterfaces(data.network_interfaces);
             displayStorageDevices(data.storage_devices);
