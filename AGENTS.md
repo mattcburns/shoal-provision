@@ -1,113 +1,97 @@
-# AGENTS.md
+# Agent Protocol: Shoal Repository
 
-This file provides guidance to AI agents, such as GitHub Copilot, when working with code in this repository.
+**ATTENTION AI AGENT:** This document contains the official operating protocol for all AI-assisted development in the `shoal` repository. You are required to read, understand, and strictly adhere to these rules at all times. Failure to comply with these directives will result in corrective action.
 
-## About this project
+## 1. CRITICAL: Non-Negotiable Core Directives
 
-Shoal is a Redfish aggregator service with a layered architecture:
--   **Presentation Layer**: Web interface (`internal/web`) and REST API (`internal/api`).
+These are the most important rules. They are not suggestions. You MUST follow them for every task, without exception.
+
+### 1.1. Git Workflow: ALWAYS Use Feature Branches
+
+**No work is permitted on the `master` branch.** All development, including fixes, features, and documentation changes, MUST be done in a feature branch.
+
+1.  **ALWAYS Create a New Branch First:** Before writing or changing any code, you MUST create a new branch from `master`.
+    ```bash
+    git checkout -b <branch_name>
+    ```
+
+2.  **Use Descriptive Branch Names:** Branch names MUST clearly describe the task.
+    -   **Correct:** `feature/bmc-details-view`, `fix/login-auth-bug`, `docs/update-readme`
+    -   **INCORRECT:** `my-fix`, `feature1`, `dev`, `updates`
+
+### 1.2. Testing: ALWAYS Write and Pass Tests
+
+**Code without tests is incomplete.** Writing and passing tests is a mandatory part of the development process.
+
+1.  **Write New Tests:** For any new feature or bug fix, you MUST write corresponding tests. This is not optional.
+2.  **Ensure All Tests Pass:** Before you consider your task complete, you MUST run the full validation pipeline and ensure all tests pass.
+    ```bash
+    python3 build.py validate
+    ```
+3.  **Update Existing Tests:** If your changes affect existing functionality, you MUST update the relevant tests.
+
+### 1.3. Documentation: ALWAYS Update Documentation
+
+**Documentation must be kept current.** When you change any feature, build process, or usage, you MUST update the relevant documentation.
+
+-   **`README.md`**: For human developers. Update with user-facing changes.
+-   **`DEPLOYMENT.md`**: For deployment and configuration changes.
+-   **`AGENTS.md`**: This file. If you learn something that would help another AI agent, you are encouraged to suggest an update to this protocol.
+
+## 2. Project Overview for AI Agents
+
+### 2.1. Purpose
+
+Shoal is a Redfish aggregator service. Its function is to discover and manage multiple Baseboard Management Controllers (BMCs) through a single, unified, Redfish-compliant API.
+
+### 2.2. Architecture
+
+-   **Presentation Layer**: Web UI (`internal/web`) and REST API (`internal/api`).
 -   **Business Logic Layer**: BMC management (`internal/bmc`) and authentication (`internal/auth`).
--   **Data Access Layer**: Database operations (`internal/database`).
+-   **Data Access Layer**: SQLite database operations (`internal/database`).
 -   **Infrastructure Layer**: Logging (`internal/logging`), Models (`pkg/models`).
 
-It is designed for single-binary deployment with an embedded SQLite database.
+Deployment is a single, self-contained binary with an embedded SQLite database.
 
-### License and Dependencies
+### 2.3. License and Dependencies
 
-This project is licensed under the GNU Affero General Public License v3.0 (AGPLv3).
+**CRITICAL: All new dependencies MUST be compatible with AGPLv3.**
 
-**CRITICAL: All new dependencies added to this project MUST be compatible with AGPLv3.**
-
+-   **Project License**: GNU Affero General Public License v3.0 (AGPLv3).
 -   **Compatible Licenses**: MIT, Apache 2.0, BSD, ISC.
--   **Incompatible Licenses**: Licenses more restrictive than AGPLv3.
+-   **Incompatible Licenses**: Any license more restrictive than AGPLv3.
 
-Before adding a dependency, you must verify its license is compatible with AGPLv3.
+You MUST verify the license of any new dependency before adding it.
 
-## Tools
+## 3. Mandatory Development Workflow & Tools
 
-This section lists common commands for building, testing, and running the application. All commands use the Python-based automation system (`build.py`).
+This section outlines the commands you will use for development. These are not just informational; this is the required workflow.
 
-- `python build.py validate`: Run the full validation pipeline (recommended for development).
-- `python build.py build`: Build the binary only.
-- `python build.py test`: Run tests only.
-- `python build.py coverage`: Run tests with coverage reporting.
-- `python build.py fmt`: Format Go code.
-- `python build.py lint`: Run linting and static analysis.
-- `python build.py clean`: Clean build artifacts.
-- `python build.py deps`: Download and verify dependencies.
+### 3.1. The Primary Tool: `build.py`
 
-To run the application:
+All build, test, and validation tasks are executed through the Python-based automation script `build.py`. You MUST use `python3` to run this script.
 
-- `./build/shoal`: Run the built binary with default settings.
-- `./build/shoal -port 8080 -db shoal.db -log-level debug`: Run with custom settings.
+### 3.2. Standard Development Commands
 
-## Tasks
+-   **`python3 build.py validate`**: **This is the main command for development.** It runs the full validation pipeline (format, lint, test, build). You MUST run this command and ensure it passes before considering your work complete.
+-   **`python3 build.py test`**: Runs the test suite.
+-   **`python3 build.py coverage`**: Runs tests and generates an HTML coverage report. Use this to verify your new tests are increasing coverage.
+-   **`python3 build.py build`**: Compiles the Go binary.
+-   **`python3 build.py fmt`**: Formats all Go code.
+-   **`python3 build.py lint`**: Runs static analysis.
 
-This section outlines development tasks.
+### 3.3. Running the Application
 
-### High Priority
-
-1.  **Documentation Maintenance**
-    - **ALWAYS update README.md** with any changes to features, build process, or usage.
-    - **ALWAYS update DEPLOYMENT.md** with any changes to build process, deployment, or production configuration.
-    - **ALWAYS write tests for new code, when appropriate.**
-    - Keep API documentation current with endpoint changes.
-    - Update troubleshooting guides based on user feedback.
-    - Maintain build instruction accuracy across platforms.
-
-2.  **Security Enhancements**
-    - Add HTTPS support for the aggregator service.
-    - Improve input sanitization and validation.
-
-3.  **API Completeness**
-    - Implement missing Redfish endpoints (e.g., `SessionService`, `AggregationService`).
-    - Add support for Redfish `EventService` (webhooks).
-    - Implement proper Redfish schema validation.
-
-### Medium Priority
-
-1.  **Web Interface Enhancements**
-    - Implement a system monitoring dashboard.
-    - Add support for bulk operations for multiple BMCs.
-
-2.  **Operational Features**
-    - Add support for a configuration file.
-    - Implement health check endpoints.
-    - Add Metrics/Prometheus integration.
-    - Implement background BMC health monitoring.
-
-3.  **BMC Discovery**
-    - Implement network scanning for BMC discovery.
-    - Add mDNS/DNS-SD service discovery.
-    - Add SSDP discovery support.
-
-## Constraints
-
-### Git Workflow
-
-**CRITICAL: All development work MUST be done in feature branches. Direct commits to `master` are NOT allowed.**
-
-1.  **Create a feature branch** before making any changes:
+1.  First, build the binary:
     ```bash
-    git checkout -b feature/<description>
+    python3 build.py build
     ```
-2.  **Use descriptive branch names**:
-    - **Good**: `feature/add-redis-caching`, `fix/auth-token-expiry`
-    - **Bad**: `feature1`, `fix`, `updates`
-3.  **Run full validation** before considering work complete:
-    ```bash
-    python build.py validate
-    ```
+2.  Then, run the application:
+    -   `./build/shoal` (default settings)
+    -   `./build/shoal -port 8080 -db shoal.db -log-level debug` (custom settings)
 
-### Development Principles
+## 4. Task-Specific Protocols
 
--   Focus on simplicity, understandability, and readability.
--   Prefer the standard library over external dependencies.
--   Ensure deployment is as simple as possible (e.g., a single binary).
--   Write tests for all code.
--   **Always work in feature branches.**
-
-### Documentation Standards
-
--   **README.md**: For human developers. Focus on onboarding, usage, and troubleshooting.
--   **AGENTS.md**: For AI agents. Provide explicit, unambiguous instructions and process requirements.
+-   **Security:** Always sanitize inputs and validate data.
+-   **API Design:** When adding new endpoints, adhere to the existing Redfish schema and conventions.
+-   **Simplicity:** Prefer the standard library over new dependencies. Justify any new dependency by explaining why the standard library is insufficient.
