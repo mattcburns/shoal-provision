@@ -1,3 +1,19 @@
+// Shoal is a Redfish aggregator service.
+// Copyright (C) 2025  Matthew Burns
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
 package web
 
 import (
@@ -70,29 +86,29 @@ func (h *Handler) showLoginPage(w http.ResponseWriter, r *http.Request, errorMsg
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
-        body { 
-            font-family: Arial, sans-serif; 
-            background-color: #f5f5f5; 
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f5f5f5;
             display: flex;
             justify-content: center;
             align-items: center;
             height: 100vh;
             margin: 0;
         }
-        .login-container { 
-            background-color: white; 
-            padding: 40px; 
-            border-radius: 8px; 
+        .login-container {
+            background-color: white;
+            padding: 40px;
+            border-radius: 8px;
             box-shadow: 0 2px 4px rgba(0,0,0,0.1);
             width: 100%;
             max-width: 400px;
         }
-        .header { 
+        .header {
             text-align: center;
             margin-bottom: 30px;
         }
-        .header h1 { 
-            color: #007acc; 
+        .header h1 {
+            color: #007acc;
             margin: 0;
             font-size: 24px;
         }
@@ -100,19 +116,19 @@ func (h *Handler) showLoginPage(w http.ResponseWriter, r *http.Request, errorMsg
             color: #666;
             margin: 10px 0 0 0;
         }
-        .form-group { 
-            margin-bottom: 20px; 
+        .form-group {
+            margin-bottom: 20px;
         }
-        .form-group label { 
-            display: block; 
-            margin-bottom: 5px; 
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
             font-weight: bold;
             color: #333;
         }
-        .form-group input { 
-            width: 100%; 
-            padding: 10px; 
-            border: 1px solid #ddd; 
+        .form-group input {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
             border-radius: 4px;
             font-size: 14px;
             box-sizing: border-box;
@@ -121,32 +137,32 @@ func (h *Handler) showLoginPage(w http.ResponseWriter, r *http.Request, errorMsg
             outline: none;
             border-color: #007acc;
         }
-        .btn { 
+        .btn {
             width: 100%;
-            padding: 12px; 
-            border: none; 
-            border-radius: 4px; 
+            padding: 12px;
+            border: none;
+            border-radius: 4px;
             cursor: pointer;
             font-size: 16px;
             font-weight: bold;
         }
-        .btn-primary { 
-            background-color: #007acc; 
-            color: white; 
+        .btn-primary {
+            background-color: #007acc;
+            color: white;
         }
         .btn-primary:hover {
             background-color: #005a99;
         }
-        .alert { 
-            padding: 12px; 
-            margin-bottom: 20px; 
-            border: 1px solid transparent; 
-            border-radius: 4px; 
+        .alert {
+            padding: 12px;
+            margin-bottom: 20px;
+            border: 1px solid transparent;
+            border-radius: 4px;
         }
-        .alert-danger { 
-            color: #721c24; 
-            background-color: #f8d7da; 
-            border-color: #f5c6cb; 
+        .alert-danger {
+            color: #721c24;
+            background-color: #f8d7da;
+            border-color: #f5c6cb;
         }
     </style>
 </head>
@@ -156,24 +172,24 @@ func (h *Handler) showLoginPage(w http.ResponseWriter, r *http.Request, errorMsg
             <h1>Shoal Redfish Aggregator</h1>
             <p>Please login to continue</p>
         </div>
-        
+
         {{if .Error}}
         <div class="alert alert-danger">{{.Error}}</div>
         {{end}}
-        
+
         <form method="POST">
             <input type="hidden" name="redirect" value="{{.Redirect}}">
-            
+
             <div class="form-group">
                 <label for="username">Username:</label>
                 <input type="text" id="username" name="username" required autofocus>
             </div>
-            
+
             <div class="form-group">
                 <label for="password">Password:</label>
                 <input type="password" id="password" name="password" required>
             </div>
-            
+
             <button type="submit" class="btn btn-primary">Login</button>
         </form>
     </div>
@@ -376,18 +392,18 @@ func (h *Handler) handleChangePassword(w http.ResponseWriter, r *http.Request) {
         <label for="current_password">Current Password:</label>
         <input type="password" id="current_password" name="current_password" required>
     </div>
-    
+
     <div class="form-group">
         <label for="new_password">New Password:</label>
         <input type="password" id="new_password" name="new_password" required>
         <small style="color: #666;">Password must be less than 72 characters (bcrypt limitation)</small>
     </div>
-    
+
     <div class="form-group">
         <label for="confirm_password">Confirm New Password:</label>
         <input type="password" id="confirm_password" name="confirm_password" required>
     </div>
-    
+
     <div>
         <button type="submit" class="btn btn-primary">Change Password</button>
         <a href="/profile" class="btn btn-danger">Cancel</a>

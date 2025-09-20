@@ -1,3 +1,19 @@
+// Shoal is a Redfish aggregator service.
+// Copyright (C) 2025  Matthew Burns
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
 package web
 
 import (
@@ -184,13 +200,13 @@ func (h *Handler) handleAddUser(w http.ResponseWriter, r *http.Request) {
         <label for="username">Username:</label>
         <input type="text" id="username" name="username" required>
     </div>
-    
+
     <div class="form-group">
         <label for="password">Password:</label>
         <input type="password" id="password" name="password" required>
         <small style="color: #666;">Password must be less than 72 characters (bcrypt limitation)</small>
     </div>
-    
+
     <div class="form-group">
         <label for="role">Role:</label>
         <select id="role" name="role" required>
@@ -200,13 +216,13 @@ func (h *Handler) handleAddUser(w http.ResponseWriter, r *http.Request) {
             <option value="viewer">Viewer - Read-only access</option>
         </select>
     </div>
-    
+
     <div class="form-group">
         <label>
             <input type="checkbox" name="enabled" checked> Active
         </label>
     </div>
-    
+
     <div>
         <button type="submit" class="btn btn-primary">Create User</button>
         <a href="/users" class="btn btn-danger">Cancel</a>
@@ -302,13 +318,13 @@ func (h *Handler) handleEditUser(w http.ResponseWriter, r *http.Request) {
         <label for="username">Username:</label>
         <input type="text" id="username" name="username" value="{{.EditUser.Username}}" required>
     </div>
-    
+
     <div class="form-group">
         <label for="password">New Password (leave blank to keep current):</label>
         <input type="password" id="password" name="password">
         <small style="color: #666;">Password must be less than 72 characters (bcrypt limitation)</small>
     </div>
-    
+
     <div class="form-group">
         <label for="role">Role:</label>
         <select id="role" name="role" required>
@@ -317,13 +333,13 @@ func (h *Handler) handleEditUser(w http.ResponseWriter, r *http.Request) {
             <option value="viewer" {{if eq .EditUser.Role "viewer"}}selected{{end}}>Viewer - Read-only access</option>
         </select>
     </div>
-    
+
     <div class="form-group">
         <label>
             <input type="checkbox" name="enabled" {{if .EditUser.Enabled}}checked{{end}}> Active
         </label>
     </div>
-    
+
     <div>
         <button type="submit" class="btn btn-primary">Update User</button>
         <a href="/users" class="btn btn-danger">Cancel</a>
