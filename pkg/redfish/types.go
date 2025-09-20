@@ -56,3 +56,38 @@ type ErrorDetail struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
 }
+
+// AggregationService represents the Redfish AggregationService
+type AggregationService struct {
+	ODataContext      string     `json:"@odata.context"`
+	ODataID           string     `json:"@odata.id"`
+	ODataType         string     `json:"@odata.type"`
+	ID                string     `json:"Id"`
+	Name              string     `json:"Name"`
+	Description       string     `json:"Description"`
+	ConnectionMethods ODataIDRef `json:"ConnectionMethods"`
+}
+
+// ConnectionMethod represents a Redfish ConnectionMethod
+type ConnectionMethod struct {
+	ODataContext            string                  `json:"@odata.context"`
+	ODataID                 string                  `json:"@odata.id"`
+	ODataType               string                  `json:"@odata.type"`
+	ID                      string                  `json:"Id"`
+	Name                    string                  `json:"Name"`
+	ConnectionMethodType    string                  `json:"ConnectionMethodType"`
+	ConnectionMethodVariant ConnectionMethodVariant `json:"ConnectionMethodVariant"`
+}
+
+// ConnectionMethodVariant represents the variant details of a connection method
+type ConnectionMethodVariant struct {
+	ODataType      string                    `json:"@odata.type"`
+	Address        string                    `json:"Address"`
+	Authentication *ConnectionAuthentication `json:"Authentication,omitempty"`
+}
+
+// ConnectionAuthentication represents authentication for a connection
+type ConnectionAuthentication struct {
+	Username string `json:"Username"`
+	Password string `json:"Password"`
+}
