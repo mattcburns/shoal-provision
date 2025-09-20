@@ -855,18 +855,37 @@ func (s *Service) getNetworkInterfaces(ctx context.Context, bmc *models.BMC) ([]
 	return nics, nil
 }
 
-// getStorageDevices fetches storage device information
+// getStorageDevices fetches storage device information from both Storage and SimpleStorage endpoints
 func (s *Service) getStorageDevices(ctx context.Context, bmc *models.BMC) ([]models.StorageDevice, error) {
 	systemID, err := s.GetFirstSystemID(ctx, bmc.Name)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get system ID: %w", err)
 	}
 
+	var storageDevices []models.StorageDevice
+
+	// First, try to get devices from regular Storage collection
+	storageDevices = append(storageDevices, s.getStorageDevicesFromStorage(ctx, bmc, systemID)...)
+
+	// Then, try to get devices from SimpleStorage collection
+	storageDevices = append(storageDevices, s.getStorageDevicesFromSimpleStorage(ctx, bmc, systemID)...)
+
+	// If we didn't find any storage devices, return an error
+	if len(storageDevices) == 0 {
+		return nil, fmt.Errorf("no storage devices found in either Storage or SimpleStorage collections")
+	}
+
+	return storageDevices, nil
+}
+
+// getStorageDevicesFromStorage fetches storage devices from the regular Storage collection
+func (s *Service) getStorageDevicesFromStorage(ctx context.Context, bmc *models.BMC, systemID string) []models.StorageDevice {
 	// Get storage collection
 	storagePath := fmt.Sprintf("/redfish/v1/Systems/%s/Storage", systemID)
 	storageCollection, err := s.fetchRedfishResource(ctx, bmc, storagePath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to fetch storage collection: %w", err)
+		slog.Debug("Storage collection not available", "path", storagePath, "error", err)
+		return nil
 	}
 
 	var storageDevices []models.StorageDevice
@@ -894,28 +913,7 @@ func (s *Service) getStorageDevices(ctx context.Context, bmc *models.BMC) ([]mod
 										continue
 									}
 
-									device := models.StorageDevice{}
-									if name, ok := driveData["Name"].(string); ok {
-										device.Name = name
-									}
-									if model, ok := driveData["Model"].(string); ok {
-										device.Model = model
-									}
-									if serialNumber, ok := driveData["SerialNumber"].(string); ok {
-										device.SerialNumber = serialNumber
-									}
-									if capacityBytes, ok := driveData["CapacityBytes"].(float64); ok {
-										device.CapacityBytes = int64(capacityBytes)
-									}
-									if status, ok := driveData["Status"].(map[string]interface{}); ok {
-										if health, ok := status["Health"].(string); ok {
-											device.Status = health
-										}
-									}
-									if mediaType, ok := driveData["MediaType"].(string); ok {
-										device.MediaType = mediaType
-									}
-
+									device := s.parseStorageDevice(driveData)
 									storageDevices = append(storageDevices, device)
 								}
 							}
@@ -926,7 +924,97 @@ func (s *Service) getStorageDevices(ctx context.Context, bmc *models.BMC) ([]mod
 		}
 	}
 
-	return storageDevices, nil
+	return storageDevices
+}
+
+// getStorageDevicesFromSimpleStorage fetches storage devices from the SimpleStorage collection
+func (s *Service) getStorageDevicesFromSimpleStorage(ctx context.Context, bmc *models.BMC, systemID string) []models.StorageDevice {
+	// Get SimpleStorage collection
+	simpleStoragePath := fmt.Sprintf("/redfish/v1/Systems/%s/SimpleStorage", systemID)
+	simpleStorageCollection, err := s.fetchRedfishResource(ctx, bmc, simpleStoragePath)
+	if err != nil {
+		slog.Debug("SimpleStorage collection not available", "path", simpleStoragePath, "error", err)
+		return nil
+	}
+
+	var storageDevices []models.StorageDevice
+
+	if members, ok := simpleStorageCollection["Members"].([]interface{}); ok {
+		for _, member := range members {
+			if memberMap, ok := member.(map[string]interface{}); ok {
+				if odataID, ok := memberMap["@odata.id"].(string); ok {
+					// Fetch SimpleStorage controller details
+					simpleStorageData, err := s.fetchRedfishResource(ctx, bmc, odataID)
+					if err != nil {
+						slog.Warn("Failed to fetch SimpleStorage details", "path", odataID, "error", err)
+						continue
+					}
+
+					// Get devices directly embedded in SimpleStorage controller
+					if devices, ok := simpleStorageData["Devices"].([]interface{}); ok {
+						for _, device := range devices {
+							if deviceMap, ok := device.(map[string]interface{}); ok {
+								// Skip devices that are not present/enabled
+								if status, ok := deviceMap["Status"].(map[string]interface{}); ok {
+									if state, ok := status["State"].(string); ok && state == "Absent" {
+										continue
+									}
+								}
+
+								storageDevice := s.parseStorageDevice(deviceMap)
+								storageDevices = append(storageDevices, storageDevice)
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return storageDevices
+}
+
+// parseStorageDevice parses storage device data from either Storage Drive or SimpleStorage Device format
+func (s *Service) parseStorageDevice(deviceData map[string]interface{}) models.StorageDevice {
+	device := models.StorageDevice{}
+
+	if name, ok := deviceData["Name"].(string); ok {
+		device.Name = name
+	}
+	if model, ok := deviceData["Model"].(string); ok {
+		device.Model = model
+	}
+	if serialNumber, ok := deviceData["SerialNumber"].(string); ok {
+		device.SerialNumber = serialNumber
+	}
+	if capacityBytes, ok := deviceData["CapacityBytes"].(float64); ok {
+		device.CapacityBytes = int64(capacityBytes)
+	}
+
+	// Handle status - can be either a string (older format) or an object with Health property
+	if status, ok := deviceData["Status"].(map[string]interface{}); ok {
+		if health, ok := status["Health"].(string); ok {
+			device.Status = health
+		}
+	} else if statusStr, ok := deviceData["Status"].(string); ok {
+		device.Status = statusStr
+	}
+
+	if mediaType, ok := deviceData["MediaType"].(string); ok {
+		device.MediaType = mediaType
+	}
+
+	// For SimpleStorage devices, also check for Manufacturer field
+	if manufacturer, ok := deviceData["Manufacturer"].(string); ok {
+		// Add manufacturer info to the model field if available
+		if device.Model != "" {
+			device.Model = fmt.Sprintf("%s %s", manufacturer, device.Model)
+		} else {
+			device.Model = manufacturer
+		}
+	}
+
+	return device
 }
 
 // getSELEntries fetches System Event Log entries

@@ -298,7 +298,7 @@ func (h *Handler) handleBMCs(w http.ResponseWriter, r *http.Request) {
             </td>
             <td>
                 <a href="/bmcs/details?name={{.Name}}" class="btn btn-primary" style="margin: 2px;">Details</a>
-                <button onclick="testBMCConnection('{{.ID}}', '{{.Address}}', '{{.Name}}')" class="btn btn-primary" style="margin: 2px;">Test</button>
+                <button onclick="testBMCConnection('{{.ID}}', '{{.Address}}', '{{.Name}}')" class="btn btn-success" style="margin: 2px;">Test</button>
                 <a href="/bmcs/edit?id={{.ID}}" class="btn btn-primary" style="margin: 2px;">Edit</a>
                 <a href="/bmcs/power?id={{.ID}}&action=On" class="btn btn-success" style="margin: 2px;">Power On</a>
                 <a href="/bmcs/power?id={{.ID}}&action=ForceOff" class="btn btn-warning" style="margin: 2px;">Power Off</a>

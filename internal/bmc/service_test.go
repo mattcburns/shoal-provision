@@ -888,6 +888,141 @@ func TestGetStorageDevices(t *testing.T) {
 	})
 }
 
+func TestGetSimpleStorageDevices(t *testing.T) {
+	// Create a test database
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+	db, err := database.New(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to create database: %v", err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+	if err := db.Migrate(ctx); err != nil {
+		t.Fatalf("Migration failed: %v", err)
+	}
+
+	// Create a mock BMC server that has SimpleStorage but no Storage
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		username, password, ok := r.BasicAuth()
+		if !ok || username != "admin" || password != "password" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+
+		switch r.URL.Path {
+		case "/redfish/v1/Systems":
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"Members": []map[string]string{{"@odata.id": "/redfish/v1/Systems/System1"}},
+			})
+		case "/redfish/v1/Systems/System1/Storage":
+			// Storage collection doesn't exist - return 404
+			w.WriteHeader(http.StatusNotFound)
+		case "/redfish/v1/Systems/System1/SimpleStorage":
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"Members": []map[string]string{
+					{"@odata.id": "/redfish/v1/Systems/System1/SimpleStorage/1"},
+				},
+			})
+		case "/redfish/v1/Systems/System1/SimpleStorage/1":
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"Name":        "Simple Storage Controller",
+				"Description": "System SATA",
+				"Devices": []map[string]interface{}{
+					{
+						"Name":          "SATA Bay 1",
+						"Manufacturer":  "Contoso",
+						"Model":         "3000GT8",
+						"CapacityBytes": float64(8000000000000),
+						"Status": map[string]interface{}{
+							"State":  "Enabled",
+							"Health": "OK",
+						},
+					},
+					{
+						"Name":          "SATA Bay 2",
+						"Manufacturer":  "Contoso",
+						"Model":         "3000GT7",
+						"CapacityBytes": float64(4000000000000),
+						"Status": map[string]interface{}{
+							"State":  "Enabled",
+							"Health": "Warning",
+						},
+					},
+					{
+						"Name": "SATA Bay 3",
+						"Status": map[string]interface{}{
+							"State": "Absent",
+						},
+					},
+				},
+			})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	service := New(db)
+	bmc := &models.BMC{
+		Name:     "test-simple-storage",
+		Address:  server.URL,
+		Username: "admin",
+		Password: "password",
+		Enabled:  true,
+	}
+	if err := db.CreateBMC(ctx, bmc); err != nil {
+		t.Fatalf("Failed to create BMC: %v", err)
+	}
+
+	t.Run("Successful SimpleStorage retrieval", func(t *testing.T) {
+		devices, err := service.getStorageDevices(ctx, bmc)
+		if err != nil {
+			t.Fatalf("getStorageDevices() failed: %v", err)
+		}
+
+		// Should get 2 devices (SATA Bay 1 and SATA Bay 2, but not SATA Bay 3 which is Absent)
+		if len(devices) != 2 {
+			t.Errorf("Expected 2 storage devices, got %d", len(devices))
+		}
+
+		if len(devices) >= 2 {
+			// Check first device
+			device1 := devices[0]
+			if device1.Name != "SATA Bay 1" {
+				t.Errorf("Expected name 'SATA Bay 1', got '%s'", device1.Name)
+			}
+			if device1.Model != "Contoso 3000GT8" {
+				t.Errorf("Expected model 'Contoso 3000GT8', got '%s'", device1.Model)
+			}
+			if device1.CapacityBytes != 8000000000000 {
+				t.Errorf("Expected capacity 8000000000000, got %d", device1.CapacityBytes)
+			}
+			if device1.Status != "OK" {
+				t.Errorf("Expected status 'OK', got '%s'", device1.Status)
+			}
+
+			// Check second device
+			device2 := devices[1]
+			if device2.Name != "SATA Bay 2" {
+				t.Errorf("Expected name 'SATA Bay 2', got '%s'", device2.Name)
+			}
+			if device2.Model != "Contoso 3000GT7" {
+				t.Errorf("Expected model 'Contoso 3000GT7', got '%s'", device2.Model)
+			}
+			if device2.CapacityBytes != 4000000000000 {
+				t.Errorf("Expected capacity 4000000000000, got %d", device2.CapacityBytes)
+			}
+			if device2.Status != "Warning" {
+				t.Errorf("Expected status 'Warning', got '%s'", device2.Status)
+			}
+		}
+	})
+}
+
 func TestGetSELEntries(t *testing.T) {
 	// Create a test database
 	tmpDir := t.TempDir()
