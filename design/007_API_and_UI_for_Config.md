@@ -61,6 +61,7 @@ Define REST API endpoints and Web UI flows for discovering settings, creating/ap
 - Pagination defaults and maximums for settings and audit endpoints?
 - API versioning strategy as Redfish/OEM coverage expands?
 - How to surface apply-time requirements consistently in UI (toasts vs. banners)?
+  A: Banners
 - Cross-BMC portability heuristics for profiles.
 
 ## Milestones

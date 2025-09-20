@@ -84,5 +84,7 @@ Discover configurable settings exposed by BMC Redfish implementations, normalize
 ## Open Questions
 - How stable are descriptor IDs across firmware updates (path/attribute changes)?
 - Which OEMs should we target first for registry support (Dell/HPE/Lenovo/Supermicro)?
+  A: Dell and Supermicro.
 - Cache strategy and TTL for discovery results to balance freshness vs. cost?
+  A: No cache for now.
 - Should we include read-only attributes in the model for completeness?

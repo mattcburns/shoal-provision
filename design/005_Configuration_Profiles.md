@@ -67,5 +67,6 @@ Capture, store, compare, and apply collections of BMC Redfish settings as versio
 ## Open Questions
 - Minimum metadata for `hardware_selector` to ensure safe applicability (exact match vs. regex)?
 - How to handle settings that require reboot vs. immediate apply in batch operations?
+  A: Warn for reboot settings, attempt to batch them together.
 - Should profiles support variables/templating for environment-specific values (e.g., NTP/DNS)?
 - Cross-firmware compatibility policy: warn, block, or attempt apply with guardrails?
