@@ -334,7 +334,30 @@ curl -H "X-Auth-Token: <token>" http://localhost:8080/redfish/v1/
 - `GET /redfish/v1/Systems` - List of aggregated systems from all BMCs
 - `GET /redfish/v1/Managers/{bmc-name}` - Proxy to specific BMC manager
 - `GET /redfish/v1/Systems/{bmc-name}` - Proxy to specific system
-- `POST /redfish/v1/SessionService/Sessions` - Create authentication session
+
+**SessionService API:**
+- `POST /redfish/v1/SessionService/Sessions` - Create authentication session (unauthenticated)
+- `GET /redfish/v1/SessionService` - SessionService root (requires auth)
+- `GET /redfish/v1/SessionService/Sessions` - List active sessions (requires auth)
+- `GET /redfish/v1/SessionService/Sessions/{id}` - Get a specific session (requires auth)
+- `DELETE /redfish/v1/SessionService/Sessions/{id}` - Delete a session (logout) (requires auth)
+
+Example usage:
+```bash
+# Create a session (returns X-Auth-Token header)
+curl -s -X POST http://localhost:8080/redfish/v1/SessionService/Sessions \
+  -H "Content-Type: application/json" \
+  -d '{"UserName":"admin","Password":"admin"}' -D -
+
+# List sessions using the token
+curl -s -H "X-Auth-Token: ${TOKEN}" http://localhost:8080/redfish/v1/SessionService/Sessions | jq .
+
+# Get a specific session
+curl -s -H "X-Auth-Token: ${TOKEN}" http://localhost:8080/redfish/v1/SessionService/Sessions/{id} | jq .
+
+# Delete a session (logout)
+curl -s -H "X-Auth-Token: ${TOKEN}" -X DELETE http://localhost:8080/redfish/v1/SessionService/Sessions/{id} -D -
+```
 
 **AggregationService API (DMTF Standard):**
 - `GET /redfish/v1/AggregationService` - AggregationService resource
@@ -366,13 +389,13 @@ curl -X POST http://localhost:8080/redfish/v1/AggregationService/ConnectionMetho
 **Testing the AggregationService:**
 ```bash
 # Use the included Python test script
-./test_aggregation_service.py --help
+python3 scripts/test_aggregation_service.py --help
 
 # Test without adding a BMC (useful if no real BMC available)
-./test_aggregation_service.py --skip-add
+python3 scripts/test_aggregation_service.py --skip-add
 
 # Test with custom BMC address
-./test_aggregation_service.py --bmc-address 192.168.1.200
+python3 scripts/test_aggregation_service.py --bmc-address 192.168.1.200
 ```
 
 **Benefits of AggregationService:**

@@ -46,6 +46,19 @@ type Session struct {
 	UserName     string `json:"UserName"`
 }
 
+// SessionService represents the Redfish SessionService
+type SessionService struct {
+	ODataContext   string     `json:"@odata.context"`
+	ODataID        string     `json:"@odata.id"`
+	ODataType      string     `json:"@odata.type"`
+	ID             string     `json:"Id"`
+	Name           string     `json:"Name"`
+	Description    string     `json:"Description"`
+	ServiceEnabled bool       `json:"ServiceEnabled"`
+	SessionTimeout int        `json:"SessionTimeout"`
+	Sessions       ODataIDRef `json:"Sessions"`
+}
+
 // ErrorResponse represents a Redfish error response
 type ErrorResponse struct {
 	Error ErrorDetail `json:"error"`
