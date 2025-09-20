@@ -362,6 +362,54 @@ func (db *DB) CleanupExpiredSessions(ctx context.Context) error {
 	return nil
 }
 
+// GetSession returns a session by ID (only active sessions)
+func (db *DB) GetSession(ctx context.Context, id string) (*models.Session, error) {
+	query := `SELECT id, user_id, token, expires_at, created_at FROM sessions WHERE id = ? AND expires_at > ?`
+
+	var session models.Session
+	err := db.conn.QueryRowContext(ctx, query, id, time.Now()).Scan(
+		&session.ID, &session.UserID, &session.Token, &session.ExpiresAt, &session.CreatedAt,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to get session by id: %w", err)
+	}
+	return &session, nil
+}
+
+// GetSessions returns all active sessions
+func (db *DB) GetSessions(ctx context.Context) ([]models.Session, error) {
+	query := `SELECT id, user_id, token, expires_at, created_at FROM sessions WHERE expires_at > ? ORDER BY created_at DESC`
+
+	rows, err := db.conn.QueryContext(ctx, query, time.Now())
+	if err != nil {
+		return nil, fmt.Errorf("failed to query sessions: %w", err)
+	}
+	defer rows.Close()
+
+	var sessions []models.Session
+	for rows.Next() {
+		var s models.Session
+		if err := rows.Scan(&s.ID, &s.UserID, &s.Token, &s.ExpiresAt, &s.CreatedAt); err != nil {
+			return nil, fmt.Errorf("failed to scan session: %w", err)
+		}
+		sessions = append(sessions, s)
+	}
+	return sessions, rows.Err()
+}
+
+// DeleteSessionByID deletes a session by ID
+func (db *DB) DeleteSessionByID(ctx context.Context, id string) error {
+	query := `DELETE FROM sessions WHERE id = ?`
+	_, err := db.conn.ExecContext(ctx, query, id)
+	if err != nil {
+		return fmt.Errorf("failed to delete session by id: %w", err)
+	}
+	return nil
+}
+
 // DisableForeignKeys disables foreign key constraints (for testing)
 func (db *DB) DisableForeignKeys() error {
 	_, err := db.conn.Exec("PRAGMA foreign_keys=OFF")
