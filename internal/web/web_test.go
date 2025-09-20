@@ -478,3 +478,157 @@ func TestHandleBMCs(t *testing.T) {
 		}
 	})
 }
+
+func TestHandleBMCDetails(t *testing.T) {
+	ts := createTestSetup(t)
+	defer ts.DB.Close()
+
+	ctx := context.Background()
+
+	// Create a test BMC
+	testBMC := &models.BMC{
+		Name:     "test-details-bmc",
+		Address:  "192.168.1.100",
+		Username: "admin",
+		Password: "password",
+		Enabled:  true,
+	}
+	if err := ts.DB.CreateBMC(ctx, testBMC); err != nil {
+		t.Fatalf("Failed to create test BMC: %v", err)
+	}
+
+	t.Run("GET BMC Details Page", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/bmcs/details?name=test-details-bmc", nil)
+		ts.addAuth(req)
+		w := httptest.NewRecorder()
+
+		ts.Handler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Errorf("Expected status %d, got %d", http.StatusOK, w.Code)
+		}
+
+		body := w.Body.String()
+		if !strings.Contains(body, "BMC Details - BMC Details - test-details-bmc") {
+			t.Error("Response should contain BMC details title")
+		}
+		if !strings.Contains(body, "Back to BMC List") {
+			t.Error("Response should contain back link")
+		}
+		if !strings.Contains(body, "System Information") {
+			t.Error("Response should contain System Information section")
+		}
+		if !strings.Contains(body, "Network Interfaces") {
+			t.Error("Response should contain Network Interfaces section")
+		}
+		if !strings.Contains(body, "Storage Devices") {
+			t.Error("Response should contain Storage Devices section")
+		}
+		if !strings.Contains(body, "System Event Log") {
+			t.Error("Response should contain System Event Log section")
+		}
+		if !strings.Contains(body, "loadBMCDetails()") {
+			t.Error("Response should contain JavaScript to load BMC details")
+		}
+	})
+
+	t.Run("BMC Details with Missing Name", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/bmcs/details", nil)
+		ts.addAuth(req)
+		w := httptest.NewRecorder()
+
+		ts.Handler.ServeHTTP(w, req)
+
+		// Should redirect with error
+		if w.Code != http.StatusSeeOther {
+			t.Errorf("Expected redirect status %d, got %d", http.StatusSeeOther, w.Code)
+		}
+
+		location := w.Header().Get("Location")
+		if !strings.Contains(location, "error") {
+			t.Error("Should redirect with error for missing BMC name")
+		}
+	})
+
+	t.Run("BMC Details with Error Parameter", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/bmcs/details?name=test-bmc&error=Test+error", nil)
+		ts.addAuth(req)
+		w := httptest.NewRecorder()
+
+		ts.Handler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Errorf("Expected status %d, got %d", http.StatusOK, w.Code)
+		}
+
+		body := w.Body.String()
+		if !strings.Contains(body, "Test error") {
+			t.Error("Response should contain the error message")
+		}
+	})
+}
+
+func TestHandleBMCDetailsAPI(t *testing.T) {
+	ts := createTestSetup(t)
+	defer ts.DB.Close()
+
+	t.Run("API Details with Missing Name", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/bmcs/details", nil)
+		ts.addAuth(req)
+		w := httptest.NewRecorder()
+
+		ts.Handler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("Expected status %d, got %d", http.StatusBadRequest, w.Code)
+		}
+
+		// Check for JSON error response
+		if w.Header().Get("Content-Type") != "application/json" {
+			t.Error("Response should have JSON content type")
+		}
+
+		body := w.Body.String()
+		if !strings.Contains(body, "BMC name is required") {
+			t.Error("Response should contain error message")
+		}
+	})
+
+	t.Run("API Details with Non-existent BMC", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/bmcs/details?name=non-existent", nil)
+		ts.addAuth(req)
+		w := httptest.NewRecorder()
+
+		ts.Handler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusInternalServerError {
+			t.Errorf("Expected status %d, got %d", http.StatusInternalServerError, w.Code)
+		}
+
+		// Check for JSON error response
+		if w.Header().Get("Content-Type") != "application/json" {
+			t.Error("Response should have JSON content type")
+		}
+
+		body := w.Body.String()
+		if !strings.Contains(body, "Failed to get BMC details") {
+			t.Error("Response should contain error message")
+		}
+	})
+
+	t.Run("API Details POST Method Not Allowed", func(t *testing.T) {
+		req := httptest.NewRequest("POST", "/api/bmcs/details?name=test", nil)
+		ts.addAuth(req)
+		w := httptest.NewRecorder()
+
+		ts.Handler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusMethodNotAllowed {
+			t.Errorf("Expected status %d, got %d", http.StatusMethodNotAllowed, w.Code)
+		}
+	})
+
+	// Test successful API call would require a mock BMC server
+	// This is more complex and would be similar to the BMC service tests
+	// For now, we test the error cases and basic validation
+}

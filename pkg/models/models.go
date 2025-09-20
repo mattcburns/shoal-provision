@@ -78,3 +78,48 @@ type ConnectionMethod struct {
 	AggregatedManagers string `json:"-" db:"aggregated_managers"`
 	AggregatedSystems  string `json:"-" db:"aggregated_systems"`
 }
+
+// DetailedBMCStatus represents comprehensive information about a BMC
+type DetailedBMCStatus struct {
+	BMC               BMC                `json:"bmc"`
+	SystemInfo        *SystemInfo        `json:"system_info,omitempty"`
+	NetworkInterfaces []NetworkInterface `json:"network_interfaces,omitempty"`
+	StorageDevices    []StorageDevice    `json:"storage_devices,omitempty"`
+	SELEntries        []SELEntry         `json:"sel_entries,omitempty"`
+}
+
+// SystemInfo represents basic system information
+type SystemInfo struct {
+	SerialNumber string `json:"serial_number,omitempty"`
+	SKU          string `json:"sku,omitempty"`
+	PowerState   string `json:"power_state,omitempty"`
+	Model        string `json:"model,omitempty"`
+	Manufacturer string `json:"manufacturer,omitempty"`
+}
+
+// NetworkInterface represents a network interface
+type NetworkInterface struct {
+	Name        string   `json:"name,omitempty"`
+	Description string   `json:"description,omitempty"`
+	MACAddress  string   `json:"mac_address,omitempty"`
+	IPAddresses []string `json:"ip_addresses,omitempty"`
+}
+
+// StorageDevice represents a storage device
+type StorageDevice struct {
+	Name          string `json:"name,omitempty"`
+	Model         string `json:"model,omitempty"`
+	SerialNumber  string `json:"serial_number,omitempty"`
+	CapacityBytes int64  `json:"capacity_bytes,omitempty"`
+	Status        string `json:"status,omitempty"`
+	MediaType     string `json:"media_type,omitempty"`
+}
+
+// SELEntry represents a System Event Log entry
+type SELEntry struct {
+	ID        string `json:"id,omitempty"`
+	Message   string `json:"message,omitempty"`
+	Severity  string `json:"severity,omitempty"`
+	Created   string `json:"created,omitempty"`
+	EntryType string `json:"entry_type,omitempty"`
+}
