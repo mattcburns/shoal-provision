@@ -10,6 +10,7 @@ Shoal is a Go-based Redfish aggregator service that discovers and manages multip
 - **Power Management**: Execute power control actions (On, ForceOff, Reset, etc.) across multiple BMCs
 - **User Management**: Multi-user support with role-based access control (Admin, Operator, Viewer)
 - **Web Management Interface**: Complete web UI for BMC management, power control, user management, and monitoring
+- **Detailed BMC Status**: Comprehensive drill-down view showing system information, network interfaces, storage devices, and System Event Log (SEL) entries
 - **Dual Authentication**: Supports both HTTP Basic Auth and Redfish session tokens
 - **BMC Health Testing**: Automatic connection testing when adding/updating BMCs
 - **Password Security**: bcrypt password hashing for users, AES-256-GCM encryption for BMC passwords
@@ -167,12 +168,18 @@ Access the web interface at `http://localhost:8080`
 
 - **Dashboard**: Overview of managed BMCs with status and last seen timestamps
 - **BMC Management**: Complete CRUD operations - add, edit, delete, and enable/disable BMCs
+- **Detailed BMC Status**: Click "Details" button to view comprehensive information about any BMC including:
+  - **System Information**: Serial number, SKU, power state, model, and manufacturer
+  - **Network Interfaces**: NIC details with MAC addresses and IP addresses
+  - **Storage Devices**: Drive information with capacity, model, serial numbers, and health status
+  - **System Event Log (SEL)**: Recent log entries with severity levels and timestamps
 - **Connection Testing**: Quick connectivity tests for any BMC with one-click "Test" button in the management table
 - **Power Control**: Execute power actions (On, ForceOff, ForceRestart) directly from the web UI
 - **Real-time Feedback**: Success/error messaging for all operations
 - **Pre-validation Testing**: Test BMC connectivity before adding/saving using the "Test Connection" button in forms
 
 **BMC Management Features:**
+- **Detailed Status View**: Click "Details" button to drill down into comprehensive BMC information retrieved live from the Redfish API
 - **Quick Testing**: Each BMC in the management table has a "Test" button for instant connectivity verification
 - **Add BMCs**: Enter IP address (e.g., `192.168.1.100`) or hostname, with "Test Connection" button to verify before saving
 - **Live Status**: Test results appear inline with success/failure indicators
@@ -334,6 +341,10 @@ curl -H "X-Auth-Token: <token>" http://localhost:8080/redfish/v1/
 - `GET /redfish/v1/Systems` - List of aggregated systems from all BMCs
 - `GET /redfish/v1/Managers/{bmc-name}` - Proxy to specific BMC manager
 - `GET /redfish/v1/Systems/{bmc-name}` - Proxy to specific system
+
+**Web Interface Endpoints:**
+- `GET /bmcs/details?name={bmc-name}` - Detailed BMC status page
+- `GET /api/bmcs/details?name={bmc-name}` - JSON endpoint for detailed BMC information
 
 **SessionService API:**
 - `POST /redfish/v1/SessionService/Sessions` - Create authentication session (unauthenticated)

@@ -54,7 +54,9 @@ func New(db *database.DB) http.Handler {
 	mux.Handle("/bmcs/edit", h.requireAuth(http.HandlerFunc(h.handleEditBMC)))
 	mux.Handle("/bmcs/delete", h.requireAuth(http.HandlerFunc(h.handleDeleteBMC)))
 	mux.Handle("/bmcs/power", h.requireAuth(http.HandlerFunc(h.handlePowerControl)))
+	mux.Handle("/bmcs/details", h.requireAuth(http.HandlerFunc(h.handleBMCDetails)))
 	mux.Handle("/api/bmcs/test-connection", h.requireAuth(http.HandlerFunc(h.handleTestConnection)))
+	mux.Handle("/api/bmcs/details", h.requireAuth(http.HandlerFunc(h.handleBMCDetailsAPI)))
 
 	// User management routes (admin only)
 	mux.Handle("/users", h.requireAdmin(http.HandlerFunc(h.handleUsers)))
@@ -179,6 +181,7 @@ func (h *Handler) handleHome(w http.ResponseWriter, r *http.Request) {
             <th>Address</th>
             <th>Status</th>
             <th>Last Seen</th>
+            <th>Actions</th>
         </tr>
     </thead>
     <tbody>
@@ -196,10 +199,13 @@ func (h *Handler) handleHome(w http.ResponseWriter, r *http.Request) {
             <td>
                 {{if .LastSeen}}{{.LastSeen.Format "2006-01-02 15:04:05"}}{{else}}Never{{end}}
             </td>
+            <td>
+                <a href="/bmcs/details?name={{.Name}}" class="btn btn-primary" style="font-size: 12px;">Details</a>
+            </td>
         </tr>
         {{else}}
         <tr>
-            <td colspan="4">No BMCs configured. <a href="/bmcs/add">Add your first BMC</a></td>
+            <td colspan="5">No BMCs configured. <a href="/bmcs/add">Add your first BMC</a></td>
         </tr>
         {{end}}
     </tbody>
@@ -291,7 +297,8 @@ func (h *Handler) handleBMCs(w http.ResponseWriter, r *http.Request) {
                 {{if .LastSeen}}{{.LastSeen.Format "2006-01-02 15:04:05"}}{{else}}Never{{end}}
             </td>
             <td>
-                <button onclick="testBMCConnection('{{.ID}}', '{{.Address}}', '{{.Name}}')" class="btn btn-primary" style="margin: 2px;">Test</button>
+                <a href="/bmcs/details?name={{.Name}}" class="btn btn-primary" style="margin: 2px;">Details</a>
+                <button onclick="testBMCConnection('{{.ID}}', '{{.Address}}', '{{.Name}}')" class="btn btn-success" style="margin: 2px;">Test</button>
                 <a href="/bmcs/edit?id={{.ID}}" class="btn btn-primary" style="margin: 2px;">Edit</a>
                 <a href="/bmcs/power?id={{.ID}}&action=On" class="btn btn-success" style="margin: 2px;">Power On</a>
                 <a href="/bmcs/power?id={{.ID}}&action=ForceOff" class="btn btn-warning" style="margin: 2px;">Power Off</a>
@@ -817,6 +824,353 @@ func (h *Handler) handleTestConnection(w http.ResponseWriter, r *http.Request) {
 		Message: "Connection successful! BMC is reachable and responding with Redfish API",
 	}
 	json.NewEncoder(w).Encode(response)
+}
+
+// handleBMCDetails displays detailed information about a specific BMC
+func (h *Handler) handleBMCDetails(w http.ResponseWriter, r *http.Request) {
+	bmcName := r.URL.Query().Get("name")
+	if bmcName == "" {
+		http.Redirect(w, r, "/bmcs?error=Missing+BMC+name", http.StatusSeeOther)
+		return
+	}
+
+	data := PageData{
+		Title: fmt.Sprintf("BMC Details - %s", bmcName),
+	}
+	h.addUserToPageData(r, &data)
+
+	if errMsg := r.URL.Query().Get("error"); errMsg != "" {
+		data.Error = errMsg
+	}
+
+	detailsTemplate := `{{define "content"}}
+<h2>BMC Details - {{.Title}}</h2>
+
+<div style="margin-bottom: 20px;">
+    <a href="/bmcs" class="btn btn-primary">← Back to BMC List</a>
+</div>
+
+{{if .Error}}
+<div class="alert alert-danger">{{.Error}}</div>
+{{end}}
+
+<div id="loading-indicator" style="text-align: center; padding: 20px;">
+    <p>Loading BMC details...</p>
+</div>
+
+<div id="bmc-details" style="display: none;">
+    <!-- System Information -->
+    <div class="details-section">
+        <h3>System Information</h3>
+        <div id="system-info" class="info-grid"></div>
+    </div>
+
+    <!-- Network Interfaces -->
+    <div class="details-section">
+        <h3>Network Interfaces</h3>
+        <div id="network-interfaces"></div>
+    </div>
+
+    <!-- Storage Devices -->
+    <div class="details-section">
+        <h3>Storage Devices</h3>
+        <div id="storage-devices"></div>
+    </div>
+
+    <!-- System Event Log -->
+    <div class="details-section">
+        <h3>System Event Log</h3>
+        <div id="sel-entries"></div>
+    </div>
+</div>
+
+<div id="error-display" class="alert alert-danger" style="display: none;"></div>
+
+<style>
+.details-section {
+    margin-bottom: 30px;
+    border: 1px solid #ddd;
+    border-radius: 5px;
+    padding: 20px;
+    background-color: #f9f9f9;
+}
+
+.details-section h3 {
+    margin-top: 0;
+    color: #007acc;
+    border-bottom: 2px solid #007acc;
+    padding-bottom: 10px;
+}
+
+.info-grid {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 10px;
+    max-width: 600px;
+}
+
+.info-label {
+    font-weight: bold;
+    padding: 5px;
+}
+
+.info-value {
+    padding: 5px;
+}
+
+.interface-card, .device-card, .log-entry {
+    border: 1px solid #ccc;
+    border-radius: 3px;
+    padding: 15px;
+    margin-bottom: 15px;
+    background-color: white;
+}
+
+.interface-card h4, .device-card h4 {
+    margin: 0 0 10px 0;
+    color: #333;
+}
+
+.log-entry {
+    border-left: 4px solid #007acc;
+}
+
+.log-entry.severity-critical {
+    border-left-color: #dc3545;
+}
+
+.log-entry.severity-warning {
+    border-left-color: #ffc107;
+}
+
+.log-entry.severity-ok {
+    border-left-color: #28a745;
+}
+
+.log-meta {
+    font-size: 12px;
+    color: #666;
+    margin-bottom: 5px;
+}
+
+.capacity {
+    font-weight: bold;
+}
+</style>
+
+<script>
+function formatBytes(bytes) {
+    if (bytes === 0) return '0 Bytes';
+    const k = 1024;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+}
+
+function displaySystemInfo(systemInfo) {
+    const container = document.getElementById('system-info');
+    if (!systemInfo) {
+        container.innerHTML = '<p>System information not available</p>';
+        return;
+    }
+
+    let html = '';
+    if (systemInfo.manufacturer) {
+        html += '<div class="info-label">Manufacturer:</div><div class="info-value">' + systemInfo.manufacturer + '</div>';
+    }
+    if (systemInfo.model) {
+        html += '<div class="info-label">Model:</div><div class="info-value">' + systemInfo.model + '</div>';
+    }
+    if (systemInfo.serial_number) {
+        html += '<div class="info-label">Serial Number:</div><div class="info-value">' + systemInfo.serial_number + '</div>';
+    }
+    if (systemInfo.sku) {
+        html += '<div class="info-label">SKU:</div><div class="info-value">' + systemInfo.sku + '</div>';
+    }
+    if (systemInfo.power_state) {
+        html += '<div class="info-label">Power State:</div><div class="info-value">' + systemInfo.power_state + '</div>';
+    }
+
+    container.innerHTML = html || '<p>No system information available</p>';
+}
+
+function displayNetworkInterfaces(nics) {
+    const container = document.getElementById('network-interfaces');
+    if (!nics || nics.length === 0) {
+        container.innerHTML = '<p>No network interfaces found</p>';
+        return;
+    }
+
+    let html = '';
+    nics.forEach(function(nic) {
+        html += '<div class="interface-card">';
+        html += '<h4>' + (nic.name || 'Network Interface') + '</h4>';
+        if (nic.description) {
+            html += '<p><strong>Description:</strong> ' + nic.description + '</p>';
+        }
+        if (nic.mac_address) {
+            html += '<p><strong>MAC Address:</strong> ' + nic.mac_address + '</p>';
+        }
+        if (nic.ip_addresses && nic.ip_addresses.length > 0) {
+            html += '<p><strong>IP Addresses:</strong> ' + nic.ip_addresses.join(', ') + '</p>';
+        }
+        html += '</div>';
+    });
+
+    container.innerHTML = html;
+}
+
+function displayStorageDevices(devices) {
+    const container = document.getElementById('storage-devices');
+    if (!devices || devices.length === 0) {
+        container.innerHTML = '<p>No storage devices found</p>';
+        return;
+    }
+
+    let html = '';
+    devices.forEach(function(device) {
+        html += '<div class="device-card">';
+        html += '<h4>' + (device.name || 'Storage Device') + '</h4>';
+        if (device.model) {
+            html += '<p><strong>Model:</strong> ' + device.model + '</p>';
+        }
+        if (device.serial_number) {
+            html += '<p><strong>Serial Number:</strong> ' + device.serial_number + '</p>';
+        }
+        if (device.capacity_bytes) {
+            html += '<p><strong>Capacity:</strong> <span class="capacity">' + formatBytes(device.capacity_bytes) + '</span></p>';
+        }
+        if (device.media_type) {
+            html += '<p><strong>Media Type:</strong> ' + device.media_type + '</p>';
+        }
+        if (device.status) {
+            html += '<p><strong>Status:</strong> ' + device.status + '</p>';
+        }
+        html += '</div>';
+    });
+
+    container.innerHTML = html;
+}
+
+function displaySELEntries(entries) {
+    const container = document.getElementById('sel-entries');
+    if (!entries || entries.length === 0) {
+        container.innerHTML = '<p>No SEL entries found</p>';
+        return;
+    }
+
+    let html = '';
+    // Sort entries by created date (newest first)
+    const sortedEntries = entries.sort(function(a, b) {
+        return new Date(b.created || 0) - new Date(a.created || 0);
+    });
+
+    sortedEntries.forEach(function(entry) {
+        const severityClass = entry.severity ? 'severity-' + entry.severity.toLowerCase() : '';
+        html += '<div class="log-entry ' + severityClass + '">';
+        
+        html += '<div class="log-meta">';
+        if (entry.created) {
+            html += '<span><strong>Date:</strong> ' + entry.created + '</span> | ';
+        }
+        if (entry.severity) {
+            html += '<span><strong>Severity:</strong> ' + entry.severity + '</span> | ';
+        }
+        if (entry.entry_type) {
+            html += '<span><strong>Type:</strong> ' + entry.entry_type + '</span>';
+        }
+        html += '</div>';
+        
+        if (entry.message) {
+            html += '<div><strong>Message:</strong> ' + entry.message + '</div>';
+        }
+        html += '</div>';
+    });
+
+    container.innerHTML = html;
+}
+
+function loadBMCDetails() {
+    const bmcName = new URLSearchParams(window.location.search).get('name');
+    if (!bmcName) {
+        document.getElementById('error-display').textContent = 'BMC name is required';
+        document.getElementById('error-display').style.display = 'block';
+        document.getElementById('loading-indicator').style.display = 'none';
+        return;
+    }
+
+    fetch('/api/bmcs/details?name=' + encodeURIComponent(bmcName))
+        .then(function(response) {
+            if (!response.ok) {
+                throw new Error('Failed to fetch BMC details: ' + response.statusText);
+            }
+            return response.json();
+        })
+        .then(function(data) {
+            document.getElementById('loading-indicator').style.display = 'none';
+            document.getElementById('bmc-details').style.display = 'block';
+            
+            displaySystemInfo(data.system_info);
+            displayNetworkInterfaces(data.network_interfaces);
+            displayStorageDevices(data.storage_devices);
+            displaySELEntries(data.sel_entries);
+        })
+        .catch(function(error) {
+            document.getElementById('loading-indicator').style.display = 'none';
+            document.getElementById('error-display').textContent = error.message;
+            document.getElementById('error-display').style.display = 'block';
+        });
+}
+
+// Load details when page loads
+loadBMCDetails();
+</script>
+{{end}}`
+
+	tmpl := template.Must(h.templates.Clone())
+	template.Must(tmpl.Parse(detailsTemplate))
+
+	if err := tmpl.ExecuteTemplate(w, "base", data); err != nil {
+		slog.Error("Failed to execute template", "error", err)
+		http.Error(w, "Template Error", http.StatusInternalServerError)
+	}
+}
+
+// handleBMCDetailsAPI handles AJAX requests for BMC detailed information
+func (h *Handler) handleBMCDetailsAPI(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Set response headers for JSON
+	w.Header().Set("Content-Type", "application/json")
+
+	bmcName := r.URL.Query().Get("name")
+	if bmcName == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": "BMC name is required"})
+		return
+	}
+
+	// Create context with timeout
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	defer cancel()
+
+	// Get detailed BMC status
+	details, err := h.bmcSvc.GetDetailedBMCStatus(ctx, bmcName)
+	if err != nil {
+		slog.Error("Failed to get BMC details", "bmc", bmcName, "error", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{"error": fmt.Sprintf("Failed to get BMC details: %v", err)})
+		return
+	}
+
+	// Return detailed status
+	if err := json.NewEncoder(w).Encode(details); err != nil {
+		slog.Error("Failed to encode BMC details response", "error", err)
+		w.WriteHeader(http.StatusInternalServerError)
+	}
 }
 
 // Authentication middleware

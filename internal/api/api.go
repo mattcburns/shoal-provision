@@ -705,8 +705,7 @@ func (h *Handler) handleGetSessionsCollection(w http.ResponseWriter, r *http.Req
 
 	var members []redfish.ODataIDRef
 	for _, s := range sessions {
-		members = append(members, redfish.ODataIDRef{ODataID: 
-			fmt.Sprintf("/redfish/v1/SessionService/Sessions/%s", s.ID),
+		members = append(members, redfish.ODataIDRef{ODataID: fmt.Sprintf("/redfish/v1/SessionService/Sessions/%s", s.ID),
 		})
 	}
 

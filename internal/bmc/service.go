@@ -696,6 +696,403 @@ func (s *Service) fetchRedfishResource(ctx context.Context, bmc *models.BMC, pat
 	return data, nil
 }
 
+// GetDetailedBMCStatus fetches comprehensive information about a BMC
+func (s *Service) GetDetailedBMCStatus(ctx context.Context, bmcName string) (*models.DetailedBMCStatus, error) {
+	bmc, err := s.db.GetBMCByName(ctx, bmcName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get BMC: %w", err)
+	}
+	if bmc == nil {
+		return nil, fmt.Errorf("BMC not found: %s", bmcName)
+	}
+	if !bmc.Enabled {
+		return nil, fmt.Errorf("BMC is disabled: %s", bmcName)
+	}
+
+	status := &models.DetailedBMCStatus{
+		BMC: *bmc,
+	}
+
+	// Get system information
+	systemInfo, err := s.getSystemInfo(ctx, bmc)
+	if err != nil {
+		slog.Warn("Failed to get system info", "bmc", bmcName, "error", err)
+	} else {
+		status.SystemInfo = systemInfo
+	}
+
+	// Get network interfaces
+	nics, err := s.getNetworkInterfaces(ctx, bmc)
+	if err != nil {
+		slog.Warn("Failed to get network interfaces", "bmc", bmcName, "error", err)
+	} else {
+		status.NetworkInterfaces = nics
+	}
+
+	// Get storage devices
+	storageDevices, err := s.getStorageDevices(ctx, bmc)
+	if err != nil {
+		slog.Warn("Failed to get storage devices", "bmc", bmcName, "error", err)
+	} else {
+		status.StorageDevices = storageDevices
+	}
+
+	// Get SEL entries
+	selEntries, err := s.getSELEntries(ctx, bmc)
+	if err != nil {
+		slog.Warn("Failed to get SEL entries", "bmc", bmcName, "error", err)
+	} else {
+		status.SELEntries = selEntries
+	}
+
+	// Update last seen timestamp
+	if err := s.db.UpdateBMCLastSeen(ctx, bmc.ID); err != nil {
+		slog.Warn("Failed to update BMC last seen", "bmc", bmcName, "error", err)
+	}
+
+	return status, nil
+}
+
+// getSystemInfo fetches system information from the first system on the BMC
+func (s *Service) getSystemInfo(ctx context.Context, bmc *models.BMC) (*models.SystemInfo, error) {
+	systemID, err := s.GetFirstSystemID(ctx, bmc.Name)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get system ID: %w", err)
+	}
+
+	systemPath := fmt.Sprintf("/redfish/v1/Systems/%s", systemID)
+	systemData, err := s.fetchRedfishResource(ctx, bmc, systemPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch system data: %w", err)
+	}
+
+	systemInfo := &models.SystemInfo{}
+
+	// Extract system information
+	if serialNumber, ok := systemData["SerialNumber"].(string); ok {
+		systemInfo.SerialNumber = serialNumber
+	}
+	if sku, ok := systemData["SKU"].(string); ok {
+		systemInfo.SKU = sku
+	}
+	if powerState, ok := systemData["PowerState"].(string); ok {
+		systemInfo.PowerState = powerState
+	}
+	if model, ok := systemData["Model"].(string); ok {
+		systemInfo.Model = model
+	}
+	if manufacturer, ok := systemData["Manufacturer"].(string); ok {
+		systemInfo.Manufacturer = manufacturer
+	}
+
+	return systemInfo, nil
+}
+
+// getNetworkInterfaces fetches network interface information
+func (s *Service) getNetworkInterfaces(ctx context.Context, bmc *models.BMC) ([]models.NetworkInterface, error) {
+	systemID, err := s.GetFirstSystemID(ctx, bmc.Name)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get system ID: %w", err)
+	}
+
+	// Try to get network interfaces from the system
+	nicPath := fmt.Sprintf("/redfish/v1/Systems/%s/EthernetInterfaces", systemID)
+	nicCollection, err := s.fetchRedfishResource(ctx, bmc, nicPath)
+	if err != nil {
+		// If system-level NICs aren't available, try manager-level
+		managerID, err := s.GetFirstManagerID(ctx, bmc.Name)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get manager ID: %w", err)
+		}
+		nicPath = fmt.Sprintf("/redfish/v1/Managers/%s/EthernetInterfaces", managerID)
+		nicCollection, err = s.fetchRedfishResource(ctx, bmc, nicPath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to fetch network interfaces: %w", err)
+		}
+	}
+
+	var nics []models.NetworkInterface
+
+	if members, ok := nicCollection["Members"].([]interface{}); ok {
+		for _, member := range members {
+			if memberMap, ok := member.(map[string]interface{}); ok {
+				if odataID, ok := memberMap["@odata.id"].(string); ok {
+					// Fetch detailed NIC information
+					nicData, err := s.fetchRedfishResource(ctx, bmc, odataID)
+					if err != nil {
+						slog.Warn("Failed to fetch NIC details", "path", odataID, "error", err)
+						continue
+					}
+
+					nic := models.NetworkInterface{}
+					if name, ok := nicData["Name"].(string); ok {
+						nic.Name = name
+					}
+					if description, ok := nicData["Description"].(string); ok {
+						nic.Description = description
+					}
+					if macAddress, ok := nicData["MACAddress"].(string); ok {
+						nic.MACAddress = macAddress
+					}
+
+					// Try to get IP addresses from IPv4Addresses
+					if ipv4Addresses, ok := nicData["IPv4Addresses"].([]interface{}); ok {
+						for _, addr := range ipv4Addresses {
+							if addrMap, ok := addr.(map[string]interface{}); ok {
+								if address, ok := addrMap["Address"].(string); ok && address != "" {
+									nic.IPAddresses = append(nic.IPAddresses, address)
+								}
+							}
+						}
+					}
+
+					nics = append(nics, nic)
+				}
+			}
+		}
+	}
+
+	return nics, nil
+}
+
+// getStorageDevices fetches storage device information from both Storage and SimpleStorage endpoints
+func (s *Service) getStorageDevices(ctx context.Context, bmc *models.BMC) ([]models.StorageDevice, error) {
+	systemID, err := s.GetFirstSystemID(ctx, bmc.Name)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get system ID: %w", err)
+	}
+
+	var storageDevices []models.StorageDevice
+
+	// First, try to get devices from regular Storage collection
+	storageDevices = append(storageDevices, s.getStorageDevicesFromStorage(ctx, bmc, systemID)...)
+
+	// Then, try to get devices from SimpleStorage collection
+	storageDevices = append(storageDevices, s.getStorageDevicesFromSimpleStorage(ctx, bmc, systemID)...)
+
+	// Return the (possibly empty) list of storage devices
+	return storageDevices, nil
+}
+
+// getStorageDevicesFromStorage fetches storage devices from the regular Storage collection
+func (s *Service) getStorageDevicesFromStorage(ctx context.Context, bmc *models.BMC, systemID string) []models.StorageDevice {
+	// Get storage collection
+	storagePath := fmt.Sprintf("/redfish/v1/Systems/%s/Storage", systemID)
+	storageCollection, err := s.fetchRedfishResource(ctx, bmc, storagePath)
+	if err != nil {
+		slog.Debug("Storage collection not available", "path", storagePath, "error", err)
+		return nil
+	}
+
+	var storageDevices []models.StorageDevice
+
+	if members, ok := storageCollection["Members"].([]interface{}); ok {
+		for _, member := range members {
+			if memberMap, ok := member.(map[string]interface{}); ok {
+				if odataID, ok := memberMap["@odata.id"].(string); ok {
+					// Fetch storage controller details
+					storageData, err := s.fetchRedfishResource(ctx, bmc, odataID)
+					if err != nil {
+						slog.Warn("Failed to fetch storage details", "path", odataID, "error", err)
+						continue
+					}
+
+					// Get drives from this storage controller
+					if drives, ok := storageData["Drives"].([]interface{}); ok {
+						for _, drive := range drives {
+							if driveRef, ok := drive.(map[string]interface{}); ok {
+								if driveODataID, ok := driveRef["@odata.id"].(string); ok {
+									// Fetch drive details
+									driveData, err := s.fetchRedfishResource(ctx, bmc, driveODataID)
+									if err != nil {
+										slog.Warn("Failed to fetch drive details", "path", driveODataID, "error", err)
+										continue
+									}
+
+									device := s.parseStorageDevice(driveData)
+									storageDevices = append(storageDevices, device)
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return storageDevices
+}
+
+// getStorageDevicesFromSimpleStorage fetches storage devices from the SimpleStorage collection
+func (s *Service) getStorageDevicesFromSimpleStorage(ctx context.Context, bmc *models.BMC, systemID string) []models.StorageDevice {
+	// Get SimpleStorage collection
+	simpleStoragePath := fmt.Sprintf("/redfish/v1/Systems/%s/SimpleStorage", systemID)
+	simpleStorageCollection, err := s.fetchRedfishResource(ctx, bmc, simpleStoragePath)
+	if err != nil {
+		slog.Debug("SimpleStorage collection not available", "path", simpleStoragePath, "error", err)
+		return nil
+	}
+
+	var storageDevices []models.StorageDevice
+
+	if members, ok := simpleStorageCollection["Members"].([]interface{}); ok {
+		for _, member := range members {
+			if memberMap, ok := member.(map[string]interface{}); ok {
+				if odataID, ok := memberMap["@odata.id"].(string); ok {
+					// Fetch SimpleStorage controller details
+					simpleStorageData, err := s.fetchRedfishResource(ctx, bmc, odataID)
+					if err != nil {
+						slog.Warn("Failed to fetch SimpleStorage details", "path", odataID, "error", err)
+						continue
+					}
+
+					// Get devices directly embedded in SimpleStorage controller
+					if devices, ok := simpleStorageData["Devices"].([]interface{}); ok {
+						for _, device := range devices {
+							if deviceMap, ok := device.(map[string]interface{}); ok {
+								// Skip devices that are not present/enabled
+								if status, ok := deviceMap["Status"].(map[string]interface{}); ok {
+									if state, ok := status["State"].(string); ok && state == "Absent" {
+										continue
+									}
+								}
+
+								storageDevice := s.parseStorageDevice(deviceMap)
+								storageDevices = append(storageDevices, storageDevice)
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return storageDevices
+}
+
+// parseStorageDevice parses storage device data from either Storage Drive or SimpleStorage Device format
+func (s *Service) parseStorageDevice(deviceData map[string]interface{}) models.StorageDevice {
+	device := models.StorageDevice{}
+
+	if name, ok := deviceData["Name"].(string); ok {
+		device.Name = name
+	}
+	if model, ok := deviceData["Model"].(string); ok {
+		device.Model = model
+	}
+	if serialNumber, ok := deviceData["SerialNumber"].(string); ok {
+		device.SerialNumber = serialNumber
+	}
+	if capacityBytes, ok := deviceData["CapacityBytes"].(float64); ok {
+		device.CapacityBytes = int64(capacityBytes)
+	}
+
+	// Handle status - can be either a string (older format) or an object with Health property
+	if status, ok := deviceData["Status"].(map[string]interface{}); ok {
+		if health, ok := status["Health"].(string); ok {
+			device.Status = health
+		}
+	} else if statusStr, ok := deviceData["Status"].(string); ok {
+		device.Status = statusStr
+	}
+
+	if mediaType, ok := deviceData["MediaType"].(string); ok {
+		device.MediaType = mediaType
+	}
+
+	// For SimpleStorage devices, also check for Manufacturer field
+	if manufacturer, ok := deviceData["Manufacturer"].(string); ok {
+		// Add manufacturer info to the model field if available
+		if device.Model != "" {
+			device.Model = fmt.Sprintf("%s %s", manufacturer, device.Model)
+		} else {
+			device.Model = manufacturer
+		}
+	}
+
+	return device
+}
+
+// getSELEntries fetches System Event Log entries
+func (s *Service) getSELEntries(ctx context.Context, bmc *models.BMC) ([]models.SELEntry, error) {
+	managerID, err := s.GetFirstManagerID(ctx, bmc.Name)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get manager ID: %w", err)
+	}
+
+	// Try to get log services
+	logServicesPath := fmt.Sprintf("/redfish/v1/Managers/%s/LogServices", managerID)
+	logServicesData, err := s.fetchRedfishResource(ctx, bmc, logServicesPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch log services: %w", err)
+	}
+
+	var selEntries []models.SELEntry
+
+	// Look for the Event log or SEL log
+	if members, ok := logServicesData["Members"].([]interface{}); ok {
+		for _, member := range members {
+			if memberMap, ok := member.(map[string]interface{}); ok {
+				if odataID, ok := memberMap["@odata.id"].(string); ok {
+					// Get log service details to find the right one
+					logServiceData, err := s.fetchRedfishResource(ctx, bmc, odataID)
+					if err != nil {
+						continue
+					}
+
+					// Look for Event log or SEL
+					if name, ok := logServiceData["Name"].(string); ok {
+						if name == "Event Log" || name == "SEL Log" || name == "System Event Log" {
+							// Found the right log service, get entries
+							entriesPath := odataID + "/Entries"
+							entriesData, err := s.fetchRedfishResource(ctx, bmc, entriesPath)
+							if err != nil {
+								continue
+							}
+
+							if entryMembers, ok := entriesData["Members"].([]interface{}); ok {
+								for _, entryMember := range entryMembers {
+									if entryRef, ok := entryMember.(map[string]interface{}); ok {
+										if entryODataID, ok := entryRef["@odata.id"].(string); ok {
+											// Fetch individual entry
+											entryData, err := s.fetchRedfishResource(ctx, bmc, entryODataID)
+											if err != nil {
+												continue
+											}
+
+											entry := models.SELEntry{}
+											if id, ok := entryData["Id"].(string); ok {
+												entry.ID = id
+											}
+											if message, ok := entryData["Message"].(string); ok {
+												entry.Message = message
+											}
+											if severity, ok := entryData["Severity"].(string); ok {
+												entry.Severity = severity
+											}
+											if created, ok := entryData["Created"].(string); ok {
+												entry.Created = created
+											}
+											if entryType, ok := entryData["EntryType"].(string); ok {
+												entry.EntryType = entryType
+											}
+
+											selEntries = append(selEntries, entry)
+										}
+									}
+								}
+							}
+							break // Found the right log service
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return selEntries, nil
+}
+
 // RemoveConnectionMethod removes a connection method and its aggregated data
 func (s *Service) RemoveConnectionMethod(ctx context.Context, id string) error {
 	return s.db.DeleteConnectionMethod(ctx, id)
