@@ -84,7 +84,7 @@ This section outlines development tasks.
 
 ### Git Workflow
 
-**CRITICAL: All development work MUST be done in feature branches. Direct commits to `main` are NOT allowed.**
+**CRITICAL: All development work MUST be done in feature branches. Direct commits to `master` are NOT allowed.**
 
 1.  **Create a feature branch** before making any changes:
     ```bash
