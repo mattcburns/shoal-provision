@@ -345,6 +345,47 @@ curl -H "X-Auth-Token: <token>" http://localhost:8080/redfish/v1/
 **Web Interface Endpoints:**
 - `GET /bmcs/details?name={bmc-name}` - Detailed BMC status page
 - `GET /api/bmcs/details?name={bmc-name}` - JSON endpoint for detailed BMC information
+- `GET /api/bmcs/settings?name={bmc-name}[&resource={path}]` - JSON endpoint for discovered configurable settings (read-only)
+
+### Settings Discovery (Preview)
+
+- `GET /api/bmcs/settings?name={bmc-name}[&resource={path}]`
+  - Auth: same as other web API endpoints (session or basic auth)
+  - Query params:
+    - `name`: Required. BMC name as configured in Shoal
+    - `resource`: Optional. Filter to a specific Redfish resource path (e.g. `/redfish/v1/Systems/System.Embedded.1/Bios`)
+  - Returns: a JSON object with discovered setting descriptors for the target BMC. Current scope focuses on common Redfish settings surfaces that expose `@Redfish.Settings` such as `Systems/<id>/Bios` and `Managers/<id>/NetworkProtocol`.
+
+Example:
+```bash
+curl -s -u admin:admin \
+  "http://localhost:8080/api/bmcs/settings?name=bmc1" | jq .
+```
+
+Response shape (example):
+```json
+{
+  "bmc_name": "bmc1",
+  "resource": "",
+  "descriptors": [
+    {
+      "id": "e3b0c44298fc1c149afbf4c8996fb924...",
+      "bmc_name": "bmc1",
+      "resource_path": "/redfish/v1/Systems/System.Embedded.1/Bios",
+      "attribute": "ProcTurboMode",
+      "type": "boolean",
+      "read_only": false,
+      "oem": false,
+      "current_value": true
+    }
+  ]
+}
+```
+
+Current limitations (to be expanded in future milestones):
+- No persistence yet; values are discovered on-demand per request
+- AttributeRegistry, ActionInfo, and full constraints (enums, ranges) are not yet resolved
+- Endpoint path is preview form; may evolve to `/api/bmcs/{name}/settings` and detail routes
 
 **SessionService API:**
 - `POST /redfish/v1/SessionService/Sessions` - Create authentication session (unauthenticated)
