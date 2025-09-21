@@ -18,6 +18,7 @@ package web
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -647,4 +648,80 @@ func TestHandleBMCDetailsAPI(t *testing.T) {
 	// Test successful API call would require a mock BMC server
 	// This is more complex and would be similar to the BMC service tests
 	// For now, we test the error cases and basic validation
+}
+
+func TestBMCSettingsAPI(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+	db, err := database.New(dbPath)
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+	if err := db.Migrate(ctx); err != nil {
+		t.Fatalf("migration failed: %v", err)
+	}
+
+	// Create an admin user and a session cookie helper
+	passwordHash, _ := pkgAuth.HashPassword("admin")
+	admin := &models.User{ID: "u1", Username: "admin", PasswordHash: passwordHash, Role: models.RoleAdmin, Enabled: true}
+	if err := db.CreateUser(ctx, admin); err != nil {
+		t.Fatalf("failed to create user: %v", err)
+	}
+
+	// Mock BMC server
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		username, password, ok := r.BasicAuth()
+		if !ok || username != "admin" || password != "password" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/redfish/v1/Systems":
+			json.NewEncoder(w).Encode(map[string]any{"Members": []map[string]string{{"@odata.id": "/redfish/v1/Systems/S1"}}})
+		case "/redfish/v1/Systems/S1/Bios":
+			json.NewEncoder(w).Encode(map[string]any{
+				"@Redfish.Settings": map[string]any{"SettingsObject": map[string]any{"@odata.id": "/redfish/v1/Systems/S1/Bios/Settings"}},
+				"Attributes":        map[string]any{"LogicalProc": true},
+			})
+		case "/redfish/v1/Managers":
+			json.NewEncoder(w).Encode(map[string]any{"Members": []map[string]string{{"@odata.id": "/redfish/v1/Managers/M1"}}})
+		case "/redfish/v1/Managers/M1/NetworkProtocol":
+			json.NewEncoder(w).Encode(map[string]any{
+				"@Redfish.Settings": map[string]any{"SettingsObject": map[string]any{"@odata.id": "/redfish/v1/Managers/M1/NetworkProtocol/Settings"}},
+				"HTTPS":             map[string]any{"Port": float64(443)},
+			})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	b := &models.BMC{Name: "b1", Address: server.URL, Username: "admin", Password: "password", Enabled: true}
+	if err := db.CreateBMC(ctx, b); err != nil {
+		t.Fatalf("failed to create bmc: %v", err)
+	}
+
+	handler := New(db)
+
+	// Authenticate via basic auth
+	req := httptest.NewRequest(http.MethodGet, "/api/bmcs/b1/settings", nil)
+	req.SetBasicAuth("admin", "admin")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Descriptors []models.SettingDescriptor `json:"descriptors"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+	if len(resp.Descriptors) == 0 {
+		t.Fatalf("expected descriptors > 0")
+	}
 }
