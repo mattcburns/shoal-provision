@@ -40,6 +40,11 @@ type Service struct {
 	client     *http.Client
 	idCache    map[string]*bmcIDCache // Cache for discovered IDs per BMC
 	idCacheMux sync.RWMutex
+	// 008: cache for attribute registries and ActionInfo per BMC
+	regCache    map[string]map[string]*registryCacheEntry
+	regCacheMux sync.RWMutex
+	aiCache     map[string]map[string]*actionInfoCacheEntry
+	aiCacheMux  sync.RWMutex
 }
 
 // bmcIDCache stores discovered manager and system IDs for a BMC
@@ -62,10 +67,25 @@ func New(db *database.DB) *Service {
 	}
 
 	return &Service{
-		db:      db,
-		client:  client,
-		idCache: make(map[string]*bmcIDCache),
+		db:       db,
+		client:   client,
+		idCache:  make(map[string]*bmcIDCache),
+		regCache: make(map[string]map[string]*registryCacheEntry),
+		aiCache:  make(map[string]map[string]*actionInfoCacheEntry),
 	}
+}
+
+// cache TTLs for 008 registry/action enrichment
+const registryCacheTTL = 15 * time.Minute
+
+type registryCacheEntry struct {
+	payload  map[string]interface{}
+	cachedAt time.Time
+}
+
+type actionInfoCacheEntry struct {
+	payload  map[string]interface{}
+	cachedAt time.Time
 }
 
 // ProxyRequest forwards a request to the appropriate BMC and returns the response
@@ -639,13 +659,17 @@ func (s *Service) DiscoverSettings(ctx context.Context, bmcName string, resource
 		biosPath := fmt.Sprintf("/redfish/v1/Systems/%s/Bios", systemID)
 		if biosData, err := s.fetchRedfishResource(ctx, bmc, biosPath); err == nil {
 			// Check @Redfish.Settings
-			if settingsObj := extractSettingsObject(biosData); settingsObj != "" {
+			applyTimes, settingsObj := extractApplyTimesAndSettingsObject(biosData)
+			if settingsObj != "" {
 				// Current values are often under Attributes or similar
 				currentValues := map[string]interface{}{}
 				if attrs, ok := biosData["Attributes"].(map[string]interface{}); ok {
 					currentValues = attrs
 				}
-				descs := buildDescriptorsFromMap(bmcName, biosPath, currentValues, false, "")
+				// Use SettingsObject as action target for BIOS attributes
+				descs := buildDescriptorsFromMap(bmcName, biosPath, currentValues, false, "", applyTimes, settingsObj)
+				// Enrich via Attribute Registry and any ActionInfo
+				descs = s.enrichDescriptors(ctx, bmc, biosData, descs)
 				descriptors = append(descriptors, descs...)
 			}
 		}
@@ -656,7 +680,8 @@ func (s *Service) DiscoverSettings(ctx context.Context, bmcName string, resource
 	if managerID != "" && (resourceFilter == "" || strings.Contains("/redfish/v1/Managers/"+managerID+"/NetworkProtocol", resourceFilter)) {
 		mnpPath := fmt.Sprintf("/redfish/v1/Managers/%s/NetworkProtocol", managerID)
 		if data, err := s.fetchRedfishResource(ctx, bmc, mnpPath); err == nil {
-			if settingsObj := extractSettingsObject(data); settingsObj != "" {
+			applyTimes, settingsObj := extractApplyTimesAndSettingsObject(data)
+			if settingsObj != "" {
 				// Heuristically pick writable-looking fields
 				current := make(map[string]interface{})
 				for k, v := range data {
@@ -666,7 +691,9 @@ func (s *Service) DiscoverSettings(ctx context.Context, bmcName string, resource
 					}
 					current[k] = v
 				}
-				descs := buildDescriptorsFromMap(bmcName, mnpPath, current, false, "")
+				descs := buildDescriptorsFromMap(bmcName, mnpPath, current, false, "", applyTimes, settingsObj)
+				// Enrich with any ActionInfo present on this resource
+				descs = s.enrichDescriptors(ctx, bmc, data, descs)
 				descriptors = append(descriptors, descs...)
 			}
 		}
@@ -679,18 +706,26 @@ func (s *Service) DiscoverSettings(ctx context.Context, bmcName string, resource
 	return descriptors, nil
 }
 
-func extractSettingsObject(resource map[string]interface{}) string {
+func extractApplyTimesAndSettingsObject(resource map[string]interface{}) ([]string, string) {
 	if settings, ok := resource["@Redfish.Settings"].(map[string]interface{}); ok {
 		if so, ok := settings["SettingsObject"].(map[string]interface{}); ok {
 			if oid, ok := so["@odata.id"].(string); ok {
-				return oid
+				var applyTimes []string
+				if ats, ok := settings["SupportedApplyTimes"].([]interface{}); ok {
+					for _, v := range ats {
+						if s, ok := v.(string); ok && s != "" {
+							applyTimes = append(applyTimes, s)
+						}
+					}
+				}
+				return applyTimes, oid
 			}
 		}
 	}
-	return ""
+	return nil, ""
 }
 
-func buildDescriptorsFromMap(bmcName, resourcePath string, values map[string]interface{}, oem bool, vendor string) []models.SettingDescriptor {
+func buildDescriptorsFromMap(bmcName, resourcePath string, values map[string]interface{}, oem bool, vendor string, applyTimes []string, actionTarget string) []models.SettingDescriptor {
 	var result []models.SettingDescriptor
 	ts := time.Now().UTC().Format(time.RFC3339)
 	for attr, val := range values {
@@ -704,6 +739,8 @@ func buildDescriptorsFromMap(bmcName, resourcePath string, values map[string]int
 			ReadOnly:      false,
 			OEM:           oem,
 			OEMVendor:     vendor,
+			ApplyTimes:    applyTimes,
+			ActionTarget:  actionTarget,
 			CurrentValue:  val,
 			SourceTimeISO: ts,
 		}
@@ -792,6 +829,301 @@ func (s *Service) AddConnectionMethod(ctx context.Context, name, address, userna
 	}
 
 	return method, nil
+}
+
+// enrichDescriptors augments descriptors using Attribute Registries and ActionInfo per 008 design
+func (s *Service) enrichDescriptors(ctx context.Context, bmc *models.BMC, resource map[string]interface{}, descs []models.SettingDescriptor) []models.SettingDescriptor {
+	if len(descs) == 0 || resource == nil {
+		return descs
+	}
+	// Try to resolve AttributeRegistry reference from resource
+	regPayload := s.resolveAttributeRegistry(ctx, bmc, resource)
+	var regIndex map[string]map[string]interface{}
+	if regPayload != nil {
+		regIndex = parseRegistryAttributes(regPayload)
+	}
+
+	// Try to resolve ActionInfo (if present) from Actions object
+	aiPayload := s.resolveActionInfo(ctx, bmc, resource)
+	var aiParams []map[string]interface{}
+	if aiPayload != nil {
+		if ps, ok := aiPayload["Parameters"].([]interface{}); ok {
+			for _, p := range ps {
+				if pm, ok := p.(map[string]interface{}); ok {
+					aiParams = append(aiParams, pm)
+				}
+			}
+		}
+	}
+
+	// OEM vendor detection from registry payload (best-effort)
+	var vendor string
+	if regPayload != nil {
+		if s, ok := regPayload["OwningEntity"].(string); ok {
+			vendor = s
+		} else if s, ok := regPayload["RegistryPrefix"].(string); ok {
+			vendor = s
+		}
+	}
+
+	// Enrich each descriptor
+	for i := range descs {
+		d := &descs[i]
+		// Registry mapping by AttributeName
+		if regIndex != nil {
+			if ra, ok := regIndex[d.Attribute]; ok {
+				if dn, ok := ra["DisplayName"].(string); ok {
+					d.DisplayName = dn
+				}
+				if ht, ok := ra["HelpText"].(string); ok {
+					d.Description = ht
+				} else if ld, ok := ra["LongDescription"].(string); ok {
+					d.Description = ld
+				}
+				if tp, ok := ra["Type"].(string); ok && tp != "" {
+					d.Type = strings.ToLower(tp)
+				}
+				if ro, ok := ra["ReadOnly"].(bool); ok {
+					d.ReadOnly = ro
+				}
+				if mi, ok := ra["Minimum"].(float64); ok {
+					d.Min = &mi
+				}
+				if ma, ok := ra["Maximum"].(float64); ok {
+					d.Max = &ma
+				}
+				if pat, ok := ra["Pattern"].(string); ok {
+					d.Pattern = pat
+				}
+				if un, ok := ra["Units"].(string); ok {
+					d.Units = un
+				}
+				// Enum candidates in registry
+				if vals, ok := ra["Value"].([]interface{}); ok {
+					var enums []string
+					for _, v := range vals {
+						if s, ok := v.(string); ok {
+							enums = append(enums, s)
+						} else {
+							enums = append(enums, fmt.Sprint(v))
+						}
+					}
+					if len(enums) > 0 {
+						d.EnumValues = enums
+					}
+				}
+			}
+		}
+
+		// ActionInfo: try to find matching parameter by name
+		if len(aiParams) > 0 {
+			for _, p := range aiParams {
+				// Prefer exact name match
+				pname, _ := p["Name"].(string)
+				if pname != "" && pname != d.Attribute {
+					continue
+				}
+				if av, ok := p["AllowableValues"].([]interface{}); ok && len(av) > 0 {
+					var enums []string
+					for _, v := range av {
+						if s, ok := v.(string); ok {
+							enums = append(enums, s)
+						} else {
+							enums = append(enums, fmt.Sprint(v))
+						}
+					}
+					if len(enums) > 0 {
+						d.EnumValues = enums // Prefer ActionInfo values
+					}
+				}
+				// Found our parameter; no need to scan further
+				break
+			}
+		}
+
+		// OEM tag if vendor present and not DMTF
+		if vendor != "" && !strings.EqualFold(vendor, "DMTF") {
+			d.OEM = true
+			d.OEMVendor = vendor
+		}
+	}
+
+	return descs
+}
+
+// resolveAttributeRegistry attempts to find and fetch the attribute registry referenced by a resource
+func (s *Service) resolveAttributeRegistry(ctx context.Context, bmc *models.BMC, resource map[string]interface{}) map[string]interface{} {
+	// BIOS commonly exposes AttributeRegistry at the resource root
+	var regID string
+	if ar, ok := resource["AttributeRegistry"].(string); ok && ar != "" {
+		regID = ar
+	}
+	// If not present, try Actions or OEM-specific locations (best-effort)
+	if regID == "" {
+		// Some vendors include registry links in Oem sections; out of scope unless tests provide
+	}
+	if regID == "" {
+		return nil
+	}
+	// Registries are under /redfish/v1/Registries; need to translate ID to URI
+	// Many implementations accept direct GET on /redfish/v1/Registries/{regID}
+	// Attempt both index lookup and direct fetch of {regID}
+	// Cache by BMC and regID
+	if !isRefresh(ctx) {
+		s.regCacheMux.RLock()
+		if byBMC, ok := s.regCache[bmc.Name]; ok {
+			if ent, ok := byBMC[regID]; ok {
+				if time.Since(ent.cachedAt) < registryCacheTTL {
+					payload := ent.payload
+					s.regCacheMux.RUnlock()
+					return payload
+				}
+			}
+		}
+		s.regCacheMux.RUnlock()
+	}
+
+	// Try direct path first
+	// Common forms:
+	//  - "+regID+" is already an @odata.id
+	//  - or a symbolic name to be resolved under /redfish/v1/Registries/{regID}
+	var payload map[string]interface{}
+	if strings.HasPrefix(regID, "/") {
+		payload, _ = s.fetchRedfishResource(ctx, bmc, regID)
+	} else {
+		payload, _ = s.fetchRedfishResource(ctx, bmc, "/redfish/v1/Registries/"+regID)
+	}
+	if payload == nil {
+		// Try registry collection to find entry by Id or Name
+		if coll, err := s.fetchRedfishResource(ctx, bmc, "/redfish/v1/Registries"); err == nil {
+			if members, ok := coll["Members"].([]interface{}); ok {
+				for _, m := range members {
+					if mm, ok := m.(map[string]interface{}); ok {
+						if oid, ok := mm["@odata.id"].(string); ok {
+							if strings.Contains(strings.ToLower(oid), strings.ToLower(regID)) {
+								payload, _ = s.fetchRedfishResource(ctx, bmc, oid)
+								if payload != nil {
+									break
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	if payload == nil {
+		return nil
+	}
+	// Some registries are wrappers that link to actual JSON via Languages or Location
+	// Try common pattern: Location[*].Uri
+	if locs, ok := payload["Location"].([]interface{}); ok {
+		for _, l := range locs {
+			if lm, ok := l.(map[string]interface{}); ok {
+				if uri, ok := lm["Uri"].(string); ok && uri != "" {
+					if regDoc, err := s.fetchRedfishResource(ctx, bmc, uri); err == nil && regDoc != nil {
+						payload = regDoc
+						break
+					}
+				}
+			}
+		}
+	}
+	// Cache
+	s.regCacheMux.Lock()
+	if s.regCache[bmc.Name] == nil {
+		s.regCache[bmc.Name] = make(map[string]*registryCacheEntry)
+	}
+	s.regCache[bmc.Name][regID] = &registryCacheEntry{payload: payload, cachedAt: time.Now()}
+	s.regCacheMux.Unlock()
+	return payload
+}
+
+// parseRegistryAttributes builds an index of attributes from a registry payload
+func parseRegistryAttributes(reg map[string]interface{}) map[string]map[string]interface{} {
+	if reg == nil {
+		return nil
+	}
+	// DMTF BIOS registries often use RegistryEntries.Attributes
+	var attrs []interface{}
+	if re, ok := reg["RegistryEntries"].(map[string]interface{}); ok {
+		if aa, ok := re["Attributes"].([]interface{}); ok {
+			attrs = aa
+		}
+	}
+	// Some vendors may expose Attributes at top level
+	if attrs == nil {
+		if aa, ok := reg["Attributes"].([]interface{}); ok {
+			attrs = aa
+		}
+	}
+	if attrs == nil || len(attrs) == 0 {
+		return nil
+	}
+	out := make(map[string]map[string]interface{}, len(attrs))
+	for _, it := range attrs {
+		if m, ok := it.(map[string]interface{}); ok {
+			if name, ok := m["AttributeName"].(string); ok && name != "" {
+				out[name] = m
+			}
+		}
+	}
+	return out
+}
+
+// resolveActionInfo finds an ActionInfo payload referenced by resource Actions, if any
+func (s *Service) resolveActionInfo(ctx context.Context, bmc *models.BMC, resource map[string]interface{}) map[string]interface{} {
+	actions, _ := resource["Actions"].(map[string]interface{})
+	if actions == nil {
+		return nil
+	}
+	// Find any action referencing ActionInfo
+	for _, v := range actions {
+		if am, ok := v.(map[string]interface{}); ok {
+			if ai, ok := am["@Redfish.ActionInfo"].(string); ok && ai != "" {
+				// Cache by BMC and ActionInfo URI
+				if !isRefresh(ctx) {
+					s.aiCacheMux.RLock()
+					if byBMC, ok := s.aiCache[bmc.Name]; ok {
+						if ent, ok := byBMC[ai]; ok {
+							if time.Since(ent.cachedAt) < registryCacheTTL {
+								payload := ent.payload
+								s.aiCacheMux.RUnlock()
+								return payload
+							}
+						}
+					}
+					s.aiCacheMux.RUnlock()
+				}
+
+				payload, err := s.fetchRedfishResource(ctx, bmc, ai)
+				if err != nil || payload == nil {
+					continue
+				}
+				s.aiCacheMux.Lock()
+				if s.aiCache[bmc.Name] == nil {
+					s.aiCache[bmc.Name] = make(map[string]*actionInfoCacheEntry)
+				}
+				s.aiCache[bmc.Name][ai] = &actionInfoCacheEntry{payload: payload, cachedAt: time.Now()}
+				s.aiCacheMux.Unlock()
+				return payload
+			}
+		}
+	}
+	return nil
+}
+
+// isRefresh checks if the context indicates bypassing caches
+func isRefresh(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	if v := ctx.Value("refresh"); v != nil {
+		if b, ok := v.(bool); ok && b {
+			return true
+		}
+	}
+	return false
 }
 
 // FetchAggregatedData fetches managers and systems from a BMC

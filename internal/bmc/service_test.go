@@ -1300,3 +1300,321 @@ func TestTestConnection(t *testing.T) {
 		}
 	})
 }
+
+func TestDiscoverSettings_ApplyTimesAndActionTarget(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+	db, err := database.New(dbPath)
+	if err != nil {
+		t.Fatalf("db: %v", err)
+	}
+	defer db.Close()
+
+	if err := db.Migrate(context.Background()); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/redfish/v1/Systems":
+			json.NewEncoder(w).Encode(map[string]any{"Members": []map[string]string{{"@odata.id": "/redfish/v1/Systems/Sys1"}}})
+		case "/redfish/v1/Managers":
+			json.NewEncoder(w).Encode(map[string]any{"Members": []map[string]string{{"@odata.id": "/redfish/v1/Managers/Mgr1"}}})
+		case "/redfish/v1/Systems/Sys1/Bios":
+			json.NewEncoder(w).Encode(map[string]any{
+				"@Redfish.Settings": map[string]any{
+					"SettingsObject":      map[string]any{"@odata.id": "/redfish/v1/Systems/Sys1/Bios/Settings"},
+					"SupportedApplyTimes": []string{"OnReset"},
+				},
+				"Attributes": map[string]any{"ProcTurboMode": "Enabled"},
+			})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	b := &models.BMC{Name: "bmc1", Address: server.URL, Username: "u", Password: "p", Enabled: true}
+	if err := db.CreateBMC(context.Background(), b); err != nil {
+		t.Fatalf("create bmc: %v", err)
+	}
+
+	svc := New(db)
+	descs, err := svc.DiscoverSettings(context.Background(), "bmc1", "")
+	if err != nil {
+		t.Fatalf("DiscoverSettings: %v", err)
+	}
+	var found bool
+	for _, d := range descs {
+		if d.Attribute == "ProcTurboMode" {
+			found = true
+			if d.ActionTarget != "/redfish/v1/Systems/Sys1/Bios/Settings" {
+				t.Fatalf("action_target mismatch: %q", d.ActionTarget)
+			}
+			if len(d.ApplyTimes) == 0 || d.ApplyTimes[0] != "OnReset" {
+				t.Fatalf("apply_times missing: %+v", d.ApplyTimes)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("did not find ProcTurboMode descriptor")
+	}
+}
+
+func TestAttributeRegistryEnrichment(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+	db, err := database.New(dbPath)
+	if err != nil {
+		t.Fatalf("db: %v", err)
+	}
+	defer db.Close()
+
+	if err := db.Migrate(context.Background()); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	// Mock server with BIOS + AttributeRegistry and registry payload under Registries
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/redfish/v1/Systems":
+			json.NewEncoder(w).Encode(map[string]any{"Members": []map[string]string{{"@odata.id": "/redfish/v1/Systems/Sys1"}}})
+		case "/redfish/v1/Managers":
+			json.NewEncoder(w).Encode(map[string]any{"Members": []map[string]string{{"@odata.id": "/redfish/v1/Managers/Mgr1"}}})
+		case "/redfish/v1/Systems/Sys1/Bios":
+			json.NewEncoder(w).Encode(map[string]any{
+				"@Redfish.Settings": map[string]any{
+					"SettingsObject": map[string]any{"@odata.id": "/redfish/v1/Systems/Sys1/Bios/Settings"},
+				},
+				"AttributeRegistry": "Test.Registry",
+				"Attributes":        map[string]any{"ProcTurboMode": "Enabled"},
+			})
+		case "/redfish/v1/Registries/Test.Registry":
+			json.NewEncoder(w).Encode(map[string]any{
+				"OwningEntity": "DMTF",
+				"RegistryEntries": map[string]any{
+					"Attributes": []any{
+						map[string]any{
+							"AttributeName": "ProcTurboMode",
+							"DisplayName":   "Turbo Mode",
+							"HelpText":      "Enable or disable Turbo",
+							"Type":          "String",
+							"ReadOnly":      false,
+							"Value":         []any{"Enabled", "Disabled"},
+						},
+					},
+				},
+			})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	b := &models.BMC{Name: "bmc1", Address: server.URL, Username: "u", Password: "p", Enabled: true}
+	if err := db.CreateBMC(context.Background(), b); err != nil {
+		t.Fatalf("create bmc: %v", err)
+	}
+
+	svc := New(db)
+	descs, err := svc.DiscoverSettings(context.Background(), "bmc1", "")
+	if err != nil {
+		t.Fatalf("DiscoverSettings: %v", err)
+	}
+	var got *models.SettingDescriptor
+	for i := range descs {
+		if descs[i].Attribute == "ProcTurboMode" {
+			got = &descs[i]
+			break
+		}
+	}
+	if got == nil {
+		t.Fatalf("missing ProcTurboMode descriptor")
+	}
+	if got.DisplayName != "Turbo Mode" {
+		t.Fatalf("DisplayName not enriched: %q", got.DisplayName)
+	}
+	if !got.ReadOnly && (len(got.EnumValues) != 2 || got.EnumValues[0] != "Enabled") {
+		t.Fatalf("EnumValues not enriched: %+v", got.EnumValues)
+	}
+}
+
+func TestActionInfoEnrichment(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+	db, err := database.New(dbPath)
+	if err != nil {
+		t.Fatalf("db: %v", err)
+	}
+	defer db.Close()
+
+	if err := db.Migrate(context.Background()); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/redfish/v1/Systems":
+			json.NewEncoder(w).Encode(map[string]any{"Members": []map[string]string{{"@odata.id": "/redfish/v1/Systems/Sys1"}}})
+		case "/redfish/v1/Managers":
+			json.NewEncoder(w).Encode(map[string]any{"Members": []map[string]string{{"@odata.id": "/redfish/v1/Managers/Mgr1"}}})
+		case "/redfish/v1/Managers/Mgr1/NetworkProtocol":
+			json.NewEncoder(w).Encode(map[string]any{
+				"@Redfish.Settings": map[string]any{
+					"SettingsObject": map[string]any{"@odata.id": "/redfish/v1/Managers/Mgr1/NetworkProtocol/Settings"},
+				},
+				"NTP": map[string]any{"ProtocolEnabled": true},
+				"Actions": map[string]any{
+					"#ManagerNetworkProtocol.Modify": map[string]any{
+						"target":              "/redfish/v1/Managers/Mgr1/NetworkProtocol/Settings",
+						"@Redfish.ActionInfo": "/redfish/v1/Managers/Mgr1/NetworkProtocol/ActionInfo",
+					},
+				},
+			})
+		case "/redfish/v1/Managers/Mgr1/NetworkProtocol/ActionInfo":
+			json.NewEncoder(w).Encode(map[string]any{
+				"Parameters": []any{
+					map[string]any{
+						"Name":            "NTP",
+						"AllowableValues": []any{"Enabled", "Disabled"},
+					},
+				},
+			})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	b := &models.BMC{Name: "bmc1", Address: server.URL, Username: "u", Password: "p", Enabled: true}
+	if err := db.CreateBMC(context.Background(), b); err != nil {
+		t.Fatalf("create bmc: %v", err)
+	}
+	svc := New(db)
+	descs, err := svc.DiscoverSettings(context.Background(), "bmc1", "")
+	if err != nil {
+		t.Fatalf("DiscoverSettings: %v", err)
+	}
+
+	var ntp *models.SettingDescriptor
+	for i := range descs {
+		if descs[i].Attribute == "NTP" {
+			ntp = &descs[i]
+			break
+		}
+	}
+	if ntp == nil {
+		t.Fatalf("missing NTP descriptor")
+	}
+	if len(ntp.EnumValues) != 2 || ntp.EnumValues[0] != "Enabled" {
+		t.Fatalf("ActionInfo enums not applied: %+v", ntp.EnumValues)
+	}
+}
+
+func TestDiscoverSettings_RefreshBypassesCache(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+	db, err := database.New(dbPath)
+	if err != nil {
+		t.Fatalf("db: %v", err)
+	}
+	defer db.Close()
+	if err := db.Migrate(context.Background()); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	// Backing variable to simulate state change on the BMC
+	value := "Enabled"
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/redfish/v1/Systems":
+			json.NewEncoder(w).Encode(map[string]any{"Members": []map[string]string{{"@odata.id": "/redfish/v1/Systems/Sys1"}}})
+		case "/redfish/v1/Managers":
+			json.NewEncoder(w).Encode(map[string]any{"Members": []map[string]string{{"@odata.id": "/redfish/v1/Managers/Mgr1"}}})
+		case "/redfish/v1/Systems/Sys1/Bios":
+			json.NewEncoder(w).Encode(map[string]any{
+				"@Redfish.Settings": map[string]any{
+					"SettingsObject": map[string]any{"@odata.id": "/redfish/v1/Systems/Sys1/Bios/Settings"},
+				},
+				"Attributes": map[string]any{"ProcTurboMode": value},
+			})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	b := &models.BMC{Name: "bmc1", Address: server.URL, Username: "u", Password: "p", Enabled: true}
+	if err := db.CreateBMC(context.Background(), b); err != nil {
+		t.Fatalf("create bmc: %v", err)
+	}
+
+	svc := New(db)
+
+	// First discovery to populate DB and caches
+	ctx := context.Background()
+	descs1, err := svc.DiscoverSettings(ctx, "bmc1", "")
+	if err != nil {
+		t.Fatalf("discover1: %v", err)
+	}
+	var d1 *models.SettingDescriptor
+	for i := range descs1 {
+		if descs1[i].Attribute == "ProcTurboMode" {
+			d1 = &descs1[i]
+			break
+		}
+	}
+	if d1 == nil {
+		t.Fatalf("missing ProcTurboMode after first discover")
+	}
+	if v, ok := d1.CurrentValue.(string); !ok || v != "Enabled" {
+		t.Fatalf("unexpected first value: %+v", d1.CurrentValue)
+	}
+
+	// Change backend value
+	value = "Disabled"
+
+	// Without refresh, descriptor should return cached DB value from GetSettingsDescriptors; call DB method to confirm
+	stored, err := db.GetSettingsDescriptors(ctx, "bmc1", "Bios")
+	if err != nil {
+		t.Fatalf("get from db: %v", err)
+	}
+	var sd *models.SettingDescriptor
+	for i := range stored {
+		if stored[i].Attribute == "ProcTurboMode" {
+			sd = &stored[i]
+			break
+		}
+	}
+	if sd == nil {
+		t.Fatalf("missing stored descriptor")
+	}
+	if v, ok := sd.CurrentValue.(string); !ok || v != "Enabled" {
+		t.Fatalf("expected cached value 'Enabled' before refresh, got: %+v", sd.CurrentValue)
+	}
+
+	// With refresh context flag, re-discovery should update DB to new value
+	ctxRefresh := context.WithValue(ctx, interface{}("refresh"), true)
+	descs2, err := svc.DiscoverSettings(ctxRefresh, "bmc1", "")
+	if err != nil {
+		t.Fatalf("discover2: %v", err)
+	}
+	var d2 *models.SettingDescriptor
+	for i := range descs2 {
+		if descs2[i].Attribute == "ProcTurboMode" {
+			d2 = &descs2[i]
+			break
+		}
+	}
+	if d2 == nil {
+		t.Fatalf("missing ProcTurboMode after refresh discover")
+	}
+	if v, ok := d2.CurrentValue.(string); !ok || v != "Disabled" {
+		t.Fatalf("expected refreshed value 'Disabled', got: %+v", d2.CurrentValue)
+	}
+}

@@ -362,6 +362,7 @@ curl -H "X-Auth-Token: <token>" http://localhost:8080/redfish/v1/
     - `oem`: Optional. Filter OEM vs non‑OEM settings. Accepted values: `true|false|1|0|yes|no`.
     - `page`: Optional. 1‑based page number for pagination.
     - `page_size`: Optional. Page size for pagination. When omitted, returns all filtered results.
+    - `refresh`: Optional. `true` to bypass caches and force re-discovery/enrichment. Requires operator or admin.
   - Legacy compatibility: the query-form endpoint `GET /api/bmcs/settings?name={bmc-name}` supports the same query parameters.
   - Returns: a JSON object with discovered setting descriptors for the target BMC. Current scope focuses on common Redfish settings surfaces that expose `@Redfish.Settings` such as `Systems/<id>/Bios` and `Managers/<id>/NetworkProtocol`.
 
@@ -393,6 +394,14 @@ Response shape (example):
 
 Notes:
 - The legacy query form `GET /api/bmcs/settings?name={bmc-name}[&resource=...&search=...&oem=...&page=...&page_size=...]` is still supported for backward compatibility.
+
+Enrichment (008):
+- Descriptors include enriched metadata resolved from Redfish Attribute Registries and ActionInfo where available:
+  - `display_name`, `description`, `type`, `read_only`
+  - Constraints: `enum_values`, `min`, `max`, `pattern`, `units`
+  - Apply semantics: `apply_times` from `@Redfish.Settings.SupportedApplyTimes`
+  - Action semantics: `action_target` and allowable values via `@Redfish.ActionInfo`
+  - OEM tagging: `oem` and `oem_vendor` when vendor registries are detected
 
 Current limitations (to be expanded in future milestones):
 - AttributeRegistry, ActionInfo, and full constraints (enums, ranges) are not yet fully resolved
