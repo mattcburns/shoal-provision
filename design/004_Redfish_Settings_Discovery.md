@@ -6,22 +6,21 @@ Discover configurable settings exposed by BMC Redfish implementations, normalize
 ## Goals
 - Enumerate configurable settings and current values for a given BMC.
 - Capture metadata: setting path, type, allowed values, constraints, writeability, and Redfish actions needed.
-- Support vendor variance: DMTF standard resources plus common OEM extensions (e.g., Dell, HPE, Lenovo, Supermicro).
+ This document outlines discovery and initial exposure of Redfish configuration settings across supported BMC resources.
+
+ Note on scope: Attribute Registry resolution and Actions/ApplyTimes enrichment have been split into a separate design to simplify delivery. See design/008_Attribute_Registry_Resolution.md for details. The API and persistence introduced here are designed to be forward-compatible with that enrichment.
 - Provide stable internal representation for persistence and UI.
 
-## Non-Goals (for this phase)
-- Applying changes (covered in separate design).
-- Cross-BMC abstraction of vendor-unique semantics (we will preserve OEM details but not fully unify semantics yet).
-
+ - Enrichment with Attribute Registry metadata and Actions is deferred to 008.
 ## Key Concepts
 - Setting: A leaf that is writable through a Redfish PATCH/POST/Action with a stable `@odata.id` path.
-- Descriptor: Metadata object describing a Setting (name, description, type, enum, min/max, pattern, readOnly, units, dependencies).
-- Source: The Redfish resource that declares the setting (schema, attribute registry, BIOS/Manager/Network/Storage config endpoints, or OEM sections).
+ - Complete OEM registry coverage (deferred to 008).
 
 ## Redfish Surfaces To Inspect
-- Systems → BIOS Settings: `/redfish/v1/Systems/<id>/Bios/Settings`, AttributeRegistry reference.
-- Managers → Network/LDAP/Users/DateTime: typical Settings and Actions.
-- EthernetInterfaces: VLAN, DHCP, IPv4/IPv6 config where writable.
+ Open Questions / Future Work
+ - Resolving Attribute Registries and capturing display names, descriptions, constraints — see 008.
+ - Capturing SupportedApplyTimes and Actions/AllowableValues — see 008.
+ - OEM-specific enrichment (Dell, Supermicro) and tagging — see 008.
 - Storage/Controllers: Write cache, RAID policy where applicable.
 - Attribute Registries: `/redfish/v1/Registries/*` including `@Redfish.Settings` and OEM.
 - Action targets: `Actions` members with allowable values.
