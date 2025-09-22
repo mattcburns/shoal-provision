@@ -77,6 +77,10 @@ func New(db *database.DB) http.Handler {
 	mux.Handle("/api/bmcs/settings", h.requireAuth(http.HandlerFunc(h.handleBMCSettingsAPI)))
 	mux.Handle("/api/bmcs/", h.requireAuth(http.HandlerFunc(h.handleBMCSettingsAPIRestful)))
 
+	// Profiles API (JSON only)
+	mux.Handle("/api/profiles", h.requireAuth(http.HandlerFunc(h.handleProfiles)))
+	mux.Handle("/api/profiles/", h.requireAuth(http.HandlerFunc(h.handleProfilesRestful)))
+
 	// User management routes (admin only)
 	mux.Handle("/users", h.requireAdmin(http.HandlerFunc(h.handleUsers)))
 	mux.Handle("/users/add", h.requireAdmin(http.HandlerFunc(h.handleAddUser)))
@@ -1327,6 +1331,218 @@ func (h *Handler) handleBMCSettingsAPIRestful(w http.ResponseWriter, r *http.Req
 		slog.Error("Failed to encode settings response", "error", err)
 		w.WriteHeader(http.StatusInternalServerError)
 	}
+}
+
+// Profiles API
+
+// handleProfiles handles /api/profiles list and create
+func (h *Handler) handleProfiles(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	switch r.Method {
+	case http.MethodGet:
+		ps, err := h.db.GetProfiles(r.Context())
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+		json.NewEncoder(w).Encode(ps)
+	case http.MethodPost:
+		var p models.Profile
+		if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{"error": "invalid payload"})
+			return
+		}
+		if strings.TrimSpace(p.Name) == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{"error": "name is required"})
+			return
+		}
+		if p.ID == "" {
+			p.ID = fmt.Sprintf("p_%d", time.Now().UnixNano())
+		}
+		if err := h.db.CreateProfile(r.Context(), &p); err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(p)
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// handleProfilesRestful handles /api/profiles/{id}/... routes
+func (h *Handler) handleProfilesRestful(w http.ResponseWriter, r *http.Request) {
+	if !strings.HasPrefix(r.URL.Path, "/api/profiles/") {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	// [api, profiles, {id}, ...]
+	if len(parts) < 3 {
+		http.NotFound(w, r)
+		return
+	}
+	id := parts[2]
+	if len(parts) == 3 {
+		switch r.Method {
+		case http.MethodGet:
+			p, err := h.db.GetProfile(r.Context(), id)
+			if err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+				return
+			}
+			if p == nil {
+				http.NotFound(w, r)
+				return
+			}
+			json.NewEncoder(w).Encode(p)
+		case http.MethodDelete:
+			if err := h.db.DeleteProfile(r.Context(), id); err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+		case http.MethodPut:
+			var p models.Profile
+			if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				json.NewEncoder(w).Encode(map[string]string{"error": "invalid payload"})
+				return
+			}
+			p.ID = id
+			if err := h.db.UpdateProfile(r.Context(), &p); err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+				return
+			}
+			json.NewEncoder(w).Encode(p)
+		default:
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+		return
+	}
+
+	// Subresources: versions, assignments
+	switch parts[3] {
+	case "versions":
+		if len(parts) == 4 {
+			switch r.Method {
+			case http.MethodGet:
+				vs, err := h.db.GetProfileVersions(r.Context(), id)
+				if err != nil {
+					w.WriteHeader(http.StatusInternalServerError)
+					json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+					return
+				}
+				json.NewEncoder(w).Encode(vs)
+			case http.MethodPost:
+				var v models.ProfileVersion
+				if err := json.NewDecoder(r.Body).Decode(&v); err != nil {
+					w.WriteHeader(http.StatusBadRequest)
+					json.NewEncoder(w).Encode(map[string]string{"error": "invalid payload"})
+					return
+				}
+				v.ProfileID = id
+				if v.Version == 0 {
+					// Auto-increment version from latest
+					vs, _ := h.db.GetProfileVersions(r.Context(), id)
+					max := 0
+					for _, vv := range vs {
+						if vv.Version > max {
+							max = vv.Version
+						}
+					}
+					v.Version = max + 1
+				}
+				if err := h.db.CreateProfileVersion(r.Context(), &v); err != nil {
+					w.WriteHeader(http.StatusInternalServerError)
+					json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+					return
+				}
+				w.WriteHeader(http.StatusCreated)
+				json.NewEncoder(w).Encode(v)
+			default:
+				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			}
+			return
+		}
+		if len(parts) == 5 {
+			// GET specific version
+			if r.Method != http.MethodGet {
+				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+				return
+			}
+			vnum, err := strconv.Atoi(parts[4])
+			if err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				json.NewEncoder(w).Encode(map[string]string{"error": "invalid version"})
+				return
+			}
+			v, err := h.db.GetProfileVersion(r.Context(), id, vnum)
+			if err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+				return
+			}
+			if v == nil {
+				http.NotFound(w, r)
+				return
+			}
+			json.NewEncoder(w).Encode(v)
+			return
+		}
+	case "assignments":
+		if len(parts) == 4 {
+			switch r.Method {
+			case http.MethodGet:
+				as, err := h.db.GetProfileAssignments(r.Context(), id)
+				if err != nil {
+					w.WriteHeader(http.StatusInternalServerError)
+					json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+					return
+				}
+				json.NewEncoder(w).Encode(as)
+			case http.MethodPost:
+				var a models.ProfileAssignment
+				if err := json.NewDecoder(r.Body).Decode(&a); err != nil {
+					w.WriteHeader(http.StatusBadRequest)
+					json.NewEncoder(w).Encode(map[string]string{"error": "invalid payload"})
+					return
+				}
+				a.ProfileID = id
+				if err := h.db.CreateProfileAssignment(r.Context(), &a); err != nil {
+					w.WriteHeader(http.StatusInternalServerError)
+					json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+					return
+				}
+				w.WriteHeader(http.StatusCreated)
+				json.NewEncoder(w).Encode(a)
+			default:
+				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			}
+			return
+		}
+		if len(parts) == 5 && r.Method == http.MethodDelete {
+			// DELETE specific assignment id
+			aid := parts[4]
+			if err := h.db.DeleteProfileAssignment(r.Context(), aid); err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+	}
+
+	http.NotFound(w, r)
 }
 
 // Authentication middleware

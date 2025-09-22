@@ -127,64 +127,108 @@ func TestProfilesPersistence(t *testing.T) {
 	dbPath := filepath.Join(tmpDir, "test.db")
 
 	db, err := New(dbPath)
-	if err != nil { t.Fatalf("Failed to create database: %v", err) }
+	if err != nil {
+		t.Fatalf("Failed to create database: %v", err)
+	}
 	defer db.Close()
 
 	ctx := context.Background()
-	if err := db.Migrate(ctx); err != nil { t.Fatalf("Migration failed: %v", err) }
+	if err := db.Migrate(ctx); err != nil {
+		t.Fatalf("Migration failed: %v", err)
+	}
 
 	// Create profile
 	p := &models.Profile{ID: "p1", Name: "Baseline BIOS", Description: "desc", CreatedBy: "tester"}
-	if err := db.CreateProfile(ctx, p); err != nil { t.Fatalf("create profile: %v", err) }
+	if err := db.CreateProfile(ctx, p); err != nil {
+		t.Fatalf("create profile: %v", err)
+	}
 
 	// List and get
 	list, err := db.GetProfiles(ctx)
-	if err != nil { t.Fatalf("list profiles: %v", err) }
-	if len(list) != 1 || list[0].Name != "Baseline BIOS" { t.Fatalf("unexpected list: %+v", list) }
+	if err != nil {
+		t.Fatalf("list profiles: %v", err)
+	}
+	if len(list) != 1 || list[0].Name != "Baseline BIOS" {
+		t.Fatalf("unexpected list: %+v", list)
+	}
 
 	got, err := db.GetProfile(ctx, p.ID)
-	if err != nil { t.Fatalf("get profile: %v", err) }
-	if got == nil || got.ID != p.ID { t.Fatalf("unexpected profile: %+v", got) }
+	if err != nil {
+		t.Fatalf("get profile: %v", err)
+	}
+	if got == nil || got.ID != p.ID {
+		t.Fatalf("unexpected profile: %+v", got)
+	}
 
 	// Create version with entries
 	v := &models.ProfileVersion{ProfileID: p.ID, Version: 1, Notes: "v1", Entries: []models.ProfileEntry{
 		{ResourcePath: "/redfish/v1/Systems/1/Bios", Attribute: "HyperThreading", DesiredValue: false},
 		{ResourcePath: "/redfish/v1/Managers/1/NetworkProtocol", Attribute: "SSH/Enabled", DesiredValue: true},
 	}}
-	if err := db.CreateProfileVersion(ctx, v); err != nil { t.Fatalf("create version: %v", err) }
+	if err := db.CreateProfileVersion(ctx, v); err != nil {
+		t.Fatalf("create version: %v", err)
+	}
 
 	// Get versions list
 	vers, err := db.GetProfileVersions(ctx, p.ID)
-	if err != nil { t.Fatalf("list versions: %v", err) }
-	if len(vers) != 1 || vers[0].Version != 1 { t.Fatalf("unexpected versions: %+v", vers) }
+	if err != nil {
+		t.Fatalf("list versions: %v", err)
+	}
+	if len(vers) != 1 || vers[0].Version != 1 {
+		t.Fatalf("unexpected versions: %+v", vers)
+	}
 
 	// Get version detail
 	vgot, err := db.GetProfileVersion(ctx, p.ID, 1)
-	if err != nil { t.Fatalf("get version: %v", err) }
-	if vgot == nil || len(vgot.Entries) != 2 { t.Fatalf("unexpected version detail: %+v", vgot) }
+	if err != nil {
+		t.Fatalf("get version: %v", err)
+	}
+	if vgot == nil || len(vgot.Entries) != 2 {
+		t.Fatalf("unexpected version detail: %+v", vgot)
+	}
 
 	// Assignment
 	a := &models.ProfileAssignment{ProfileID: p.ID, Version: 1, TargetType: "bmc", TargetValue: "b1"}
-	if err := db.CreateProfileAssignment(ctx, a); err != nil { t.Fatalf("create assignment: %v", err) }
+	if err := db.CreateProfileAssignment(ctx, a); err != nil {
+		t.Fatalf("create assignment: %v", err)
+	}
 
 	as, err := db.GetProfileAssignments(ctx, p.ID)
-	if err != nil { t.Fatalf("list assignments: %v", err) }
-	if len(as) != 1 || as[0].TargetValue != "b1" { t.Fatalf("unexpected assignments: %+v", as) }
+	if err != nil {
+		t.Fatalf("list assignments: %v", err)
+	}
+	if len(as) != 1 || as[0].TargetValue != "b1" {
+		t.Fatalf("unexpected assignments: %+v", as)
+	}
 
-	if err := db.DeleteProfileAssignment(ctx, as[0].ID); err != nil { t.Fatalf("delete assignment: %v", err) }
+	if err := db.DeleteProfileAssignment(ctx, as[0].ID); err != nil {
+		t.Fatalf("delete assignment: %v", err)
+	}
 
 	as, err = db.GetProfileAssignments(ctx, p.ID)
-	if err != nil { t.Fatalf("list assignments after delete: %v", err) }
-	if len(as) != 0 { t.Fatalf("expected 0 assignments, got %d", len(as)) }
+	if err != nil {
+		t.Fatalf("list assignments after delete: %v", err)
+	}
+	if len(as) != 0 {
+		t.Fatalf("expected 0 assignments, got %d", len(as))
+	}
 
 	// Update and delete profile
 	p.Description = "updated"
-	if err := db.UpdateProfile(ctx, p); err != nil { t.Fatalf("update profile: %v", err) }
-	if err := db.DeleteProfile(ctx, p.ID); err != nil { t.Fatalf("delete profile: %v", err) }
+	if err := db.UpdateProfile(ctx, p); err != nil {
+		t.Fatalf("update profile: %v", err)
+	}
+	if err := db.DeleteProfile(ctx, p.ID); err != nil {
+		t.Fatalf("delete profile: %v", err)
+	}
 
 	gone, err := db.GetProfile(ctx, p.ID)
-	if err != nil { t.Fatalf("get after delete: %v", err) }
-	if gone != nil { t.Fatalf("expected profile to be deleted") }
+	if err != nil {
+		t.Fatalf("get after delete: %v", err)
+	}
+	if gone != nil {
+		t.Fatalf("expected profile to be deleted")
+	}
 }
 
 func TestBMCOperations(t *testing.T) {

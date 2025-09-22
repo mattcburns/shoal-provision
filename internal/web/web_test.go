@@ -17,6 +17,7 @@
 package web
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -815,5 +816,181 @@ func TestBMCSettingsDetailAPI(t *testing.T) {
 	}
 	if desc.ID != id {
 		t.Fatalf("expected id %s, got %s", id, desc.ID)
+	}
+}
+
+func TestProfilesAPI(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+	db, err := database.New(dbPath)
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+	if err := db.Migrate(ctx); err != nil {
+		t.Fatalf("migration failed: %v", err)
+	}
+
+	// Admin for basic auth
+	passwordHash, _ := pkgAuth.HashPassword("admin")
+	admin := &models.User{ID: "u1", Username: "admin", PasswordHash: passwordHash, Role: models.RoleAdmin, Enabled: true}
+	if err := db.CreateUser(ctx, admin); err != nil {
+		t.Fatalf("failed to create user: %v", err)
+	}
+
+	handler := New(db)
+
+	// Create profile
+	pr := models.Profile{Name: "Baseline", Description: "desc"}
+	body, _ := json.Marshal(pr)
+	req := httptest.NewRequest(http.MethodPost, "/api/profiles", bytes.NewReader(body))
+	req.SetBasicAuth("admin", "admin")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create profile expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var created models.Profile
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode created: %v", err)
+	}
+	if created.ID == "" {
+		t.Fatalf("missing profile id")
+	}
+
+	// List profiles
+	req = httptest.NewRequest(http.MethodGet, "/api/profiles", nil)
+	req.SetBasicAuth("admin", "admin")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list profiles expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var plist []models.Profile
+	if err := json.Unmarshal(rec.Body.Bytes(), &plist); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	if len(plist) != 1 {
+		t.Fatalf("expected 1 profile, got %d", len(plist))
+	}
+
+	// Get profile
+	req = httptest.NewRequest(http.MethodGet, "/api/profiles/"+created.ID, nil)
+	req.SetBasicAuth("admin", "admin")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get profile expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var got models.Profile
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode get: %v", err)
+	}
+	if got.ID != created.ID {
+		t.Fatalf("id mismatch")
+	}
+
+	// Create version
+	v := models.ProfileVersion{Notes: "v1", Entries: []models.ProfileEntry{{ResourcePath: "/redfish/v1/Managers/M1/NetworkProtocol", Attribute: "HTTPS.Port", DesiredValue: 443}}}
+	body, _ = json.Marshal(v)
+	req = httptest.NewRequest(http.MethodPost, "/api/profiles/"+created.ID+"/versions", bytes.NewReader(body))
+	req.SetBasicAuth("admin", "admin")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create version expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var vcreated models.ProfileVersion
+	if err := json.Unmarshal(rec.Body.Bytes(), &vcreated); err != nil {
+		t.Fatalf("decode version: %v", err)
+	}
+	if vcreated.Version != 1 {
+		t.Fatalf("expected version 1, got %d", vcreated.Version)
+	}
+
+	// List versions
+	req = httptest.NewRequest(http.MethodGet, "/api/profiles/"+created.ID+"/versions", nil)
+	req.SetBasicAuth("admin", "admin")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list versions expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var vlist []models.ProfileVersion
+	if err := json.Unmarshal(rec.Body.Bytes(), &vlist); err != nil {
+		t.Fatalf("decode vlist: %v", err)
+	}
+	if len(vlist) != 1 {
+		t.Fatalf("expected 1 version, got %d", len(vlist))
+	}
+
+	// Get version
+	req = httptest.NewRequest(http.MethodGet, "/api/profiles/"+created.ID+"/versions/1", nil)
+	req.SetBasicAuth("admin", "admin")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get version expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var vgot models.ProfileVersion
+	if err := json.Unmarshal(rec.Body.Bytes(), &vgot); err != nil {
+		t.Fatalf("decode vget: %v", err)
+	}
+	if vgot.Version != 1 {
+		t.Fatalf("wrong version")
+	}
+
+	// Create assignment
+	a := models.ProfileAssignment{TargetType: "bmc", TargetValue: "b1", Version: 1}
+	body, _ = json.Marshal(a)
+	req = httptest.NewRequest(http.MethodPost, "/api/profiles/"+created.ID+"/assignments", bytes.NewReader(body))
+	req.SetBasicAuth("admin", "admin")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create assignment expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var acreated models.ProfileAssignment
+	if err := json.Unmarshal(rec.Body.Bytes(), &acreated); err != nil {
+		t.Fatalf("decode assign: %v", err)
+	}
+	if acreated.ID == "" {
+		t.Fatalf("missing assignment id")
+	}
+
+	// List assignments
+	req = httptest.NewRequest(http.MethodGet, "/api/profiles/"+created.ID+"/assignments", nil)
+	req.SetBasicAuth("admin", "admin")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list assignments expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var alist []models.ProfileAssignment
+	if err := json.Unmarshal(rec.Body.Bytes(), &alist); err != nil {
+		t.Fatalf("decode alist: %v", err)
+	}
+	if len(alist) != 1 {
+		t.Fatalf("expected 1 assignment, got %d", len(alist))
+	}
+
+	// Delete assignment
+	req = httptest.NewRequest(http.MethodDelete, "/api/profiles/"+created.ID+"/assignments/"+alist[0].ID, nil)
+	req.SetBasicAuth("admin", "admin")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("delete assignment expected 204, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// Delete profile
+	req = httptest.NewRequest(http.MethodDelete, "/api/profiles/"+created.ID, nil)
+	req.SetBasicAuth("admin", "admin")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("delete profile expected 204, got %d: %s", rec.Code, rec.Body.String())
 	}
 }

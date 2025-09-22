@@ -1091,38 +1091,56 @@ func (db *DB) GetProfiles(ctx context.Context) ([]models.Profile, error) {
 func (db *DB) GetProfile(ctx context.Context, id string) (*models.Profile, error) {
 	var p models.Profile
 	err := db.conn.QueryRowContext(ctx, `SELECT id, name, description, created_by, hardware_selector, firmware_ranges_json, created_at, updated_at FROM profiles WHERE id = ?`, id).Scan(&p.ID, &p.Name, &p.Description, &p.CreatedBy, &p.HardwareSelector, &p.FirmwareRangesJSON, &p.CreatedAt, &p.UpdatedAt)
-	if err == sql.ErrNoRows { return nil, nil }
-	if err != nil { return nil, fmt.Errorf("get profile: %w", err) }
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get profile: %w", err)
+	}
 	return &p, nil
 }
 
 // DeleteProfile deletes a profile by id
 func (db *DB) DeleteProfile(ctx context.Context, id string) error {
 	_, err := db.conn.ExecContext(ctx, `DELETE FROM profiles WHERE id = ?`, id)
-	if err != nil { return fmt.Errorf("delete profile: %w", err) }
+	if err != nil {
+		return fmt.Errorf("delete profile: %w", err)
+	}
 	return nil
 }
 
 // CreateProfileVersion creates a new version row and associated entries
 func (db *DB) CreateProfileVersion(ctx context.Context, v *models.ProfileVersion) error {
-	if v.ID == "" { v.ID = fmt.Sprintf("pv_%d", time.Now().UnixNano()) }
+	if v.ID == "" {
+		v.ID = fmt.Sprintf("pv_%d", time.Now().UnixNano())
+	}
 	tx, err := db.conn.BeginTx(ctx, nil)
-	if err != nil { return fmt.Errorf("begin tx: %w", err) }
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
 	defer tx.Rollback()
 
 	_, err = tx.ExecContext(ctx, `INSERT INTO profile_versions (id, profile_id, version, notes) VALUES (?, ?, ?, ?)`, v.ID, v.ProfileID, v.Version, v.Notes)
-	if err != nil { return fmt.Errorf("insert version: %w", err) }
+	if err != nil {
+		return fmt.Errorf("insert version: %w", err)
+	}
 
 	if len(v.Entries) > 0 {
 		stmt, err := tx.PrepareContext(ctx, `INSERT INTO profile_entries (id, profile_version_id, resource_path, attribute, desired_value_json, apply_time_preference, oem_vendor) VALUES (?, ?, ?, ?, ?, ?, ?)`)
-		if err != nil { return fmt.Errorf("prepare entries: %w", err) }
+		if err != nil {
+			return fmt.Errorf("prepare entries: %w", err)
+		}
 		defer stmt.Close()
 		for i := range v.Entries {
 			e := &v.Entries[i]
-			if e.ID == "" { e.ID = fmt.Sprintf("pe_%d", time.Now().UnixNano()) }
+			if e.ID == "" {
+				e.ID = fmt.Sprintf("pe_%d", time.Now().UnixNano())
+			}
 			var dv string
 			if e.DesiredValue != nil {
-				if b, err := json.Marshal(e.DesiredValue); err == nil { dv = string(b) }
+				if b, err := json.Marshal(e.DesiredValue); err == nil {
+					dv = string(b)
+				}
 			}
 			if _, err := stmt.ExecContext(ctx, e.ID, v.ID, e.ResourcePath, e.Attribute, dv, e.ApplyTimePreference, e.OEMVendor); err != nil {
 				return fmt.Errorf("insert entry: %w", err)
@@ -1131,7 +1149,9 @@ func (db *DB) CreateProfileVersion(ctx context.Context, v *models.ProfileVersion
 		}
 	}
 
-	if err := tx.Commit(); err != nil { return fmt.Errorf("commit version: %w", err) }
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit version: %w", err)
+	}
 	v.CreatedAt = time.Now()
 	return nil
 }
@@ -1139,12 +1159,16 @@ func (db *DB) CreateProfileVersion(ctx context.Context, v *models.ProfileVersion
 // GetProfileVersions lists versions for a profile
 func (db *DB) GetProfileVersions(ctx context.Context, profileID string) ([]models.ProfileVersion, error) {
 	rows, err := db.conn.QueryContext(ctx, `SELECT id, profile_id, version, created_at, notes FROM profile_versions WHERE profile_id = ? ORDER BY version DESC`, profileID)
-	if err != nil { return nil, fmt.Errorf("list versions: %w", err) }
+	if err != nil {
+		return nil, fmt.Errorf("list versions: %w", err)
+	}
 	defer rows.Close()
 	var out []models.ProfileVersion
 	for rows.Next() {
 		var v models.ProfileVersion
-		if err := rows.Scan(&v.ID, &v.ProfileID, &v.Version, &v.CreatedAt, &v.Notes); err != nil { return nil, fmt.Errorf("scan version: %w", err) }
+		if err := rows.Scan(&v.ID, &v.ProfileID, &v.Version, &v.CreatedAt, &v.Notes); err != nil {
+			return nil, fmt.Errorf("scan version: %w", err)
+		}
 		out = append(out, v)
 	}
 	return out, rows.Err()
@@ -1154,28 +1178,44 @@ func (db *DB) GetProfileVersions(ctx context.Context, profileID string) ([]model
 func (db *DB) GetProfileVersion(ctx context.Context, profileID string, version int) (*models.ProfileVersion, error) {
 	var v models.ProfileVersion
 	err := db.conn.QueryRowContext(ctx, `SELECT id, profile_id, version, created_at, notes FROM profile_versions WHERE profile_id = ? AND version = ?`, profileID, version).Scan(&v.ID, &v.ProfileID, &v.Version, &v.CreatedAt, &v.Notes)
-	if err == sql.ErrNoRows { return nil, nil }
-	if err != nil { return nil, fmt.Errorf("get version: %w", err) }
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get version: %w", err)
+	}
 	erows, err := db.conn.QueryContext(ctx, `SELECT id, resource_path, attribute, desired_value_json, apply_time_preference, oem_vendor FROM profile_entries WHERE profile_version_id = ? ORDER BY resource_path, attribute`, v.ID)
-	if err != nil { return nil, fmt.Errorf("list entries: %w", err) }
+	if err != nil {
+		return nil, fmt.Errorf("list entries: %w", err)
+	}
 	defer erows.Close()
 	for erows.Next() {
 		var e models.ProfileEntry
 		var dv string
-		if err := erows.Scan(&e.ID, &e.ResourcePath, &e.Attribute, &dv, &e.ApplyTimePreference, &e.OEMVendor); err != nil { return nil, fmt.Errorf("scan entry: %w", err) }
-		if dv != "" { _ = json.Unmarshal([]byte(dv), &e.DesiredValue) }
+		if err := erows.Scan(&e.ID, &e.ResourcePath, &e.Attribute, &dv, &e.ApplyTimePreference, &e.OEMVendor); err != nil {
+			return nil, fmt.Errorf("scan entry: %w", err)
+		}
+		if dv != "" {
+			_ = json.Unmarshal([]byte(dv), &e.DesiredValue)
+		}
 		e.ProfileVersionID = v.ID
 		v.Entries = append(v.Entries, e)
 	}
-	if err := erows.Err(); err != nil { return nil, err }
+	if err := erows.Err(); err != nil {
+		return nil, err
+	}
 	return &v, nil
 }
 
 // CreateProfileAssignment adds an assignment
 func (db *DB) CreateProfileAssignment(ctx context.Context, a *models.ProfileAssignment) error {
-	if a.ID == "" { a.ID = fmt.Sprintf("pa_%d", time.Now().UnixNano()) }
+	if a.ID == "" {
+		a.ID = fmt.Sprintf("pa_%d", time.Now().UnixNano())
+	}
 	_, err := db.conn.ExecContext(ctx, `INSERT INTO profile_assignments (id, profile_id, version, target_type, target_value) VALUES (?, ?, ?, ?, ?)`, a.ID, a.ProfileID, a.Version, a.TargetType, a.TargetValue)
-	if err != nil { return fmt.Errorf("create assignment: %w", err) }
+	if err != nil {
+		return fmt.Errorf("create assignment: %w", err)
+	}
 	a.CreatedAt = time.Now()
 	return nil
 }
@@ -1183,12 +1223,16 @@ func (db *DB) CreateProfileAssignment(ctx context.Context, a *models.ProfileAssi
 // GetProfileAssignments lists assignments for a profile
 func (db *DB) GetProfileAssignments(ctx context.Context, profileID string) ([]models.ProfileAssignment, error) {
 	rows, err := db.conn.QueryContext(ctx, `SELECT id, profile_id, version, target_type, target_value, created_at FROM profile_assignments WHERE profile_id = ? ORDER BY created_at DESC`, profileID)
-	if err != nil { return nil, fmt.Errorf("list assignments: %w", err) }
+	if err != nil {
+		return nil, fmt.Errorf("list assignments: %w", err)
+	}
 	defer rows.Close()
 	var out []models.ProfileAssignment
 	for rows.Next() {
 		var a models.ProfileAssignment
-		if err := rows.Scan(&a.ID, &a.ProfileID, &a.Version, &a.TargetType, &a.TargetValue, &a.CreatedAt); err != nil { return nil, fmt.Errorf("scan assignment: %w", err) }
+		if err := rows.Scan(&a.ID, &a.ProfileID, &a.Version, &a.TargetType, &a.TargetValue, &a.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan assignment: %w", err)
+		}
 		out = append(out, a)
 	}
 	return out, rows.Err()
@@ -1197,6 +1241,8 @@ func (db *DB) GetProfileAssignments(ctx context.Context, profileID string) ([]mo
 // DeleteProfileAssignment deletes an assignment by id
 func (db *DB) DeleteProfileAssignment(ctx context.Context, id string) error {
 	_, err := db.conn.ExecContext(ctx, `DELETE FROM profile_assignments WHERE id = ?`, id)
-	if err != nil { return fmt.Errorf("delete assignment: %w", err) }
+	if err != nil {
+		return fmt.Errorf("delete assignment: %w", err)
+	}
 	return nil
 }

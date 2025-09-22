@@ -94,7 +94,7 @@ Note: If write/apply is split into its own design (006), this section becomes �
 - Cross-firmware compatibility policy: warn, block, or attempt apply with guardrails?
 
 ## Milestones
-1. Persistence + CRUD APIs (profiles, versions, entries, assignments).
-2. Preview/diff endpoint using discovered settings (004).
-3. Import/export JSON.
+1. Persistence + CRUD APIs (profiles, versions, entries, assignments) — database layer [done]; web/API endpoints [done]; API tests (CRUD, versions, assignments) [done].
+2. Preview/diff endpoint using discovered settings (004) — [pending].
+3. Import/export JSON — [pending].
 4. Apply planning (optional here; may move to 006 apply design).
