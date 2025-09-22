@@ -392,6 +392,73 @@ Current limitations (to be expanded in future milestones):
 - AttributeRegistry, ActionInfo, and full constraints (enums, ranges) are not yet resolved
 - Detail routes for individual descriptors may be added later
 
+### Configuration Profiles
+
+Shoal can capture, version, compare, and export/import Redfish settings as Configuration Profiles. These endpoints are JSON-only and require authentication (session cookie or basic auth).
+
+Key concepts:
+- A profile has versioned entries. Each entry targets a `resource_path` (an `@odata.id`) and an `attribute` (dot-notated for nested keys like `HTTPS.Port` or `Attributes.LogicalProc`).
+- Snapshot records the current settings from a BMC into a new profile version.
+- Preview compares a profile version to a live BMC.
+- Diff compares two profile versions.
+- Export/Import makes profiles portable as JSON.
+
+Endpoints:
+- `GET /api/profiles` — List profiles
+- `POST /api/profiles` — Create a profile `{name, description}`
+- `GET /api/profiles/{id}` — Profile detail
+- `GET /api/profiles/{id}/versions` — List versions
+- `GET /api/profiles/{id}/versions/{version}` — Get a specific version
+- `POST /api/profiles/{id}/versions` — Create new version with entries
+- `GET /api/profiles/{id}/preview?bmc={name}[&version=N]` — Compare desired vs. current BMC values
+- `POST /api/profiles/{id}/export` — Export `{profile, versions:[...]}` (defaults to latest version when body is `{}`)
+- `POST /api/profiles/import` — Import `{profile, versions}` (creates or updates)
+- `POST /api/profiles/snapshot?bmc={name}` — Create a new version from live settings
+- `POST /api/profiles/diff` — Compare two versions `{left:{profile_id,version}, right:{profile_id,version}}`
+
+Examples:
+
+Snapshot current settings into a new profile:
+```bash
+curl -s -u admin:admin \
+  -X POST "http://localhost:8080/api/profiles/snapshot?bmc=bmc1" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"baseline-lab","description":"Baseline captured from bmc1"}' | jq .
+```
+
+Preview differences against a BMC:
+```bash
+curl -s -u admin:admin \
+  "http://localhost:8080/api/profiles/<profile-id>/preview?bmc=bmc1" | jq .
+```
+
+Diff two profile versions:
+```bash
+curl -s -u admin:admin \
+  -X POST "http://localhost:8080/api/profiles/diff" \
+  -H "Content-Type: application/json" \
+  -d '{
+        "left":  {"profile_id": "<id>", "version": 1},
+        "right": {"profile_id": "<id>", "version": 2}
+      }' | jq .
+```
+
+Export a profile (latest version by default):
+```bash
+curl -s -u admin:admin \
+  -X POST "http://localhost:8080/api/profiles/<profile-id>/export" \
+  -H "Content-Type: application/json" \
+  -d '{}' | jq .
+```
+
+Import a profile JSON (creates a new profile unless IDs match existing objects):
+```bash
+curl -s -u admin:admin \
+  -X POST "http://localhost:8080/api/profiles/import" \
+  -H "Content-Type: application/json" \
+  -d @exported-profile.json | jq .
+```
+
 **SessionService API:**
 - `POST /redfish/v1/SessionService/Sessions` - Create authentication session (unauthenticated)
 - `GET /redfish/v1/SessionService` - SessionService root (requires auth)
