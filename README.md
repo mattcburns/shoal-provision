@@ -11,6 +11,8 @@ Shoal is a Go-based Redfish aggregator service that discovers and manages multip
 - **User Management**: Multi-user support with role-based access control (Admin, Operator, Viewer)
 - **Web Management Interface**: Complete web UI for BMC management, power control, user management, and monitoring
 - **Detailed BMC Status**: Comprehensive drill-down view showing system information, network interfaces, storage devices, and System Event Log (SEL) entries
+- **Detailed BMC Status**: Comprehensive drill-down view showing system information, network interfaces, storage devices, and System Event Log (SEL) entries
+- **Settings Tab (read-only)**: Per‑BMC Settings tab with search, OEM filter, and pagination over discovered configurable settings
 - **Dual Authentication**: Supports both HTTP Basic Auth and Redfish session tokens
 - **BMC Health Testing**: Automatic connection testing when adding/updating BMCs
 - **Password Security**: bcrypt password hashing for users, AES-256-GCM encryption for BMC passwords
@@ -348,14 +350,19 @@ curl -H "X-Auth-Token: <token>" http://localhost:8080/redfish/v1/
 - `GET /api/bmcs/{bmc-name}/settings[?resource={path}]` - JSON endpoint for discovered configurable settings (read-only)
 - `GET /api/bmcs/{bmc-name}/settings/{descriptor_id}` - JSON endpoint for a single setting descriptor with current value
 
-### Settings Discovery (Preview)
+### Settings Discovery
 
-- `GET /api/bmcs/{bmc-name}/settings[?resource={path}]`
-  - Returns `{ bmc_name, resource, descriptors: [...] }`. Results are also persisted for subsequent detail lookups.
-  - Detail: `GET /api/bmcs/{bmc-name}/settings/{descriptor_id}` returns a single descriptor. If not present in the cache, the server will perform discovery on-demand and retry.
+- `GET /api/bmcs/{bmc-name}/settings`
+  - Returns `{ bmc_name, resource, descriptors: [...], page, page_size, total }`. Results are persisted for subsequent detail lookups.
+  - Detail: `GET /api/bmcs/{bmc-name}/settings/{descriptor_id}` returns a single descriptor. If not present, the server will perform discovery on-demand and retry.
   - Auth: same as other web API endpoints (session or basic auth)
   - Query params:
-    - `resource`: Optional. Filter to a specific Redfish resource path (e.g. `/redfish/v1/Systems/System.Embedded.1/Bios`)
+    - `resource`: Optional. Filter to a specific Redfish resource path (substring match), e.g. `/redfish/v1/Systems/<id>/Bios` or `Managers/<id>/NetworkProtocol`.
+    - `search`: Optional. Free‑text filter across attribute, display_name, description, resource_path, and OEM vendor.
+    - `oem`: Optional. Filter OEM vs non‑OEM settings. Accepted values: `true|false|1|0|yes|no`.
+    - `page`: Optional. 1‑based page number for pagination.
+    - `page_size`: Optional. Page size for pagination. When omitted, returns all filtered results.
+  - Legacy compatibility: the query-form endpoint `GET /api/bmcs/settings?name={bmc-name}` supports the same query parameters.
   - Returns: a JSON object with discovered setting descriptors for the target BMC. Current scope focuses on common Redfish settings surfaces that expose `@Redfish.Settings` such as `Systems/<id>/Bios` and `Managers/<id>/NetworkProtocol`.
 
 Example:
@@ -385,12 +392,11 @@ Response shape (example):
 ```
 
 Notes:
-- The legacy query form `GET /api/bmcs/settings?name={bmc-name}[&resource=...]` is still supported for backward compatibility.
+- The legacy query form `GET /api/bmcs/settings?name={bmc-name}[&resource=...&search=...&oem=...&page=...&page_size=...]` is still supported for backward compatibility.
 
 Current limitations (to be expanded in future milestones):
-- No persistence yet; values are discovered on-demand per request
-- AttributeRegistry, ActionInfo, and full constraints (enums, ranges) are not yet resolved
-- Detail routes for individual descriptors may be added later
+- AttributeRegistry, ActionInfo, and full constraints (enums, ranges) are not yet fully resolved
+- Apply/preview flows are tracked under Configuration Profiles and will be linked to auditing
 
 ### Configuration Profiles
 
