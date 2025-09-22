@@ -1742,6 +1742,7 @@ func (h *Handler) handleBMCSettingsAPI(w http.ResponseWriter, r *http.Request) {
 	resource := q.Get("resource")
 	search := strings.TrimSpace(q.Get("search"))
 	oemParam := strings.TrimSpace(q.Get("oem"))
+	refresh := strings.EqualFold(strings.TrimSpace(q.Get("refresh")), "true")
 	page, pageSize := 1, 0
 	if p := strings.TrimSpace(q.Get("page")); p != "" {
 		if n, err := strconv.Atoi(p); err == nil && n > 0 {
@@ -1756,6 +1757,18 @@ func (h *Handler) handleBMCSettingsAPI(w http.ResponseWriter, r *http.Request) {
 
 	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancel()
+	if refresh {
+		ctx = context.WithValue(ctx, "refresh", true)
+	}
+
+	// If refresh=true, enforce operator/admin RBAC
+	if refresh {
+		if u := getUserFromContext(r.Context()); !auth.IsOperator(u) {
+			w.WriteHeader(http.StatusForbidden)
+			json.NewEncoder(w).Encode(map[string]string{"error": "refresh requires operator privileges"})
+			return
+		}
+	}
 
 	descriptors, err := h.bmcSvc.DiscoverSettings(ctx, bmcName, resource)
 	if err != nil {
@@ -1894,6 +1907,7 @@ func (h *Handler) handleBMCSettingsAPIRestful(w http.ResponseWriter, r *http.Req
 	resource := q.Get("resource")
 	search := strings.TrimSpace(q.Get("search"))
 	oemParam := strings.TrimSpace(q.Get("oem"))
+	refresh := strings.EqualFold(strings.TrimSpace(q.Get("refresh")), "true")
 	page, pageSize := 1, 0
 	if p := strings.TrimSpace(q.Get("page")); p != "" {
 		if n, err := strconv.Atoi(p); err == nil && n > 0 {
@@ -1916,6 +1930,14 @@ func (h *Handler) handleBMCSettingsAPIRestful(w http.ResponseWriter, r *http.Req
 
 	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancel()
+
+	if refresh {
+		if u := getUserFromContext(r.Context()); !auth.IsOperator(u) {
+			w.WriteHeader(http.StatusForbidden)
+			json.NewEncoder(w).Encode(map[string]string{"error": "refresh requires operator privileges"})
+			return
+		}
+	}
 
 	descriptors, err := h.bmcSvc.DiscoverSettings(ctx, bmcName, resource)
 	if err != nil {
