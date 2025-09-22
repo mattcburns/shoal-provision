@@ -1136,6 +1136,97 @@ func TestGetSELEntries(t *testing.T) {
 	})
 }
 
+func TestDiscoverSettingsBasic(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+	db, err := database.New(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to create database: %v", err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+	if err := db.Migrate(ctx); err != nil {
+		t.Fatalf("Migration failed: %v", err)
+	}
+
+	// Mock BMC server with BIOS and ManagerNetworkProtocol and @Redfish.Settings
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		username, password, ok := r.BasicAuth()
+		if !ok || username != "admin" || password != "password" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/redfish/v1/Systems":
+			json.NewEncoder(w).Encode(map[string]any{
+				"Members": []map[string]string{{"@odata.id": "/redfish/v1/Systems/Sys1"}},
+			})
+		case "/redfish/v1/Systems/Sys1/Bios":
+			json.NewEncoder(w).Encode(map[string]any{
+				"@Redfish.Settings": map[string]any{
+					"SettingsObject":      map[string]any{"@odata.id": "/redfish/v1/Systems/Sys1/Bios/Settings"},
+					"SupportedApplyTimes": []string{"OnReset"},
+				},
+				"Attributes": map[string]any{
+					"ProcTurboMode":        "Enabled",
+					"LogicalProc":          true,
+					"SomeNumericAttribute": float64(5),
+				},
+			})
+		case "/redfish/v1/Managers":
+			json.NewEncoder(w).Encode(map[string]any{
+				"Members": []map[string]string{{"@odata.id": "/redfish/v1/Managers/Mgr1"}},
+			})
+		case "/redfish/v1/Managers/Mgr1/NetworkProtocol":
+			json.NewEncoder(w).Encode(map[string]any{
+				"@Redfish.Settings": map[string]any{"SettingsObject": map[string]any{"@odata.id": "/redfish/v1/Managers/Mgr1/NetworkProtocol/Settings"}},
+				"NTP":               map[string]any{"ProtocolEnabled": true},
+				"HTTP":              map[string]any{"Port": float64(80)},
+				"HTTPS":             map[string]any{"Port": float64(443)},
+			})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	b := &models.BMC{
+		Name:     "bmc1",
+		Address:  server.URL,
+		Username: "admin",
+		Password: "password",
+		Enabled:  true,
+	}
+	if err := db.CreateBMC(ctx, b); err != nil {
+		t.Fatalf("Failed to create BMC: %v", err)
+	}
+
+	svc := New(db)
+	descs, err := svc.DiscoverSettings(ctx, "bmc1", "")
+	if err != nil {
+		t.Fatalf("DiscoverSettings failed: %v", err)
+	}
+	if len(descs) == 0 {
+		t.Fatalf("expected some settings descriptors, got 0")
+	}
+	// Ensure some known attributes are present
+	hasTurbo := false
+	for _, d := range descs {
+		if d.Attribute == "ProcTurboMode" {
+			hasTurbo = true
+			if d.Type == "" || d.BMCName != "bmc1" || d.ResourcePath == "" {
+				t.Fatalf("descriptor missing fields: %+v", d)
+			}
+		}
+	}
+	if !hasTurbo {
+		t.Fatalf("expected ProcTurboMode descriptor")
+	}
+}
+
 func TestTestConnection(t *testing.T) {
 	// Create a test database
 	tmpDir := t.TempDir()

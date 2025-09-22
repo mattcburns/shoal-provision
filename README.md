@@ -346,10 +346,13 @@ curl -H "X-Auth-Token: <token>" http://localhost:8080/redfish/v1/
 - `GET /bmcs/details?name={bmc-name}` - Detailed BMC status page
 - `GET /api/bmcs/details?name={bmc-name}` - JSON endpoint for detailed BMC information
 - `GET /api/bmcs/{bmc-name}/settings[?resource={path}]` - JSON endpoint for discovered configurable settings (read-only)
+- `GET /api/bmcs/{bmc-name}/settings/{descriptor_id}` - JSON endpoint for a single setting descriptor with current value
 
 ### Settings Discovery (Preview)
 
 - `GET /api/bmcs/{bmc-name}/settings[?resource={path}]`
+  - Returns `{ bmc_name, resource, descriptors: [...] }`. Results are also persisted for subsequent detail lookups.
+  - Detail: `GET /api/bmcs/{bmc-name}/settings/{descriptor_id}` returns a single descriptor. If not present in the cache, the server will perform discovery on-demand and retry.
   - Auth: same as other web API endpoints (session or basic auth)
   - Query params:
     - `resource`: Optional. Filter to a specific Redfish resource path (e.g. `/redfish/v1/Systems/System.Embedded.1/Bios`)

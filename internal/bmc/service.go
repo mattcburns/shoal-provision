@@ -542,6 +542,130 @@ func (s *Service) createProxyRequest(r *http.Request, targetURL string, bmc *mod
 	return proxyReq, nil
 }
 
+// DiscoverSettings enumerates configurable settings using @Redfish.Settings and common endpoints
+func (s *Service) DiscoverSettings(ctx context.Context, bmcName string, resourceFilter string) ([]models.SettingDescriptor, error) {
+	bmc, err := s.db.GetBMCByName(ctx, bmcName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get BMC: %w", err)
+	}
+	if bmc == nil {
+		return nil, fmt.Errorf("BMC not found: %s", bmcName)
+	}
+	if !bmc.Enabled {
+		return nil, fmt.Errorf("BMC is disabled: %s", bmcName)
+	}
+
+	var descriptors []models.SettingDescriptor
+
+	// Probe Systems -> BIOS Settings
+	systemID, _ := s.GetFirstSystemID(ctx, bmcName)
+	if systemID != "" && (resourceFilter == "" || strings.Contains("/redfish/v1/Systems/"+systemID+"/Bios", resourceFilter)) {
+		biosPath := fmt.Sprintf("/redfish/v1/Systems/%s/Bios", systemID)
+		if biosData, err := s.fetchRedfishResource(ctx, bmc, biosPath); err == nil {
+			// Check @Redfish.Settings
+			if settingsObj := extractSettingsObject(biosData); settingsObj != "" {
+				// Current values are often under Attributes or similar
+				currentValues := map[string]interface{}{}
+				if attrs, ok := biosData["Attributes"].(map[string]interface{}); ok {
+					currentValues = attrs
+				}
+				descs := buildDescriptorsFromMap(bmcName, biosPath, currentValues, false, "")
+				descriptors = append(descriptors, descs...)
+			}
+		}
+	}
+
+	// Probe Managers -> ManagerNetworkProtocol (typical writable settings like NTP, HTTP/HTTPS)
+	managerID, _ := s.GetFirstManagerID(ctx, bmcName)
+	if managerID != "" && (resourceFilter == "" || strings.Contains("/redfish/v1/Managers/"+managerID+"/NetworkProtocol", resourceFilter)) {
+		mnpPath := fmt.Sprintf("/redfish/v1/Managers/%s/NetworkProtocol", managerID)
+		if data, err := s.fetchRedfishResource(ctx, bmc, mnpPath); err == nil {
+			if settingsObj := extractSettingsObject(data); settingsObj != "" {
+				// Heuristically pick writable-looking fields
+				current := make(map[string]interface{})
+				for k, v := range data {
+					// Skip metadata and complex links
+					if strings.HasPrefix(k, "@") || k == "Id" || k == "Name" || k == "Description" || k == "Links" || k == "Oem" || k == "Actions" {
+						continue
+					}
+					current[k] = v
+				}
+				descs := buildDescriptorsFromMap(bmcName, mnpPath, current, false, "")
+				descriptors = append(descriptors, descs...)
+			}
+		}
+	}
+
+	// Persist discovered descriptors and values for later detail queries
+	if err := s.db.UpsertSettingDescriptors(ctx, bmcName, descriptors); err != nil {
+		slog.Warn("Failed to persist settings descriptors", "bmc", bmcName, "error", err)
+	}
+	return descriptors, nil
+}
+
+func extractSettingsObject(resource map[string]interface{}) string {
+	if settings, ok := resource["@Redfish.Settings"].(map[string]interface{}); ok {
+		if so, ok := settings["SettingsObject"].(map[string]interface{}); ok {
+			if oid, ok := so["@odata.id"].(string); ok {
+				return oid
+			}
+		}
+	}
+	return ""
+}
+
+func buildDescriptorsFromMap(bmcName, resourcePath string, values map[string]interface{}, oem bool, vendor string) []models.SettingDescriptor {
+	var result []models.SettingDescriptor
+	ts := time.Now().UTC().Format(time.RFC3339)
+	for attr, val := range values {
+		// Only leaf primitives or simple objects/arrays as-is for now
+		desc := models.SettingDescriptor{
+			ID:            hashID(bmcName, resourcePath, attr),
+			BMCName:       bmcName,
+			ResourcePath:  resourcePath,
+			Attribute:     attr,
+			Type:          inferType(val),
+			ReadOnly:      false,
+			OEM:           oem,
+			OEMVendor:     vendor,
+			CurrentValue:  val,
+			SourceTimeISO: ts,
+		}
+		result = append(result, desc)
+	}
+	return result
+}
+
+func inferType(v interface{}) string {
+	switch v.(type) {
+	case string:
+		return "string"
+	case bool:
+		return "boolean"
+	case float64, float32, int, int64, json.Number:
+		return "number"
+	case []interface{}:
+		return "array"
+	case map[string]interface{}:
+		return "object"
+	default:
+		return "unknown"
+	}
+}
+
+func hashID(parts ...string) string {
+	// Simple deterministic ID without new dependency: join and SHA1-like hex via stdlib
+	joined := strings.Join(parts, "|")
+	// Use FNV-1a 64 for compactness
+	var h uint64 = 1469598103934665603
+	const prime uint64 = 1099511628211
+	for i := 0; i < len(joined); i++ {
+		h ^= uint64(joined[i])
+		h *= prime
+	}
+	return fmt.Sprintf("%x", h)
+}
+
 // ConnectionMethod management methods for AggregationService
 
 // AddConnectionMethod creates a new connection method and fetches initial aggregated data
