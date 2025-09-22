@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -1224,6 +1225,144 @@ func TestDiscoverSettingsBasic(t *testing.T) {
 	}
 	if !hasTurbo {
 		t.Fatalf("expected ProcTurboMode descriptor")
+	}
+}
+
+func TestDiscoverSettings009_NetworkAndStorage(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+	db, err := database.New(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to create database: %v", err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+	if err := db.Migrate(ctx); err != nil {
+		t.Fatalf("Migration failed: %v", err)
+	}
+
+	// Mock BMC with EthernetInterfaces and Storage resources exposing @Redfish.Settings
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		username, password, ok := r.BasicAuth()
+		if !ok || username != "admin" || password != "password" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/redfish/v1/Systems":
+			json.NewEncoder(w).Encode(map[string]any{
+				"Members": []map[string]string{{"@odata.id": "/redfish/v1/Systems/Sys1"}},
+			})
+		case "/redfish/v1/Managers":
+			json.NewEncoder(w).Encode(map[string]any{
+				"Members": []map[string]string{{"@odata.id": "/redfish/v1/Managers/Mgr1"}},
+			})
+		case "/redfish/v1/Systems/Sys1/EthernetInterfaces":
+			json.NewEncoder(w).Encode(map[string]any{
+				"Members": []map[string]string{{"@odata.id": "/redfish/v1/Systems/Sys1/EthernetInterfaces/NIC1"}},
+			})
+		case "/redfish/v1/Systems/Sys1/EthernetInterfaces/NIC1":
+			json.NewEncoder(w).Encode(map[string]any{
+				"@Redfish.Settings": map[string]any{
+					"SettingsObject": map[string]any{"@odata.id": "/redfish/v1/Systems/Sys1/EthernetInterfaces/NIC1/Settings"},
+				},
+				"DHCPv4":     map[string]any{"Enabled": true},
+				"VLAN":       map[string]any{"Enabled": false, "Id": float64(100)},
+				"MACAddress": "AA:BB:CC:DD:EE:FF",
+			})
+		case "/redfish/v1/Systems/Sys1/Storage":
+			json.NewEncoder(w).Encode(map[string]any{
+				"Members": []map[string]string{{"@odata.id": "/redfish/v1/Systems/Sys1/Storage/Stor1"}},
+			})
+		case "/redfish/v1/Systems/Sys1/Storage/Stor1":
+			json.NewEncoder(w).Encode(map[string]any{
+				"@Redfish.Settings": map[string]any{
+					"SettingsObject": map[string]any{"@odata.id": "/redfish/v1/Systems/Sys1/Storage/Stor1/Settings"},
+				},
+				"ControllerMode": "RAID",
+				"Drives":         []map[string]string{{"@odata.id": "/redfish/v1/Systems/Sys1/Storage/Stor1/Drives/Drive1"}},
+			})
+		case "/redfish/v1/Systems/Sys1/Storage/Stor1/Drives/Drive1":
+			json.NewEncoder(w).Encode(map[string]any{
+				"@Redfish.Settings": map[string]any{
+					"SettingsObject": map[string]any{"@odata.id": "/redfish/v1/Systems/Sys1/Storage/Stor1/Drives/Drive1/Settings"},
+				},
+				"WriteCache": "Enabled",
+				"Model":      "TestDrive",
+			})
+		case "/redfish/v1/Systems/Sys1/Storage/Stor1/Volumes":
+			json.NewEncoder(w).Encode(map[string]any{
+				"Members": []map[string]string{{"@odata.id": "/redfish/v1/Systems/Sys1/Storage/Stor1/Volumes/Vol1"}},
+			})
+		case "/redfish/v1/Systems/Sys1/Storage/Stor1/Volumes/Vol1":
+			json.NewEncoder(w).Encode(map[string]any{
+				"@Redfish.Settings": map[string]any{
+					"SettingsObject": map[string]any{"@odata.id": "/redfish/v1/Systems/Sys1/Storage/Stor1/Volumes/Vol1/Settings"},
+				},
+				"Name":     "Volume1",
+				"RAIDType": "RAID1",
+			})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	b := &models.BMC{Name: "bmc009", Address: server.URL, Username: "admin", Password: "password", Enabled: true}
+	if err := db.CreateBMC(ctx, b); err != nil {
+		t.Fatalf("create bmc: %v", err)
+	}
+
+	svc := New(db)
+	descs, err := svc.DiscoverSettings(ctx, "bmc009", "")
+	if err != nil {
+		t.Fatalf("DiscoverSettings: %v", err)
+	}
+	if len(descs) == 0 {
+		t.Fatalf("expected descriptors from 009 resources")
+	}
+
+	// Assert presence of representative attributes
+	var hasDHCPv4, hasVLAN, hasControllerMode, hasWriteCache, hasVolume bool
+	for _, d := range descs {
+		switch d.Attribute {
+		case "DHCPv4":
+			hasDHCPv4 = true
+		case "VLAN":
+			hasVLAN = true
+		case "ControllerMode":
+			hasControllerMode = true
+		case "WriteCache":
+			hasWriteCache = true
+		case "RAIDType":
+			hasVolume = true
+		}
+		if d.ActionTarget == "" {
+			t.Fatalf("missing action target for %s", d.Attribute)
+		}
+	}
+	if !(hasDHCPv4 && hasVLAN && hasControllerMode && hasWriteCache && hasVolume) {
+		t.Fatalf("missing expected attributes: DHCPv4=%v VLAN=%v ControllerMode=%v WriteCache=%v RAIDType=%v",
+			hasDHCPv4, hasVLAN, hasControllerMode, hasWriteCache, hasVolume)
+	}
+
+	// Verify resource filter works for EthernetInterfaces
+	descs2, err := svc.DiscoverSettings(ctx, "bmc009", "EthernetInterfaces")
+	if err != nil {
+		t.Fatalf("DiscoverSettings filter: %v", err)
+	}
+	// Expect at least NIC-related settings; not asserting counts to avoid flakiness
+	var onlyNICs = true
+	for _, d := range descs2 {
+		if d.ResourcePath == "" || !strings.Contains(d.ResourcePath, "/EthernetInterfaces/") {
+			onlyNICs = false
+			break
+		}
+	}
+	if !onlyNICs {
+		t.Fatalf("filter did not limit to EthernetInterfaces: %+v", descs2)
 	}
 }
 

@@ -364,7 +364,7 @@ curl -H "X-Auth-Token: <token>" http://localhost:8080/redfish/v1/
     - `page_size`: Optional. Page size for pagination. When omitted, returns all filtered results.
     - `refresh`: Optional. `true` to bypass caches and force re-discovery/enrichment. Requires operator or admin.
   - Legacy compatibility: the query-form endpoint `GET /api/bmcs/settings?name={bmc-name}` supports the same query parameters.
-  - Returns: a JSON object with discovered setting descriptors for the target BMC. Current scope focuses on common Redfish settings surfaces that expose `@Redfish.Settings` such as `Systems/<id>/Bios` and `Managers/<id>/NetworkProtocol`.
+  - Returns: a JSON object with discovered setting descriptors for the target BMC. Scope includes common Redfish settings surfaces that expose `@Redfish.Settings` such as `Systems/<id>/Bios`, `Managers/<id>/NetworkProtocol`, and (009) per‑resource settings under `Systems/<id>/EthernetInterfaces/*` and `Systems/<id>/Storage/*` (including `Volumes` and `Drives`).
 
 Example:
 ```bash
@@ -406,6 +406,17 @@ Enrichment (008):
 Current limitations (to be expanded in future milestones):
 - AttributeRegistry, ActionInfo, and full constraints (enums, ranges) are not yet fully resolved
 - Apply/preview flows are tracked under Configuration Profiles and will be linked to auditing
+
+Examples of resource filtering (009):
+```bash
+# Only NIC-related settings
+curl -s -u admin:admin \
+  "http://localhost:8080/api/bmcs/bmc1/settings?resource=EthernetInterfaces" | jq '.descriptors[].resource_path' | sort -u
+
+# Only Storage-related settings
+curl -s -u admin:admin \
+  "http://localhost:8080/api/bmcs/bmc1/settings?resource=/Storage" | jq '.descriptors[].resource_path' | sort -u
+```
 
 ### Configuration Profiles
 
