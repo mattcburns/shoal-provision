@@ -417,6 +417,7 @@ Endpoints:
 - `GET /api/profiles/{id}/versions/{version}` — Get a specific version
 - `POST /api/profiles/{id}/versions` — Create new version with entries
 - `GET /api/profiles/{id}/preview?bmc={name}[&version=N]` — Compare desired vs. current BMC values
+- `POST /api/profiles/{id}/apply` — Apply profile version to a BMC (dry‑run or execute)
 - `POST /api/profiles/{id}/export` — Export `{profile, versions:[...]}` (defaults to latest version when body is `{}`)
 - `POST /api/profiles/import` — Import `{profile, versions}` (creates or updates)
 - `POST /api/profiles/snapshot?bmc={name}` — Create a new version from live settings
@@ -437,6 +438,93 @@ Preview differences against a BMC:
 curl -s -u admin:admin \
   "http://localhost:8080/api/profiles/<profile-id>/preview?bmc=bmc1" | jq .
 ```
+
+Apply a profile to a BMC (dry-run and execute):
+
+```bash
+# Dry-run (preview planned PATCH requests and summary)
+curl -s -u admin:admin \
+  -X POST "http://localhost:8080/api/profiles/<profile-id>/apply" \
+  -H "Content-Type: application/json" \
+  -d '{
+        "bmc": "bmc1",
+        "dryRun": true,
+        "continueOnError": false
+      }' | jq .
+
+# Execute (issue PATCH requests via proxy with auditing)
+curl -s -u admin:admin \
+  -X POST "http://localhost:8080/api/profiles/<profile-id>/apply" \
+  -H "Content-Type: application/json" \
+  -d '{
+        "bmc": "bmc1",
+        "dryRun": false,
+        "continueOnError": true
+      }' | jq .
+```
+
+Apply request body:
+
+```json
+{
+  "bmc": "bmc-name",
+  "dryRun": true,
+  "continueOnError": false,
+  "version": 0
+}
+```
+
+- `bmc`: Target BMC name (required)
+- `dryRun`: When true, returns planned requests only; no changes are made
+- `continueOnError`: When false, stops on first failed request; when true, continues
+- `version`: Optional version number; defaults to latest when omitted or 0
+
+Dry-run response (shape):
+
+```json
+{
+  "profile_id": "...",
+  "version": 1,
+  "bmc": "bmc1",
+  "dry_run": true,
+  "requests": [
+    {
+      "resource_path": "/redfish/v1/Managers/Manager.Embedded.1/NetworkProtocol",
+      "http_method": "PATCH",
+      "request_url": "https://bmc.example/redfish/v1/Managers/Manager.Embedded.1/NetworkProtocol",
+      "request_body": {"HTTPS": {"Port": 8443}},
+      "apply_time_preference": "",
+      "entries": [ { /* profile entries merged into this request */ } ]
+    }
+  ],
+  "same": [ /* entries that already match */ ],
+  "unmatched": [ /* entries without a current value match */ ],
+  "summary": {"total_entries": 10, "request_count": 3, "same": 6, "unmatched": 1}
+}
+```
+
+Execute response (adds per-request results):
+
+```json
+{
+  "dry_run": false,
+  "requests": [ /* same as above */ ],
+  "results": [
+    {"target_path": "/redfish/v1/Managers/.../NetworkProtocol", "status_code": 200, "ok": true, "body": "..."}
+  ],
+  "summary": {"request_count": 3, "success": 2, "failed": 1}
+}
+```
+
+Execution details:
+- BIOS settings are sent to the `/Settings` subresource with an `Attributes` root, aligning with Redfish BIOS semantics.
+- Requests are grouped by target path and merged to minimize round-trips.
+- Execution uses the same proxy path as normal Redfish requests, so credentials and audit logging are consistently applied. The initiating user is attributed in audit records under the `apply_profile` action.
+- Large response bodies are truncated in the API response for readability; full details remain in audit records (subject to redaction/truncation policies).
+
+RBAC:
+- Operator or Administrator role required to call the apply endpoint.
+- Non-admins can execute applies; audit body visibility remains restricted per RBAC in audit views.
 
 Diff two profile versions:
 ```bash

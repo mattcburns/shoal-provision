@@ -21,6 +21,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -316,6 +317,116 @@ func TestHandleAddBMC(t *testing.T) {
 			t.Error("BMC was not created")
 		}
 	})
+}
+
+func TestProfilesApplyExecute(t *testing.T) {
+	ts := createTestSetup(t)
+	defer ts.DB.Close()
+
+	// Start a local HTTP server to act as the BMC
+	patchCalls := make([]string, 0, 4)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPatch {
+			b, _ := io.ReadAll(r.Body)
+			patchCalls = append(patchCalls, r.URL.Path+"|"+string(b))
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"result":"ok"}`))
+			return
+		}
+		if r.Method == http.MethodGet {
+			// Minimal Redfish discovery responses
+			switch r.URL.Path {
+			case "/redfish/v1/Systems":
+				w.Header().Set("Content-Type", "application/json")
+				w.Write([]byte(`{"Members":[{"@odata.id":"/redfish/v1/Systems/sys1"}]}`))
+			case "/redfish/v1/Systems/sys1/Bios":
+				w.Header().Set("Content-Type", "application/json")
+				w.Write([]byte(`{"@Redfish.Settings":{"SettingsObject":{"@odata.id":"/redfish/v1/Systems/sys1/Bios/Settings"}},"Attributes":{"LogicalProc":true,"BootMode":"UEFI"}}`))
+			case "/redfish/v1/Managers":
+				w.Header().Set("Content-Type", "application/json")
+				w.Write([]byte(`{"Members":[{"@odata.id":"/redfish/v1/Managers/mgr1"}]}`))
+			case "/redfish/v1/Managers/mgr1/NetworkProtocol":
+				w.Header().Set("Content-Type", "application/json")
+				w.Write([]byte(`{"@Redfish.Settings":{"SettingsObject":{"@odata.id":"/redfish/v1/Managers/mgr1/NetworkProtocol/Settings"}},"HTTPS":{"Port":443},"NTP":{"ProtocolEnabled":false}}`))
+			default:
+				http.NotFound(w, r)
+			}
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer srv.Close()
+
+	ctx := context.Background()
+	// Create BMC pointing to test server (use explicit http scheme)
+	if err := ts.DB.CreateBMC(ctx, &models.BMC{Name: "b1", Address: srv.URL, Username: "u", Password: "p", Enabled: true}); err != nil {
+		t.Fatalf("create bmc: %v", err)
+	}
+
+	// Create a profile with two entries: BIOS and NetworkProtocol
+	prof := &models.Profile{Name: "p1"}
+	if err := ts.DB.CreateProfile(ctx, prof); err != nil {
+		t.Fatalf("create profile: %v", err)
+	}
+	v := &models.ProfileVersion{ProfileID: prof.ID, Version: 1, Entries: []models.ProfileEntry{
+		{ResourcePath: "/redfish/v1/Systems/sys1/Bios", Attribute: "Attributes.LogicalProc", DesiredValue: false},
+		{ResourcePath: "/redfish/v1/Managers/mgr1/NetworkProtocol", Attribute: "HTTPS.Port", DesiredValue: 444},
+	}}
+	if err := ts.DB.CreateProfileVersion(ctx, v); err != nil {
+		t.Fatalf("create version: %v", err)
+	}
+
+	// Perform apply (non-dry-run)
+	body := map[string]any{"bmc": "b1", "dryRun": false, "continueOnError": false, "version": 1}
+	buf, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/api/profiles/"+prof.ID+"/apply", bytes.NewReader(buf))
+	req.Header.Set("Content-Type", "application/json")
+	ts.addAuth(req)
+	rr := httptest.NewRecorder()
+	ts.Handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	var resp struct {
+		DryRun  bool `json:"dry_run"`
+		Summary struct {
+			RequestCount int `json:"request_count"`
+			Success      int `json:"success"`
+			Failed       int `json:"failed"`
+		} `json:"summary"`
+		Results []struct {
+			TargetPath string
+			OK         bool
+		} `json:"results"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode resp: %v", err)
+	}
+	if resp.DryRun {
+		t.Fatalf("expected execution, got dry_run")
+	}
+	if resp.Summary.RequestCount == 0 || len(resp.Results) == 0 {
+		t.Fatalf("expected results; got %+v", resp)
+	}
+	for _, r := range resp.Results {
+		if !r.OK {
+			t.Fatalf("request failed: %+v", r)
+		}
+	}
+	if len(patchCalls) == 0 {
+		t.Fatalf("expected patch calls to test server")
+	}
+
+	// Ensure an audit record exists
+	recs, err := ts.DB.ListAudits(ctx, "", 10)
+	if err != nil {
+		t.Fatalf("list audits: %v", err)
+	}
+	if len(recs) == 0 {
+		t.Fatalf("expected audits created")
+	}
 }
 
 func TestHandleDeleteBMC(t *testing.T) {
