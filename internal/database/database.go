@@ -19,6 +19,7 @@ package database
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"time"
@@ -127,6 +128,37 @@ func (db *DB) Migrate(ctx context.Context) error {
 			aggregated_systems TEXT
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_connection_methods_enabled ON connection_methods(enabled)`,
+		// Settings persistence
+		`CREATE TABLE IF NOT EXISTS settings_descriptors (
+			id TEXT PRIMARY KEY,
+			bmc_id INTEGER NOT NULL,
+			resource_path TEXT NOT NULL,
+			attribute TEXT NOT NULL,
+			display_name TEXT,
+			description TEXT,
+			type TEXT NOT NULL,
+			enum_values TEXT,
+			min REAL,
+			max REAL,
+			pattern TEXT,
+			units TEXT,
+			read_only BOOLEAN DEFAULT false,
+			oem BOOLEAN DEFAULT false,
+			oem_vendor TEXT,
+			apply_times TEXT,
+			action_target TEXT,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (bmc_id) REFERENCES bmcs(id) ON DELETE CASCADE
+		)`,
+		`CREATE TABLE IF NOT EXISTS settings_values (
+			descriptor_id TEXT PRIMARY KEY,
+			current_value TEXT,
+			source_timestamp TEXT,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (descriptor_id) REFERENCES settings_descriptors(id) ON DELETE CASCADE
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_settings_by_bmc_resource ON settings_descriptors(bmc_id, resource_path)`,
+		`CREATE INDEX IF NOT EXISTS idx_settings_by_bmc ON settings_descriptors(bmc_id)`,
 	}
 
 	tx, err := db.conn.BeginTx(ctx, nil)
@@ -142,6 +174,300 @@ func (db *DB) Migrate(ctx context.Context) error {
 	}
 
 	return tx.Commit()
+}
+
+// Settings operations
+
+// UpsertSettingDescriptors stores or updates descriptors and current values for a BMC
+func (db *DB) UpsertSettingDescriptors(ctx context.Context, bmcName string, descs []models.SettingDescriptor) error {
+	if len(descs) == 0 {
+		return nil
+	}
+
+	bmc, err := db.GetBMCByName(ctx, bmcName)
+	if err != nil {
+		return fmt.Errorf("failed to get BMC by name: %w", err)
+	}
+	if bmc == nil {
+		return fmt.Errorf("BMC not found: %s", bmcName)
+	}
+
+	tx, err := db.conn.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	descStmt, err := tx.PrepareContext(ctx, `
+		INSERT INTO settings_descriptors (
+			id, bmc_id, resource_path, attribute, display_name, description, type,
+			enum_values, min, max, pattern, units, read_only, oem, oem_vendor,
+			apply_times, action_target, updated_at
+		) VALUES (
+			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP
+		)
+		ON CONFLICT(id) DO UPDATE SET
+			bmc_id=excluded.bmc_id,
+			resource_path=excluded.resource_path,
+			attribute=excluded.attribute,
+			display_name=excluded.display_name,
+			description=excluded.description,
+			type=excluded.type,
+			enum_values=excluded.enum_values,
+			min=excluded.min,
+			max=excluded.max,
+			pattern=excluded.pattern,
+			units=excluded.units,
+			read_only=excluded.read_only,
+			oem=excluded.oem,
+			oem_vendor=excluded.oem_vendor,
+			apply_times=excluded.apply_times,
+			action_target=excluded.action_target,
+			updated_at=CURRENT_TIMESTAMP
+	`)
+	if err != nil {
+		return fmt.Errorf("prepare descriptor stmt failed: %w", err)
+	}
+	defer descStmt.Close()
+
+	valStmt, err := tx.PrepareContext(ctx, `
+		INSERT INTO settings_values (descriptor_id, current_value, source_timestamp, updated_at)
+		VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+		ON CONFLICT(descriptor_id) DO UPDATE SET
+			current_value=excluded.current_value,
+			source_timestamp=excluded.source_timestamp,
+			updated_at=CURRENT_TIMESTAMP
+	`)
+	if err != nil {
+		return fmt.Errorf("prepare values stmt failed: %w", err)
+	}
+	defer valStmt.Close()
+
+	for _, d := range descs {
+		// Marshal arrays and current value to JSON strings for storage
+		enumJSON := ""
+		if len(d.EnumValues) > 0 {
+			if b, err := json.Marshal(d.EnumValues); err == nil {
+				enumJSON = string(b)
+			}
+		}
+		applyJSON := ""
+		if len(d.ApplyTimes) > 0 {
+			if b, err := json.Marshal(d.ApplyTimes); err == nil {
+				applyJSON = string(b)
+			}
+		}
+		var minPtr, maxPtr interface{}
+		if d.Min != nil {
+			minPtr = *d.Min
+		} else {
+			minPtr = nil
+		}
+		if d.Max != nil {
+			maxPtr = *d.Max
+		} else {
+			maxPtr = nil
+		}
+
+		if _, err := descStmt.ExecContext(ctx,
+			d.ID, bmc.ID, d.ResourcePath, d.Attribute, d.DisplayName, d.Description, d.Type,
+			enumJSON, minPtr, maxPtr, d.Pattern, d.Units, d.ReadOnly, d.OEM, d.OEMVendor,
+			applyJSON, d.ActionTarget,
+		); err != nil {
+			return fmt.Errorf("upsert descriptor failed: %w", err)
+		}
+
+		// Value row
+		var valueJSON string
+		if d.CurrentValue != nil {
+			if b, err := json.Marshal(d.CurrentValue); err == nil {
+				valueJSON = string(b)
+			}
+		}
+		if _, err := valStmt.ExecContext(ctx, d.ID, valueJSON, d.SourceTimeISO); err != nil {
+			return fmt.Errorf("upsert value failed: %w", err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit failed: %w", err)
+	}
+	return nil
+}
+
+// GetSettingsDescriptors returns descriptors (with latest values) for a BMC, optionally filtered by resource path substring
+func (db *DB) GetSettingsDescriptors(ctx context.Context, bmcName, resourceFilter string) ([]models.SettingDescriptor, error) {
+	bmc, err := db.GetBMCByName(ctx, bmcName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get BMC by name: %w", err)
+	}
+	if bmc == nil {
+		return nil, nil
+	}
+
+	query := `
+		SELECT d.id, d.resource_path, d.attribute, d.display_name, d.description, d.type,
+			   d.enum_values, d.min, d.max, d.pattern, d.units, d.read_only, d.oem, d.oem_vendor,
+			   d.apply_times, d.action_target, v.current_value, v.source_timestamp
+		FROM settings_descriptors d
+		LEFT JOIN settings_values v ON v.descriptor_id = d.id
+		WHERE d.bmc_id = ? AND (? = '' OR d.resource_path LIKE '%' || ? || '%')
+		ORDER BY d.resource_path, d.attribute`
+
+	rows, err := db.conn.QueryContext(ctx, query, bmc.ID, resourceFilter, resourceFilter)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query settings descriptors: %w", err)
+	}
+	defer rows.Close()
+
+	var result []models.SettingDescriptor
+	for rows.Next() {
+		var (
+			id, resourcePath, attribute, displayName, description, typ, enumJSON, pattern, units, oemVendor, applyJSON, actionTarget string
+			readOnly, oem                                                                                                            bool
+			minNull, maxNull                                                                                                         sql.NullFloat64
+			curValJSON, sourceTS                                                                                                     sql.NullString
+		)
+		if err := rows.Scan(&id, &resourcePath, &attribute, &displayName, &description, &typ,
+			&enumJSON, &minNull, &maxNull, &pattern, &units, &readOnly, &oem, &oemVendor,
+			&applyJSON, &actionTarget, &curValJSON, &sourceTS); err != nil {
+			return nil, fmt.Errorf("failed to scan settings descriptor: %w", err)
+		}
+
+		var enumVals []string
+		if enumJSON != "" {
+			_ = json.Unmarshal([]byte(enumJSON), &enumVals)
+		}
+		var applyVals []string
+		if applyJSON != "" {
+			_ = json.Unmarshal([]byte(applyJSON), &applyVals)
+		}
+		var minPtr, maxPtr *float64
+		if minNull.Valid {
+			v := minNull.Float64
+			minPtr = &v
+		}
+		if maxNull.Valid {
+			v := maxNull.Float64
+			maxPtr = &v
+		}
+
+		var current interface{}
+		if curValJSON.Valid && curValJSON.String != "" {
+			_ = json.Unmarshal([]byte(curValJSON.String), &current)
+		}
+		source := ""
+		if sourceTS.Valid {
+			source = sourceTS.String
+		}
+
+		result = append(result, models.SettingDescriptor{
+			ID:            id,
+			BMCName:       bmcName,
+			ResourcePath:  resourcePath,
+			Attribute:     attribute,
+			DisplayName:   displayName,
+			Description:   description,
+			Type:          typ,
+			EnumValues:    enumVals,
+			Min:           minPtr,
+			Max:           maxPtr,
+			Pattern:       pattern,
+			Units:         units,
+			ReadOnly:      readOnly,
+			OEM:           oem,
+			OEMVendor:     oemVendor,
+			ApplyTimes:    applyVals,
+			ActionTarget:  actionTarget,
+			CurrentValue:  current,
+			SourceTimeISO: source,
+		})
+	}
+	return result, rows.Err()
+}
+
+// GetSettingDescriptor returns a single descriptor by id for a BMC
+func (db *DB) GetSettingDescriptor(ctx context.Context, bmcName, descriptorID string) (*models.SettingDescriptor, error) {
+	bmc, err := db.GetBMCByName(ctx, bmcName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get BMC by name: %w", err)
+	}
+	if bmc == nil {
+		return nil, nil
+	}
+
+	query := `
+		SELECT d.id, d.resource_path, d.attribute, d.display_name, d.description, d.type,
+			   d.enum_values, d.min, d.max, d.pattern, d.units, d.read_only, d.oem, d.oem_vendor,
+			   d.apply_times, d.action_target, v.current_value, v.source_timestamp
+		FROM settings_descriptors d
+		LEFT JOIN settings_values v ON v.descriptor_id = d.id
+		WHERE d.bmc_id = ? AND d.id = ?`
+
+	var (
+		id, resourcePath, attribute, displayName, description, typ, enumJSON, pattern, units, oemVendor, applyJSON, actionTarget string
+		readOnly, oem                                                                                                            bool
+		minNull, maxNull                                                                                                         sql.NullFloat64
+		curValJSON, sourceTS                                                                                                     sql.NullString
+	)
+	err = db.conn.QueryRowContext(ctx, query, bmc.ID, descriptorID).Scan(&id, &resourcePath, &attribute, &displayName, &description, &typ,
+		&enumJSON, &minNull, &maxNull, &pattern, &units, &readOnly, &oem, &oemVendor,
+		&applyJSON, &actionTarget, &curValJSON, &sourceTS)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to get settings descriptor: %w", err)
+	}
+
+	var enumVals []string
+	if enumJSON != "" {
+		_ = json.Unmarshal([]byte(enumJSON), &enumVals)
+	}
+	var applyVals []string
+	if applyJSON != "" {
+		_ = json.Unmarshal([]byte(applyJSON), &applyVals)
+	}
+	var minPtr, maxPtr *float64
+	if minNull.Valid {
+		v := minNull.Float64
+		minPtr = &v
+	}
+	if maxNull.Valid {
+		v := maxNull.Float64
+		maxPtr = &v
+	}
+	var current interface{}
+	if curValJSON.Valid && curValJSON.String != "" {
+		_ = json.Unmarshal([]byte(curValJSON.String), &current)
+	}
+	source := ""
+	if sourceTS.Valid {
+		source = sourceTS.String
+	}
+
+	desc := &models.SettingDescriptor{
+		ID:            id,
+		BMCName:       bmcName,
+		ResourcePath:  resourcePath,
+		Attribute:     attribute,
+		DisplayName:   displayName,
+		Description:   description,
+		Type:          typ,
+		EnumValues:    enumVals,
+		Min:           minPtr,
+		Max:           maxPtr,
+		Pattern:       pattern,
+		Units:         units,
+		ReadOnly:      readOnly,
+		OEM:           oem,
+		OEMVendor:     oemVendor,
+		ApplyTimes:    applyVals,
+		ActionTarget:  actionTarget,
+		CurrentValue:  current,
+		SourceTimeISO: source,
+	}
+	return desc, nil
 }
 
 // BMC operations

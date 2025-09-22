@@ -73,6 +73,9 @@ func New(db *database.DB) http.Handler {
 	mux.Handle("/bmcs/details", h.requireAuth(http.HandlerFunc(h.handleBMCDetails)))
 	mux.Handle("/api/bmcs/test-connection", h.requireAuth(http.HandlerFunc(h.handleTestConnection)))
 	mux.Handle("/api/bmcs/details", h.requireAuth(http.HandlerFunc(h.handleBMCDetailsAPI)))
+	// Settings discovery: support both query form and RESTful path form
+	mux.Handle("/api/bmcs/settings", h.requireAuth(http.HandlerFunc(h.handleBMCSettingsAPI)))
+	mux.Handle("/api/bmcs/", h.requireAuth(http.HandlerFunc(h.handleBMCSettingsAPIRestful)))
 
 	// User management routes (admin only)
 	mux.Handle("/users", h.requireAdmin(http.HandlerFunc(h.handleUsers)))
@@ -1185,6 +1188,143 @@ func (h *Handler) handleBMCDetailsAPI(w http.ResponseWriter, r *http.Request) {
 	// Return detailed status
 	if err := json.NewEncoder(w).Encode(details); err != nil {
 		slog.Error("Failed to encode BMC details response", "error", err)
+		w.WriteHeader(http.StatusInternalServerError)
+	}
+}
+
+// handleBMCSettingsAPI handles discovery of configurable settings for a BMC
+func (h *Handler) handleBMCSettingsAPI(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+
+	bmcName := r.URL.Query().Get("name")
+	if bmcName == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": "BMC name is required"})
+		return
+	}
+
+	resource := r.URL.Query().Get("resource")
+
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	defer cancel()
+
+	descriptors, err := h.bmcSvc.DiscoverSettings(ctx, bmcName, resource)
+	if err != nil {
+		slog.Error("Settings discovery failed", "bmc", bmcName, "error", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{"error": fmt.Sprintf("Failed to discover settings: %v", err)})
+		return
+	}
+
+	resp := models.SettingsResponse{
+		BMCName:     bmcName,
+		Resource:    resource,
+		Descriptors: descriptors,
+	}
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		slog.Error("Failed to encode settings response", "error", err)
+		w.WriteHeader(http.StatusInternalServerError)
+	}
+}
+
+// handleBMCSettingsAPIRestful handles /api/bmcs/{name}/settings style routes
+func (h *Handler) handleBMCSettingsAPIRestful(w http.ResponseWriter, r *http.Request) {
+	// Handle both list and detail: /api/bmcs/{name}/settings[/{id}]
+	// Path format parts: ["", "api", "bmcs", "{name}", "settings", "{id}"?]
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	path := r.URL.Path
+	// Ensure prefix
+	if !strings.HasPrefix(path, "/api/bmcs/") {
+		http.NotFound(w, r)
+		return
+	}
+
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) < 4 || parts[0] != "api" || parts[1] != "bmcs" || parts[3] != "settings" {
+		// Not our route; fall back to next handlers by returning 404
+		http.NotFound(w, r)
+		return
+	}
+
+	bmcName := parts[2]
+	// Detail if id present
+	if len(parts) == 5 {
+		id := parts[4]
+		w.Header().Set("Content-Type", "application/json")
+		if bmcName == "" || id == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{"error": "BMC name and id are required"})
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+		defer cancel()
+
+		// Try DB first
+		desc, err := h.db.GetSettingDescriptor(ctx, bmcName, id)
+		if err != nil {
+			slog.Error("Failed to fetch setting descriptor", "bmc", bmcName, "id", id, "error", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]string{"error": fmt.Sprintf("Failed to fetch descriptor: %v", err)})
+			return
+		}
+		if desc == nil {
+			// Trigger discovery to populate, then retry DB
+			if _, err := h.bmcSvc.DiscoverSettings(ctx, bmcName, ""); err != nil {
+				slog.Warn("Discovery failed while resolving descriptor", "bmc", bmcName, "error", err)
+			}
+			desc, _ = h.db.GetSettingDescriptor(ctx, bmcName, id)
+		}
+
+		if desc == nil {
+			http.NotFound(w, r)
+			return
+		}
+		if err := json.NewEncoder(w).Encode(desc); err != nil {
+			slog.Error("Failed to encode descriptor response", "error", err)
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+		return
+	}
+
+	// List path
+	// Optional resource filter via query
+	resource := r.URL.Query().Get("resource")
+
+	w.Header().Set("Content-Type", "application/json")
+
+	if bmcName == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": "BMC name is required"})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	defer cancel()
+
+	descriptors, err := h.bmcSvc.DiscoverSettings(ctx, bmcName, resource)
+	if err != nil {
+		slog.Error("Settings discovery failed", "bmc", bmcName, "error", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{"error": fmt.Sprintf("Failed to discover settings: %v", err)})
+		return
+	}
+
+	resp := models.SettingsResponse{
+		BMCName:     bmcName,
+		Resource:    resource,
+		Descriptors: descriptors,
+	}
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		slog.Error("Failed to encode settings response", "error", err)
 		w.WriteHeader(http.StatusInternalServerError)
 	}
 }

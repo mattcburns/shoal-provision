@@ -139,3 +139,40 @@ type SELEntry struct {
 	Created   string `json:"created,omitempty"`
 	EntryType string `json:"entry_type,omitempty"`
 }
+
+// SettingDescriptor describes a configurable setting discovered via Redfish
+type SettingDescriptor struct {
+	ID            string      `json:"id"`
+	BMCName       string      `json:"bmc_name"`
+	ResourcePath  string      `json:"resource_path"`
+	Attribute     string      `json:"attribute"`
+	DisplayName   string      `json:"display_name,omitempty"`
+	Description   string      `json:"description,omitempty"`
+	Type          string      `json:"type"`
+	EnumValues    []string    `json:"enum_values,omitempty"`
+	Min           *float64    `json:"min,omitempty"`
+	Max           *float64    `json:"max,omitempty"`
+	Pattern       string      `json:"pattern,omitempty"`
+	Units         string      `json:"units,omitempty"`
+	ReadOnly      bool        `json:"read_only"`
+	OEM           bool        `json:"oem"`
+	OEMVendor     string      `json:"oem_vendor,omitempty"`
+	ApplyTimes    []string    `json:"apply_times,omitempty"`
+	ActionTarget  string      `json:"action_target,omitempty"`
+	CurrentValue  interface{} `json:"current_value,omitempty"`
+	SourceTimeISO string      `json:"source_timestamp,omitempty"`
+}
+
+// SettingsResponse is returned by the settings API
+type SettingsResponse struct {
+	BMCName     string              `json:"bmc_name"`
+	Resource    string              `json:"resource,omitempty"`
+	Descriptors []SettingDescriptor `json:"descriptors"`
+}
+
+// SettingValue stores current value snapshot for a descriptor
+type SettingValue struct {
+	DescriptorID    string      `json:"descriptor_id" db:"descriptor_id"`
+	CurrentValue    interface{} `json:"current_value" db:"current_value"`
+	SourceTimestamp string      `json:"source_timestamp" db:"source_timestamp"`
+}

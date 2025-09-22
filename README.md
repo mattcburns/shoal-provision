@@ -345,6 +345,52 @@ curl -H "X-Auth-Token: <token>" http://localhost:8080/redfish/v1/
 **Web Interface Endpoints:**
 - `GET /bmcs/details?name={bmc-name}` - Detailed BMC status page
 - `GET /api/bmcs/details?name={bmc-name}` - JSON endpoint for detailed BMC information
+- `GET /api/bmcs/{bmc-name}/settings[?resource={path}]` - JSON endpoint for discovered configurable settings (read-only)
+- `GET /api/bmcs/{bmc-name}/settings/{descriptor_id}` - JSON endpoint for a single setting descriptor with current value
+
+### Settings Discovery (Preview)
+
+- `GET /api/bmcs/{bmc-name}/settings[?resource={path}]`
+  - Returns `{ bmc_name, resource, descriptors: [...] }`. Results are also persisted for subsequent detail lookups.
+  - Detail: `GET /api/bmcs/{bmc-name}/settings/{descriptor_id}` returns a single descriptor. If not present in the cache, the server will perform discovery on-demand and retry.
+  - Auth: same as other web API endpoints (session or basic auth)
+  - Query params:
+    - `resource`: Optional. Filter to a specific Redfish resource path (e.g. `/redfish/v1/Systems/System.Embedded.1/Bios`)
+  - Returns: a JSON object with discovered setting descriptors for the target BMC. Current scope focuses on common Redfish settings surfaces that expose `@Redfish.Settings` such as `Systems/<id>/Bios` and `Managers/<id>/NetworkProtocol`.
+
+Example:
+```bash
+curl -s -u admin:admin \
+  "http://localhost:8080/api/bmcs/bmc1/settings" | jq .
+```
+
+Response shape (example):
+```json
+{
+  "bmc_name": "bmc1",
+  "resource": "",
+  "descriptors": [
+    {
+      "id": "e3b0c44298fc1c149afbf4c8996fb924...",
+      "bmc_name": "bmc1",
+      "resource_path": "/redfish/v1/Systems/System.Embedded.1/Bios",
+      "attribute": "ProcTurboMode",
+      "type": "boolean",
+      "read_only": false,
+      "oem": false,
+      "current_value": true
+    }
+  ]
+}
+```
+
+Notes:
+- The legacy query form `GET /api/bmcs/settings?name={bmc-name}[&resource=...]` is still supported for backward compatibility.
+
+Current limitations (to be expanded in future milestones):
+- No persistence yet; values are discovered on-demand per request
+- AttributeRegistry, ActionInfo, and full constraints (enums, ranges) are not yet resolved
+- Detail routes for individual descriptors may be added later
 
 **SessionService API:**
 - `POST /redfish/v1/SessionService/Sessions` - Create authentication session (unauthenticated)

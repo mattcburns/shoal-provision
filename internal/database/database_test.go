@@ -66,6 +66,62 @@ func TestMigrate(t *testing.T) {
 	}
 }
 
+func TestSettingsPersistence(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+
+	db, err := New(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to create database: %v", err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+	if err := db.Migrate(ctx); err != nil {
+		t.Fatalf("Migration failed: %v", err)
+	}
+
+	// Seed a BMC
+	bmc := &models.BMC{Name: "b1", Address: "https://1.2.3.4", Username: "u", Password: "p", Enabled: true}
+	if err := db.CreateBMC(ctx, bmc); err != nil {
+		t.Fatalf("create bmc: %v", err)
+	}
+
+	// Upsert two descriptors
+	d1 := models.SettingDescriptor{ID: "id1", BMCName: "b1", ResourcePath: "/redfish/v1/Systems/S1/Bios", Attribute: "A1", Type: "boolean", CurrentValue: true, SourceTimeISO: time.Now().UTC().Format(time.RFC3339)}
+	d2 := models.SettingDescriptor{ID: "id2", BMCName: "b1", ResourcePath: "/redfish/v1/Managers/M1/NetworkProtocol", Attribute: "HTTPS", Type: "object", CurrentValue: map[string]any{"Port": 443.0}, SourceTimeISO: time.Now().UTC().Format(time.RFC3339)}
+	if err := db.UpsertSettingDescriptors(ctx, "b1", []models.SettingDescriptor{d1, d2}); err != nil {
+		t.Fatalf("upsert descriptors: %v", err)
+	}
+
+	// List
+	list, err := db.GetSettingsDescriptors(ctx, "b1", "")
+	if err != nil {
+		t.Fatalf("list descriptors: %v", err)
+	}
+	if len(list) != 2 {
+		t.Fatalf("expected 2 descriptors, got %d", len(list))
+	}
+
+	// Filter
+	list, err = db.GetSettingsDescriptors(ctx, "b1", "Bios")
+	if err != nil {
+		t.Fatalf("filter descriptors: %v", err)
+	}
+	if len(list) != 1 || list[0].ID != "id1" {
+		t.Fatalf("expected filter to return id1, got %+v", list)
+	}
+
+	// Get by id
+	got, err := db.GetSettingDescriptor(ctx, "b1", "id2")
+	if err != nil {
+		t.Fatalf("get by id: %v", err)
+	}
+	if got == nil || got.ID != "id2" {
+		t.Fatalf("expected id2, got %+v", got)
+	}
+}
+
 func TestBMCOperations(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "test.db")
