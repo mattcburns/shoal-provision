@@ -23,7 +23,7 @@ import (
 	"html/template"
 	"log/slog"
 	"net/http"
-    "reflect"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -80,6 +80,8 @@ func New(db *database.DB) http.Handler {
 
 	// Profiles API (JSON only)
 	mux.Handle("/api/profiles", h.requireAuth(http.HandlerFunc(h.handleProfiles)))
+	// Specific import endpoint must be registered explicitly
+	mux.Handle("/api/profiles/import", h.requireAuth(http.HandlerFunc(h.handleProfilesImport)))
 	mux.Handle("/api/profiles/", h.requireAuth(http.HandlerFunc(h.handleProfilesRestful)))
 
 	// User management routes (admin only)
@@ -1375,6 +1377,97 @@ func (h *Handler) handleProfiles(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// handleProfilesImport handles POST /api/profiles/import to ingest a profile JSON
+func (h *Handler) handleProfilesImport(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+
+	// Accept either a single profile with versions, or an array of them
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	var single struct {
+		Profile  models.Profile          `json:"profile"`
+		Versions []models.ProfileVersion `json:"versions"`
+	}
+	// Try single first
+	if err := dec.Decode(&single); err != nil {
+		// Reset by re-decoding into multi using new decoder
+		r.Body.Close()
+		http.Error(w, "invalid payload", http.StatusBadRequest)
+		return
+	}
+
+	// Convenience to process one payload form uniformly
+	payloads := []struct {
+		Profile  models.Profile
+		Versions []models.ProfileVersion
+	}{{Profile: single.Profile, Versions: single.Versions}}
+
+	// Create or update the profile and versions
+	ctx := r.Context()
+	user := getUserFromContext(ctx)
+	for _, pl := range payloads {
+		p := pl.Profile
+		if strings.TrimSpace(p.Name) == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{"error": "profile.name is required"})
+			return
+		}
+		// If ID empty, generate and create; if has ID try to update name/desc fields
+		if p.ID == "" {
+			p.ID = fmt.Sprintf("p_%d", time.Now().UnixNano())
+			if user != nil {
+				p.CreatedBy = user.ID
+			}
+			if err := h.db.CreateProfile(ctx, &p); err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+				return
+			}
+		} else {
+			if user != nil && p.CreatedBy == "" {
+				p.CreatedBy = user.ID
+			}
+			if err := h.db.UpdateProfile(ctx, &p); err != nil {
+				// If update fails because it doesn't exist, fallback to create
+				if err := h.db.CreateProfile(ctx, &p); err != nil {
+					w.WriteHeader(http.StatusInternalServerError)
+					json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+					return
+				}
+			}
+		}
+
+		// Upsert versions: create entries for each provided version number
+		for i := range pl.Versions {
+			v := pl.Versions[i]
+			v.ProfileID = p.ID
+			if v.Version == 0 {
+				// Autonumber after latest
+				vs, _ := h.db.GetProfileVersions(ctx, p.ID)
+				max := 0
+				for _, vv := range vs {
+					if vv.Version > max {
+						max = vv.Version
+					}
+				}
+				v.Version = max + 1
+			}
+			if err := h.db.CreateProfileVersion(ctx, &v); err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+				return
+			}
+		}
+	}
+
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(map[string]any{"status": "imported", "count": len(payloads)})
+}
+
 // handleProfilesRestful handles /api/profiles/{id}/... routes
 func (h *Handler) handleProfilesRestful(w http.ResponseWriter, r *http.Request) {
 	if !strings.HasPrefix(r.URL.Path, "/api/profiles/") {
@@ -1432,27 +1525,112 @@ func (h *Handler) handleProfilesRestful(w http.ResponseWriter, r *http.Request) 
 
 	// Subresources: versions, assignments
 	switch parts[3] {
+	case "export":
+		// POST /api/profiles/{id}/export with optional {"version":N}
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var req struct {
+			Version int `json:"version"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		vnum := req.Version
+		if vnum <= 0 {
+			vs, err := h.db.GetProfileVersions(r.Context(), id)
+			if err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+				return
+			}
+			for _, vv := range vs {
+				if vv.Version > vnum {
+					vnum = vv.Version
+				}
+			}
+			if vnum == 0 {
+				w.WriteHeader(http.StatusNotFound)
+				json.NewEncoder(w).Encode(map[string]string{"error": "no versions for profile"})
+				return
+			}
+		}
+		p, err := h.db.GetProfile(r.Context(), id)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+		if p == nil {
+			http.NotFound(w, r)
+			return
+		}
+		pv, err := h.db.GetProfileVersion(r.Context(), id, vnum)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+		if pv == nil {
+			http.NotFound(w, r)
+			return
+		}
+		out := map[string]any{
+			"profile":  p,
+			"versions": []models.ProfileVersion{*pv},
+		}
+		json.NewEncoder(w).Encode(out)
+		return
 	case "preview":
-		if r.Method != http.MethodGet { http.Error(w, "Method not allowed", http.StatusMethodNotAllowed); return }
+		if r.Method != http.MethodGet {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
 		bmcName := r.URL.Query().Get("bmc")
-		if strings.TrimSpace(bmcName) == "" { w.WriteHeader(http.StatusBadRequest); json.NewEncoder(w).Encode(map[string]string{"error": "bmc is required"}); return }
+		if strings.TrimSpace(bmcName) == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{"error": "bmc is required"})
+			return
+		}
 		// Determine version: from query ?version=, otherwise latest
 		var verNum int
 		if vq := r.URL.Query().Get("version"); vq != "" {
 			n, err := strconv.Atoi(vq)
-			if err != nil || n <= 0 { w.WriteHeader(http.StatusBadRequest); json.NewEncoder(w).Encode(map[string]string{"error": "invalid version"}); return }
+			if err != nil || n <= 0 {
+				w.WriteHeader(http.StatusBadRequest)
+				json.NewEncoder(w).Encode(map[string]string{"error": "invalid version"})
+				return
+			}
 			verNum = n
 		} else {
 			vs, err := h.db.GetProfileVersions(r.Context(), id)
-			if err != nil { w.WriteHeader(http.StatusInternalServerError); json.NewEncoder(w).Encode(map[string]string{"error": err.Error()}); return }
-			for _, vv := range vs { if vv.Version > verNum { verNum = vv.Version } }
-			if verNum == 0 { w.WriteHeader(http.StatusNotFound); json.NewEncoder(w).Encode(map[string]string{"error": "no versions for profile"}); return }
+			if err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+				return
+			}
+			for _, vv := range vs {
+				if vv.Version > verNum {
+					verNum = vv.Version
+				}
+			}
+			if verNum == 0 {
+				w.WriteHeader(http.StatusNotFound)
+				json.NewEncoder(w).Encode(map[string]string{"error": "no versions for profile"})
+				return
+			}
 		}
 
 		// Load profile version with entries
 		pv, err := h.db.GetProfileVersion(r.Context(), id, verNum)
-		if err != nil { w.WriteHeader(http.StatusInternalServerError); json.NewEncoder(w).Encode(map[string]string{"error": err.Error()}); return }
-		if pv == nil { http.NotFound(w, r); return }
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+		if pv == nil {
+			http.NotFound(w, r)
+			return
+		}
 
 		// Ensure current settings are available; trigger discovery
 		ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
@@ -1461,7 +1639,11 @@ func (h *Handler) handleProfilesRestful(w http.ResponseWriter, r *http.Request) 
 			slog.Warn("Discovery failed during preview", "bmc", bmcName, "error", err)
 		}
 		descs, err := h.db.GetSettingsDescriptors(ctx, bmcName, "")
-		if err != nil { w.WriteHeader(http.StatusInternalServerError); json.NewEncoder(w).Encode(map[string]string{"error": err.Error()}); return }
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
 		// Build a flattened view of current settings so profile entries can
 		// reference nested keys like "Attributes.LogicalProc" or "HTTPS.Port".
 		cur := make(map[string]interface{})
