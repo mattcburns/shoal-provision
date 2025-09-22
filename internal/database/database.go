@@ -1337,3 +1337,95 @@ func (db *DB) ListAudits(ctx context.Context, bmcName string, limit int) ([]mode
 	}
 	return out, rows.Err()
 }
+
+// AuditFilter provides flexible filtering for audit queries
+type AuditFilter struct {
+	BMCName      string
+	UserName     string
+	Action       string
+	Method       string
+	PathContains string
+	StatusMin    int
+	StatusMax    int
+	Since        time.Time
+	Until        time.Time
+	Limit        int
+}
+
+// ListAuditsFiltered returns recent audit records matching a filter
+func (db *DB) ListAuditsFiltered(ctx context.Context, f AuditFilter) ([]models.AuditRecord, error) {
+	limit := f.Limit
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	where := make([]string, 0, 8)
+	args := make([]any, 0, 10)
+	if strings.TrimSpace(f.BMCName) != "" {
+		where = append(where, "bmc_name = ?")
+		args = append(args, f.BMCName)
+	}
+	if strings.TrimSpace(f.UserName) != "" {
+		where = append(where, "user_name = ?")
+		args = append(args, f.UserName)
+	}
+	if strings.TrimSpace(f.Action) != "" {
+		where = append(where, "action = ?")
+		args = append(args, f.Action)
+	}
+	if strings.TrimSpace(f.Method) != "" {
+		where = append(where, "method = ?")
+		args = append(args, strings.ToUpper(f.Method))
+	}
+	if strings.TrimSpace(f.PathContains) != "" {
+		where = append(where, "path LIKE ?")
+		args = append(args, "%"+f.PathContains+"%")
+	}
+	if f.StatusMin > 0 {
+		where = append(where, "status_code >= ?")
+		args = append(args, f.StatusMin)
+	}
+	if f.StatusMax > 0 {
+		where = append(where, "status_code <= ?")
+		args = append(args, f.StatusMax)
+	}
+	// created_at is stored as a SQLite DATETIME text (YYYY-MM-DD HH:MM:SS)
+	const sqliteTime = "2006-01-02 15:04:05"
+	if !f.Since.IsZero() {
+		where = append(where, "created_at >= ?")
+		args = append(args, f.Since.UTC().Format(sqliteTime))
+	}
+	if !f.Until.IsZero() {
+		where = append(where, "created_at <= ?")
+		args = append(args, f.Until.UTC().Format(sqliteTime))
+	}
+
+	q := `SELECT id, created_at, user_id, user_name, bmc_name, action, method, path, status_code, duration_ms,
+				 substr(request_body,1,4096), substr(response_body,1,4096), error
+		  FROM audits`
+	if len(where) > 0 {
+		q += " WHERE " + strings.Join(where, " AND ")
+	}
+	q += " ORDER BY created_at DESC LIMIT ?"
+	args = append(args, limit)
+
+	rows, err := db.conn.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list audits filtered: %w", err)
+	}
+	defer rows.Close()
+	var out []models.AuditRecord
+	for rows.Next() {
+		var a models.AuditRecord
+		var created string
+		if err := rows.Scan(&a.ID, &created, &a.UserID, &a.UserName, &a.BMCName, &a.Action, &a.Method, &a.Path, &a.StatusCode, &a.DurationMS, &a.RequestBody, &a.ResponseBody, &a.Error); err != nil {
+			return nil, fmt.Errorf("scan audit: %w", err)
+		}
+		if t, err := time.Parse(time.RFC3339Nano, created); err == nil {
+			a.CreatedAt = t
+		} else if tt, err2 := time.Parse("2006-01-02 15:04:05", created); err2 == nil {
+			a.CreatedAt = tt
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}

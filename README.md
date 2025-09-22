@@ -577,12 +577,27 @@ Every build goes through automated quality gates:
 
 ## Audit Logging
 
-- Admin-only JSON endpoints expose recent audit records of proxied Redfish operations:
-  - `GET /api/audit?bmc={name}&limit={N}` — List recent audits (default limit 100; max 500). Request/response bodies are truncated in list results.
-  - `GET /api/audit/{id}` — Full audit record by ID.
-- Each audit captures: timestamp, user (if known), BMC name, HTTP method/path, status code, duration, and request/response bodies.
-- Sensitive values in JSON payloads (e.g., Password, tokens) are redacted before storage; very large bodies are truncated.
-- Access is restricted to admin role via existing middleware. Consider external log shipping or periodic pruning for long-term retention.
+Shoal records an audit trail for proxied Redfish operations and other actions.
+
+- UI: Navigate to `/audit` (link visible to admins). Filter by BMC, user, action, method, path substring, HTTP status range, and date range. Results render a table and provide a JSON export link.
+
+- API: `GET /api/audit` supports filters and a limit parameter:
+  - `bmc`: exact BMC name
+  - `user`: exact username
+  - `action`: e.g., `proxy`, `power`, `apply_profile`
+  - `method`: HTTP method (e.g., `GET`, `POST`)
+  - `path`: substring match on request path
+  - `status_min`, `status_max`: HTTP code bounds
+  - `since`, `until`: ISO dates `YYYY-MM-DD` (`until` inclusive of that day)
+  - `limit`: number of rows (default 100, max 500)
+
+Endpoints:
+- `GET /api/audit?...` — list recent audit entries matching filters (request/response bodies truncated in list views)
+- `GET /api/audit/{id}` — full audit record by ID
+
+Notes:
+- Sensitive fields in JSON payloads are redacted before storage; very large bodies are truncated.
+- All audit endpoints and the `/audit` UI require `admin` role.
 
 ```bash
 # Full validation (all quality gates)

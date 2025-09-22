@@ -1466,6 +1466,22 @@ func TestAuditEndpoints(t *testing.T) {
 		t.Fatalf("expected response to contain audit id")
 	}
 
+	// Filter by method and path substring
+	req = httptest.NewRequest(http.MethodGet, "/api/audit?method=GET&path=Systems", nil)
+	req.SetBasicAuth("admin", "admin")
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("filtered list expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var list []models.AuditRecord
+	if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	if len(list) == 0 || list[0].Method != http.MethodGet || !strings.Contains(list[0].Path, "Systems") {
+		t.Fatalf("unexpected filter results: %+v", list)
+	}
+
 	// Admin can get detail
 	req = httptest.NewRequest(http.MethodGet, "/api/audit/"+a.ID, nil)
 	req.SetBasicAuth("admin", "admin")
@@ -1489,5 +1505,18 @@ func TestAuditEndpoints(t *testing.T) {
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("operator should be forbidden, got %d", rec.Code)
+	}
+
+	// Admin UI page loads
+	req = httptest.NewRequest(http.MethodGet, "/audit", nil)
+	req.SetBasicAuth("admin", "admin")
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("audit UI expected 200, got %d", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "" && !strings.Contains(ct, "text/html") {
+		// The template base sets HTML; if empty it's still fine for tests
+		t.Fatalf("expected html content type, got %s", ct)
 	}
 }

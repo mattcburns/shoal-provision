@@ -94,7 +94,8 @@ func New(db *database.DB) http.Handler {
 	mux.Handle("/profile", h.requireAuth(http.HandlerFunc(h.handleProfile)))
 	mux.Handle("/profile/password", h.requireAuth(http.HandlerFunc(h.handleChangePassword)))
 
-	// Audit API (admin only)
+	// Audit UI + API (admin only)
+	mux.Handle("/audit", h.requireAdmin(http.HandlerFunc(h.handleAuditPage)))
 	mux.Handle("/api/audit", h.requireAdmin(http.HandlerFunc(h.handleAudit)))
 	mux.Handle("/api/audit/", h.requireAdmin(http.HandlerFunc(h.handleAuditRestful)))
 
@@ -148,6 +149,7 @@ func (h *Handler) loadTemplates() {
             {{if .User}}
                 {{if eq .User.Role "admin"}}
                 <a href="/users">Manage Users</a>
+				<a href="/audit">Audit Logs</a>
                 {{end}}
                 <a href="/profile">Profile</a>
                 <span style="float: right;">
@@ -2137,21 +2139,56 @@ func (h *Handler) addUserToPageData(r *http.Request, data *PageData) {
 }
 
 // Audit API handlers
-// GET /api/audit?bmc=NAME&limit=N
+// GET /api/audit?bmc=NAME&user=USERNAME&action=proxy&method=GET&path=Systems&status_min=200&status_max=299&since=2025-01-01&until=2025-12-31&limit=N
 func (h *Handler) handleAudit(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	bmcName := r.URL.Query().Get("bmc")
+	q := r.URL.Query()
 	limit := 100
-	if ls := r.URL.Query().Get("limit"); ls != "" {
+	if ls := q.Get("limit"); ls != "" {
 		if n, err := strconv.Atoi(ls); err == nil && n > 0 {
 			limit = n
 		}
 	}
-	recs, err := h.db.ListAudits(r.Context(), bmcName, limit)
+	var since, until time.Time
+	if s := q.Get("since"); s != "" {
+		if t, err := time.Parse("2006-01-02", s); err == nil {
+			since = t
+		}
+	}
+	if s := q.Get("until"); s != "" {
+		if t, err := time.Parse("2006-01-02", s); err == nil {
+			// include full day
+			until = t.Add(24 * time.Hour)
+		}
+	}
+	statusMin, statusMax := 0, 0
+	if s := q.Get("status_min"); s != "" {
+		if n, err := strconv.Atoi(s); err == nil {
+			statusMin = n
+		}
+	}
+	if s := q.Get("status_max"); s != "" {
+		if n, err := strconv.Atoi(s); err == nil {
+			statusMax = n
+		}
+	}
+	filter := database.AuditFilter{
+		BMCName:      q.Get("bmc"),
+		UserName:     q.Get("user"),
+		Action:       q.Get("action"),
+		Method:       q.Get("method"),
+		PathContains: q.Get("path"),
+		StatusMin:    statusMin,
+		StatusMax:    statusMax,
+		Since:        since,
+		Until:        until,
+		Limit:        limit,
+	}
+	recs, err := h.db.ListAuditsFiltered(r.Context(), filter)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
@@ -2184,4 +2221,129 @@ func (h *Handler) handleAuditRestful(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	json.NewEncoder(w).Encode(rec)
+}
+
+// handleAuditPage renders an admin-only audit list with filters that drives the API
+func (h *Handler) handleAuditPage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	data := PageData{Title: "Audit Logs"}
+	h.addUserToPageData(r, &data)
+
+	page := `{{define "content"}}
+<h2>Audit Logs</h2>
+<form id="filters" style="display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end;">
+	<div class="form-group" style="width:180px;">
+		<label for="bmc">BMC</label>
+		<input id="bmc" name="bmc" />
+	</div>
+	<div class="form-group" style="width:160px;">
+		<label for="user">User</label>
+		<input id="user" name="user" />
+	</div>
+	<div class="form-group" style="width:120px;">
+		<label for="action">Action</label>
+		<input id="action" name="action" placeholder="proxy" />
+	</div>
+	<div class="form-group" style="width:120px;">
+		<label for="method">Method</label>
+		<input id="method" name="method" placeholder="GET" />
+	</div>
+	<div class="form-group" style="width:220px;">
+		<label for="path">Path contains</label>
+		<input id="path" name="path" placeholder="/redfish" />
+	</div>
+	<div class="form-group" style="width:140px;">
+		<label for="status_min">Status min</label>
+		<input id="status_min" name="status_min" type="number" min="100" max="599" />
+	</div>
+	<div class="form-group" style="width:140px;">
+		<label for="status_max">Status max</label>
+		<input id="status_max" name="status_max" type="number" min="100" max="599" />
+	</div>
+	<div class="form-group" style="width:160px;">
+		<label for="since">Since</label>
+		<input id="since" name="since" type="date" />
+	</div>
+	<div class="form-group" style="width:160px;">
+		<label for="until">Until</label>
+		<input id="until" name="until" type="date" />
+	</div>
+	<div class="form-group" style="width:120px;">
+		<label for="limit">Limit</label>
+		<input id="limit" name="limit" type="number" min="1" max="500" value="100" />
+	</div>
+	<div>
+		<button type="submit" class="btn btn-primary">Apply</button>
+	</div>
+	<div id="status" style="margin-left:10px;"></div>
+	<div style="margin-left:auto;">
+		<a id="exportLink" class="btn">Export JSON</a>
+	</div>
+</form>
+
+<table class="table" id="results">
+	<thead>
+		<tr>
+			<th>Time</th><th>User</th><th>BMC</th><th>Action</th><th>Method</th><th>Path</th><th>Status</th><th>Dur (ms)</th>
+		</tr>
+	</thead>
+	<tbody></tbody>
+ </table>
+
+<script>
+function buildQuery() {
+	const params = new URLSearchParams();
+	["bmc","user","action","method","path","status_min","status_max","since","until","limit"].forEach(id => {
+		const v = document.getElementById(id).value.trim();
+		if (v) params.set(id, v);
+	});
+	return params.toString();
+}
+async function fetchAudits() {
+	const qs = buildQuery();
+	const status = document.getElementById('status');
+	status.textContent = 'Loading...';
+	const res = await fetch('/api/audit' + (qs ? ('?' + qs) : ''));
+	if (!res.ok) {
+		status.textContent = 'Error ' + res.status;
+		return;
+	}
+	const data = await res.json();
+	status.textContent = 'Loaded ' + data.length + ' rows';
+	const tbody = document.querySelector('#results tbody');
+	tbody.innerHTML = '';
+		data.forEach(r => {
+			const tr = document.createElement('tr');
+			const t = (r.created_at || '').replace('T',' ').replace('Z','');
+			const user = r.user_name || '';
+			const bmc = r.bmc_name || '';
+			const method = r.method || '';
+			const path = r.path || '';
+			tr.innerHTML = '<td>' + t + '</td>' +
+										 '<td>' + user + '</td>' +
+										 '<td>' + bmc + '</td>' +
+										 '<td>' + r.action + '</td>' +
+										 '<td>' + method + '</td>' +
+										 '<td>' + path + '</td>' +
+										 '<td>' + r.status_code + '</td>' +
+										 '<td>' + r.duration_ms + '</td>';
+			tbody.appendChild(tr);
+		});
+	const exportLink = document.getElementById('exportLink');
+	exportLink.href = '/api/audit' + (qs ? ('?' + qs) : '');
+}
+document.getElementById('filters').addEventListener('submit', (e) => { e.preventDefault(); fetchAudits(); });
+fetchAudits();
+</script>
+{{end}}`
+
+	tmpl := template.Must(h.templates.Clone())
+	template.Must(tmpl.Parse(page))
+	if err := tmpl.ExecuteTemplate(w, "base", data); err != nil {
+		slog.Error("Failed to execute template", "error", err)
+		http.Error(w, "Template Error", http.StatusInternalServerError)
+	}
 }
