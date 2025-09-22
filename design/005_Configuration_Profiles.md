@@ -97,5 +97,6 @@ Note: If write/apply is split into its own design (006), this section becomes �
 1. Persistence + CRUD APIs (profiles, versions, entries, assignments) — database layer [done]; web/API endpoints [done]; API tests (CRUD, versions, assignments) [done].
 2. Preview/diff endpoint using discovered settings (004) — [done].
 3. Import/export JSON — [done].
-4. Snapshot creation from a BMC (004) — [pending].
-5. Apply planning (optional here; may move to 006 apply design).
+4. Snapshot creation from a BMC (004) — [done].
+5. Diff endpoint to compare two profile versions — [done].
+6. Apply planning (optional here; may move to 006 apply design).

@@ -82,6 +82,7 @@ func New(db *database.DB) http.Handler {
 	mux.Handle("/api/profiles", h.requireAuth(http.HandlerFunc(h.handleProfiles)))
 	// Specific import/export/snapshot endpoints
 	mux.Handle("/api/profiles/import", h.requireAuth(http.HandlerFunc(h.handleProfilesImport)))
+	mux.Handle("/api/profiles/diff", h.requireAuth(http.HandlerFunc(h.handleProfilesDiff)))
 	mux.Handle("/api/profiles/snapshot", h.requireAuth(http.HandlerFunc(h.handleProfilesSnapshot)))
 	mux.Handle("/api/profiles/", h.requireAuth(http.HandlerFunc(h.handleProfilesRestful)))
 
@@ -1490,6 +1491,113 @@ func (h *Handler) handleProfilesSnapshot(w http.ResponseWriter, r *http.Request)
 
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(map[string]any{"profile": prof, "version": v})
+}
+
+// handleProfilesDiff compares two profile versions
+// POST /api/profiles/diff
+// Body: { "left": {"profile_id":"","version":N}, "right": {"profile_id":"","version":N} }
+func (h *Handler) handleProfilesDiff(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	var req struct {
+		Left struct {
+			ProfileID string `json:"profile_id"`
+			Version   int    `json:"version"`
+		} `json:"left"`
+		Right struct {
+			ProfileID string `json:"profile_id"`
+			Version   int    `json:"version"`
+		} `json:"right"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": "invalid payload"})
+		return
+	}
+	if req.Left.ProfileID == "" || req.Right.ProfileID == "" || req.Left.Version <= 0 || req.Right.Version <= 0 {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": "profile_id and version required for both sides"})
+		return
+	}
+	// Load both versions
+	lv, err := h.db.GetProfileVersion(r.Context(), req.Left.ProfileID, req.Left.Version)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+	if lv == nil {
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(map[string]string{"error": "left version not found"})
+		return
+	}
+	rv, err := h.db.GetProfileVersion(r.Context(), req.Right.ProfileID, req.Right.Version)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+	if rv == nil {
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(map[string]string{"error": "right version not found"})
+		return
+	}
+
+	key := func(e models.ProfileEntry) string { return e.ResourcePath + "|" + e.Attribute }
+	lmap := make(map[string]models.ProfileEntry)
+	rmap := make(map[string]models.ProfileEntry)
+	for _, e := range lv.Entries {
+		lmap[key(e)] = e
+	}
+	for _, e := range rv.Entries {
+		rmap[key(e)] = e
+	}
+
+	type diffEntry struct {
+		ResourcePath string      `json:"resource_path"`
+		Attribute    string      `json:"attribute"`
+		Left         interface{} `json:"left,omitempty"`
+		Right        interface{} `json:"right,omitempty"`
+	}
+	resp := struct {
+		Added   []diffEntry `json:"added"`
+		Removed []diffEntry `json:"removed"`
+		Changed []diffEntry `json:"changed"`
+		Summary struct {
+			LeftCount  int `json:"left_count"`
+			RightCount int `json:"right_count"`
+			Added      int `json:"added"`
+			Removed    int `json:"removed"`
+			Changed    int `json:"changed"`
+		} `json:"summary"`
+	}{}
+
+	// Added/Changed
+	for k, re := range rmap {
+		if le, ok := lmap[k]; !ok {
+			resp.Added = append(resp.Added, diffEntry{ResourcePath: re.ResourcePath, Attribute: re.Attribute, Right: re.DesiredValue})
+		} else {
+			if !reflect.DeepEqual(le.DesiredValue, re.DesiredValue) {
+				resp.Changed = append(resp.Changed, diffEntry{ResourcePath: re.ResourcePath, Attribute: re.Attribute, Left: le.DesiredValue, Right: re.DesiredValue})
+			}
+		}
+	}
+	// Removed
+	for k, le := range lmap {
+		if _, ok := rmap[k]; !ok {
+			resp.Removed = append(resp.Removed, diffEntry{ResourcePath: le.ResourcePath, Attribute: le.Attribute, Left: le.DesiredValue})
+		}
+	}
+
+	resp.Summary.LeftCount = len(lmap)
+	resp.Summary.RightCount = len(rmap)
+	resp.Summary.Added = len(resp.Added)
+	resp.Summary.Removed = len(resp.Removed)
+	resp.Summary.Changed = len(resp.Changed)
+	json.NewEncoder(w).Encode(resp)
 }
 
 // handleProfilesImport handles POST /api/profiles/import to ingest a profile JSON

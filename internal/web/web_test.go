@@ -1329,3 +1329,90 @@ func TestProfilesSnapshotAPI(t *testing.T) {
 		t.Fatalf("snapshot entries missing expected keys")
 	}
 }
+
+func TestProfilesDiffAPI(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+	db, err := database.New(dbPath)
+	if err != nil {
+		t.Fatalf("db new: %v", err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+	if err := db.Migrate(ctx); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	// Admin user
+	passwordHash, _ := pkgAuth.HashPassword("admin")
+	admin := &models.User{ID: "u1", Username: "admin", PasswordHash: passwordHash, Role: models.RoleAdmin, Enabled: true}
+	if err := db.CreateUser(ctx, admin); err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	handler := New(db)
+
+	// Create a profile and two versions with differing entries
+	p := models.Profile{Name: "diff-p"}
+	body, _ := json.Marshal(p)
+	req := httptest.NewRequest(http.MethodPost, "/api/profiles", bytes.NewReader(body))
+	req.SetBasicAuth("admin", "admin")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create profile: %d %s", rec.Code, rec.Body.String())
+	}
+	var created models.Profile
+	_ = json.Unmarshal(rec.Body.Bytes(), &created)
+
+	v1 := models.ProfileVersion{Notes: "v1", Entries: []models.ProfileEntry{
+		{ResourcePath: "/redfish/v1/Managers/M1/NetworkProtocol", Attribute: "HTTPS.Port", DesiredValue: 443},
+		{ResourcePath: "/redfish/v1/Systems/S1/Bios", Attribute: "Attributes.LogicalProc", DesiredValue: true},
+	}}
+	body, _ = json.Marshal(v1)
+	req = httptest.NewRequest(http.MethodPost, "/api/profiles/"+created.ID+"/versions", bytes.NewReader(body))
+	req.SetBasicAuth("admin", "admin")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create v1: %d %s", rec.Code, rec.Body.String())
+	}
+
+	v2 := models.ProfileVersion{Notes: "v2", Entries: []models.ProfileEntry{
+		{ResourcePath: "/redfish/v1/Managers/M1/NetworkProtocol", Attribute: "HTTPS.Port", DesiredValue: 444},     // changed
+		{ResourcePath: "/redfish/v1/Managers/M1/NetworkProtocol", Attribute: "HTTPS.Enabled", DesiredValue: true}, // added
+		// LogicalProc removed
+	}}
+	body, _ = json.Marshal(v2)
+	req = httptest.NewRequest(http.MethodPost, "/api/profiles/"+created.ID+"/versions", bytes.NewReader(body))
+	req.SetBasicAuth("admin", "admin")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create v2: %d %s", rec.Code, rec.Body.String())
+	}
+
+	// Diff v1 -> v2
+	diffReq := map[string]any{"left": map[string]any{"profile_id": created.ID, "version": 1}, "right": map[string]any{"profile_id": created.ID, "version": 2}}
+	body, _ = json.Marshal(diffReq)
+	req = httptest.NewRequest(http.MethodPost, "/api/profiles/diff", bytes.NewReader(body))
+	req.SetBasicAuth("admin", "admin")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("diff expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var diff struct {
+		Added   []map[string]any
+		Removed []map[string]any
+		Changed []map[string]any
+		Summary struct{ Added, Removed, Changed int }
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &diff); err != nil {
+		t.Fatalf("decode diff: %v", err)
+	}
+	if diff.Summary.Added != 1 || diff.Summary.Removed != 1 || diff.Summary.Changed != 1 {
+		t.Fatalf("unexpected diff summary: %+v", diff.Summary)
+	}
+}
