@@ -168,6 +168,10 @@ type SettingsResponse struct {
 	BMCName     string              `json:"bmc_name"`
 	Resource    string              `json:"resource,omitempty"`
 	Descriptors []SettingDescriptor `json:"descriptors"`
+	// Pagination metadata (007)
+	Page     int `json:"page,omitempty"`
+	PageSize int `json:"page_size,omitempty"`
+	Total    int `json:"total,omitempty"`
 }
 
 // SettingValue stores current value snapshot for a descriptor
