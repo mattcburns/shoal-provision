@@ -17,6 +17,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -234,8 +235,14 @@ func (h *Handler) handleBMCProxy(w http.ResponseWriter, r *http.Request, path st
 		return
 	}
 
+	// Ensure authenticated user is present in context so audits can include it
+	user, _ := h.auth.AuthenticateRequest(r)
+	ctx := r.Context()
+	if user != nil {
+		ctx = context.WithValue(ctx, "user", user)
+	}
 	// Proxy request to BMC
-	resp, err := h.bmcSvc.ProxyRequest(r.Context(), bmcName, bmcPath, r)
+	resp, err := h.bmcSvc.ProxyRequest(ctx, bmcName, bmcPath, r)
 	if err != nil {
 		slog.Error("Failed to proxy request to BMC", "bmc", bmcName, "path", bmcPath, "error", err)
 		h.writeErrorResponse(w, http.StatusBadGateway, "Base.1.0.InternalError", fmt.Sprintf("Failed to communicate with BMC: %v", err))

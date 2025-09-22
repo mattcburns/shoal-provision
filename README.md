@@ -575,6 +575,15 @@ go test -race ./...
 
 Every build goes through automated quality gates:
 
+## Audit Logging
+
+- Admin-only JSON endpoints expose recent audit records of proxied Redfish operations:
+  - `GET /api/audit?bmc={name}&limit={N}` — List recent audits (default limit 100; max 500). Request/response bodies are truncated in list results.
+  - `GET /api/audit/{id}` — Full audit record by ID.
+- Each audit captures: timestamp, user (if known), BMC name, HTTP method/path, status code, duration, and request/response bodies.
+- Sensitive values in JSON payloads (e.g., Password, tokens) are redacted before storage; very large bodies are truncated.
+- Access is restricted to admin role via existing middleware. Consider external log shipping or periodic pruning for long-term retention.
+
 ```bash
 # Full validation (all quality gates)
 python3 build.py validate

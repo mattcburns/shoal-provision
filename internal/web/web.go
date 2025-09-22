@@ -94,6 +94,10 @@ func New(db *database.DB) http.Handler {
 	mux.Handle("/profile", h.requireAuth(http.HandlerFunc(h.handleProfile)))
 	mux.Handle("/profile/password", h.requireAuth(http.HandlerFunc(h.handleChangePassword)))
 
+	// Audit API (admin only)
+	mux.Handle("/api/audit", h.requireAdmin(http.HandlerFunc(h.handleAudit)))
+	mux.Handle("/api/audit/", h.requireAdmin(http.HandlerFunc(h.handleAuditRestful)))
+
 	return mux
 }
 
@@ -2130,4 +2134,54 @@ func (h *Handler) addUserToPageData(r *http.Request, data *PageData) {
 		data.User = user
 		data.UserRole = auth.GetRoleDisplayName(user.Role)
 	}
+}
+
+// Audit API handlers
+// GET /api/audit?bmc=NAME&limit=N
+func (h *Handler) handleAudit(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	bmcName := r.URL.Query().Get("bmc")
+	limit := 100
+	if ls := r.URL.Query().Get("limit"); ls != "" {
+		if n, err := strconv.Atoi(ls); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	recs, err := h.db.ListAudits(r.Context(), bmcName, limit)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+	json.NewEncoder(w).Encode(recs)
+}
+
+// GET /api/audit/{id}
+func (h *Handler) handleAuditRestful(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	if len(parts) != 3 || parts[0] != "api" || parts[1] != "audit" {
+		http.NotFound(w, r)
+		return
+	}
+	id := parts[2]
+	rec, err := h.db.GetAudit(r.Context(), id)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+	if rec == nil {
+		http.NotFound(w, r)
+		return
+	}
+	json.NewEncoder(w).Encode(rec)
 }

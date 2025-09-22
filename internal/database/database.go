@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"shoal/pkg/crypto"
@@ -200,6 +201,24 @@ func (db *DB) Migrate(ctx context.Context) error {
 			FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE CASCADE
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_profile_assignments_profile ON profile_assignments(profile_id, version)`,
+		// Auditing (006)
+		`CREATE TABLE IF NOT EXISTS audits (
+			id TEXT PRIMARY KEY,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			user_id TEXT,
+			user_name TEXT,
+			bmc_name TEXT,
+			action TEXT NOT NULL,
+			method TEXT,
+			path TEXT,
+			status_code INTEGER,
+			duration_ms INTEGER,
+			request_body TEXT,
+			response_body TEXT,
+			error TEXT
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_audits_created_at ON audits(created_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_audits_bmc ON audits(bmc_name)`,
 	}
 
 	tx, err := db.conn.BeginTx(ctx, nil)
@@ -1245,4 +1264,76 @@ func (db *DB) DeleteProfileAssignment(ctx context.Context, id string) error {
 		return fmt.Errorf("delete assignment: %w", err)
 	}
 	return nil
+}
+
+// Auditing operations (006)
+
+// CreateAudit inserts a new audit record
+func (db *DB) CreateAudit(ctx context.Context, a *models.AuditRecord) error {
+	if a.ID == "" {
+		a.ID = fmt.Sprintf("au_%d", time.Now().UnixNano())
+	}
+	q := `INSERT INTO audits (id, created_at, user_id, user_name, bmc_name, action, method, path, status_code, duration_ms, request_body, response_body, error)
+		  VALUES (?, CURRENT_TIMESTAMP, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	_, err := db.conn.ExecContext(ctx, q, a.ID, a.UserID, a.UserName, a.BMCName, a.Action, a.Method, a.Path, a.StatusCode, a.DurationMS, a.RequestBody, a.ResponseBody, a.Error)
+	if err != nil {
+		return fmt.Errorf("create audit: %w", err)
+	}
+	a.CreatedAt = time.Now()
+	return nil
+}
+
+// GetAudit retrieves a single audit by id
+func (db *DB) GetAudit(ctx context.Context, id string) (*models.AuditRecord, error) {
+	row := db.conn.QueryRowContext(ctx, `SELECT id, created_at, user_id, user_name, bmc_name, action, method, path, status_code, duration_ms, request_body, response_body, error FROM audits WHERE id = ?`, id)
+	var a models.AuditRecord
+	var created string
+	if err := row.Scan(&a.ID, &created, &a.UserID, &a.UserName, &a.BMCName, &a.Action, &a.Method, &a.Path, &a.StatusCode, &a.DurationMS, &a.RequestBody, &a.ResponseBody, &a.Error); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get audit: %w", err)
+	}
+	if t, err := time.Parse(time.RFC3339Nano, created); err == nil {
+		a.CreatedAt = t
+	} else {
+		// Fallback: try common SQLite format
+		if tt, err2 := time.Parse("2006-01-02 15:04:05", created); err2 == nil {
+			a.CreatedAt = tt
+		}
+	}
+	return &a, nil
+}
+
+// ListAudits returns recent audit records with optional filters
+func (db *DB) ListAudits(ctx context.Context, bmcName string, limit int) ([]models.AuditRecord, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	var rows *sql.Rows
+	var err error
+	if strings.TrimSpace(bmcName) != "" {
+		rows, err = db.conn.QueryContext(ctx, `SELECT id, created_at, user_id, user_name, bmc_name, action, method, path, status_code, duration_ms, substr(request_body,1,4096), substr(response_body,1,4096), error FROM audits WHERE bmc_name = ? ORDER BY created_at DESC LIMIT ?`, bmcName, limit)
+	} else {
+		rows, err = db.conn.QueryContext(ctx, `SELECT id, created_at, user_id, user_name, bmc_name, action, method, path, status_code, duration_ms, substr(request_body,1,4096), substr(response_body,1,4096), error FROM audits ORDER BY created_at DESC LIMIT ?`, limit)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("list audits: %w", err)
+	}
+	defer rows.Close()
+	var out []models.AuditRecord
+	for rows.Next() {
+		var a models.AuditRecord
+		var created string
+		if err := rows.Scan(&a.ID, &created, &a.UserID, &a.UserName, &a.BMCName, &a.Action, &a.Method, &a.Path, &a.StatusCode, &a.DurationMS, &a.RequestBody, &a.ResponseBody, &a.Error); err != nil {
+			return nil, fmt.Errorf("scan audit: %w", err)
+		}
+		if t, err := time.Parse(time.RFC3339Nano, created); err == nil {
+			a.CreatedAt = t
+		} else if tt, err2 := time.Parse("2006-01-02 15:04:05", created); err2 == nil {
+			a.CreatedAt = tt
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
 }

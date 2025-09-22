@@ -1416,3 +1416,78 @@ func TestProfilesDiffAPI(t *testing.T) {
 		t.Fatalf("unexpected diff summary: %+v", diff.Summary)
 	}
 }
+
+func TestAuditEndpoints(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+	db, err := database.New(dbPath)
+	if err != nil {
+		t.Fatalf("db new: %v", err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+	if err := db.Migrate(ctx); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	// Create users: admin and operator
+	passAdmin, _ := pkgAuth.HashPassword("admin")
+	admin := &models.User{ID: "u1", Username: "admin", PasswordHash: passAdmin, Role: models.RoleAdmin, Enabled: true}
+	if err := db.CreateUser(ctx, admin); err != nil {
+		t.Fatalf("create admin: %v", err)
+	}
+	passOp, _ := pkgAuth.HashPassword("op")
+	operator := &models.User{ID: "u2", Username: "op", PasswordHash: passOp, Role: models.RoleOperator, Enabled: true}
+	if err := db.CreateUser(ctx, operator); err != nil {
+		t.Fatalf("create operator: %v", err)
+	}
+
+	h := New(db)
+
+	// Seed an audit record directly
+	a := &models.AuditRecord{UserID: admin.ID, UserName: admin.Username, BMCName: "b1", Action: "proxy", Method: http.MethodGet, Path: "/redfish/v1/Systems", StatusCode: 200, DurationMS: 5, RequestBody: "{}", ResponseBody: "{}"}
+	if err := db.CreateAudit(ctx, a); err != nil {
+		t.Fatalf("create audit: %v", err)
+	}
+
+	// Admin can list audits
+	req := httptest.NewRequest(http.MethodGet, "/api/audit?bmc=b1&limit=10", nil)
+	req.SetBasicAuth("admin", "admin")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list audits expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.Contains(ct, "application/json") {
+		t.Fatalf("expected json, got %s", ct)
+	}
+	if !strings.Contains(rec.Body.String(), a.ID) {
+		t.Fatalf("expected response to contain audit id")
+	}
+
+	// Admin can get detail
+	req = httptest.NewRequest(http.MethodGet, "/api/audit/"+a.ID, nil)
+	req.SetBasicAuth("admin", "admin")
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("audit detail expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var det models.AuditRecord
+	if err := json.Unmarshal(rec.Body.Bytes(), &det); err != nil {
+		t.Fatalf("decode detail: %v", err)
+	}
+	if det.ID != a.ID || det.Path != a.Path {
+		t.Fatalf("unexpected detail: %+v", det)
+	}
+
+	// Non-admin forbidden
+	req = httptest.NewRequest(http.MethodGet, "/api/audit", nil)
+	req.SetBasicAuth("op", "op")
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("operator should be forbidden, got %d", rec.Code)
+	}
+}
