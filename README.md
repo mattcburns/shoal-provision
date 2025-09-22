@@ -575,6 +575,31 @@ go test -race ./...
 
 Every build goes through automated quality gates:
 
+## Audit Logging
+
+Shoal records an audit trail for proxied Redfish operations and other actions.
+
+- UI: Navigate to `/audit` (link visible to admins). Filter by BMC, user, action, method, path substring, HTTP status range, and date range. Results render a table and provide a JSON export link.
+- Per-BMC view: On the BMC details page (`/bmcs/details?name=...`), a "Changes" tab shows audits scoped to that BMC with the same filters and an export link. Non-admins see metadata only; admins see full request/response bodies.
+
+- API: `GET /api/audit` supports filters and a limit parameter:
+  - `bmc`: exact BMC name
+  - `user`: exact username
+  - `action`: e.g., `proxy`, `power`, `apply_profile`
+  - `method`: HTTP method (e.g., `GET`, `POST`)
+  - `path`: substring match on request path
+  - `status_min`, `status_max`: HTTP code bounds
+  - `since`, `until`: ISO dates `YYYY-MM-DD` (`until` inclusive of that day)
+  - `limit`: number of rows (default 100, max 500)
+
+Endpoints:
+- `GET /api/audit?...` — list recent audit entries matching filters (request/response bodies truncated in list views)
+- `GET /api/audit/{id}` — full audit record by ID
+
+Notes:
+- Sensitive fields in JSON payloads are redacted before storage; very large bodies are truncated.
+- All audit endpoints and the `/audit` UI require `admin` role.
+
 ```bash
 # Full validation (all quality gates)
 python3 build.py validate

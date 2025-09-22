@@ -221,3 +221,20 @@ type ProfileAssignment struct {
 	TargetValue string    `json:"target_value" db:"target_value"` // e.g., BMC name or group name
 	CreatedAt   time.Time `json:"created_at" db:"created_at"`
 }
+
+// AuditRecord captures an auditable operation performed by the aggregator
+type AuditRecord struct {
+	ID           string    `json:"id" db:"id"`
+	CreatedAt    time.Time `json:"created_at" db:"created_at"`
+	UserID       string    `json:"user_id,omitempty" db:"user_id"`
+	UserName     string    `json:"user_name,omitempty" db:"user_name"`
+	BMCName      string    `json:"bmc_name,omitempty" db:"bmc_name"`
+	Action       string    `json:"action" db:"action"`           // e.g., "proxy", "power", "apply_profile"
+	Method       string    `json:"method,omitempty" db:"method"` // HTTP verb for proxy operations
+	Path         string    `json:"path,omitempty" db:"path"`
+	StatusCode   int       `json:"status_code" db:"status_code"`
+	DurationMS   int64     `json:"duration_ms" db:"duration_ms"`
+	RequestBody  string    `json:"request_body,omitempty" db:"request_body"`
+	ResponseBody string    `json:"response_body,omitempty" db:"response_body"`
+	Error        string    `json:"error,omitempty" db:"error"`
+}
