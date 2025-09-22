@@ -994,3 +994,100 @@ func TestProfilesAPI(t *testing.T) {
 		t.Fatalf("delete profile expected 204, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
+
+func TestProfilesPreviewAPI(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+	db, err := database.New(dbPath)
+	if err != nil { t.Fatalf("db new: %v", err) }
+	defer db.Close()
+
+	ctx := context.Background()
+	if err := db.Migrate(ctx); err != nil { t.Fatalf("migrate: %v", err) }
+
+	// Admin user
+	passwordHash, _ := pkgAuth.HashPassword("admin")
+	admin := &models.User{ID: "u1", Username: "admin", PasswordHash: passwordHash, Role: models.RoleAdmin, Enabled: true}
+	if err := db.CreateUser(ctx, admin); err != nil { t.Fatalf("create user: %v", err) }
+
+	// Mock BMC redfish server that exposes settings endpoints used by discovery
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		username, password, ok := r.BasicAuth()
+		if !ok || username != "admin" || password != "password" { w.WriteHeader(http.StatusUnauthorized); return }
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/redfish/v1/Systems":
+			json.NewEncoder(w).Encode(map[string]any{"Members": []map[string]string{{"@odata.id": "/redfish/v1/Systems/S1"}}})
+		case "/redfish/v1/Systems/S1/Bios":
+			json.NewEncoder(w).Encode(map[string]any{
+				"@Redfish.Settings": map[string]any{"SettingsObject": map[string]any{"@odata.id": "/redfish/v1/Systems/S1/Bios/Settings"}},
+				"Attributes":        map[string]any{"LogicalProc": true},
+			})
+		case "/redfish/v1/Managers":
+			json.NewEncoder(w).Encode(map[string]any{"Members": []map[string]string{{"@odata.id": "/redfish/v1/Managers/M1"}}})
+		case "/redfish/v1/Managers/M1/NetworkProtocol":
+			json.NewEncoder(w).Encode(map[string]any{
+				"@Redfish.Settings": map[string]any{"SettingsObject": map[string]any{"@odata.id": "/redfish/v1/Managers/M1/NetworkProtocol/Settings"}},
+				"HTTPS":             map[string]any{"Port": float64(443)},
+			})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	// Seed BMC with credentials matching server basic auth
+	b := &models.BMC{Name: "b1", Address: server.URL, Username: "admin", Password: "password", Enabled: true}
+	if err := db.CreateBMC(ctx, b); err != nil { t.Fatalf("create bmc: %v", err) }
+
+	handler := New(db)
+
+	// Discover settings (list endpoint) to persist current value snapshot
+	req := httptest.NewRequest(http.MethodGet, "/api/bmcs/b1/settings", nil)
+	req.SetBasicAuth("admin", "admin")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK { t.Fatalf("settings list expected 200, got %d: %s", rec.Code, rec.Body.String()) }
+
+	// Create a profile whose desired value differs from current (HTTPS.Port currently 443, set 444)
+	p := models.Profile{Name: "baseline"}
+	body, _ := json.Marshal(p)
+	req = httptest.NewRequest(http.MethodPost, "/api/profiles", bytes.NewReader(body))
+	req.SetBasicAuth("admin", "admin")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated { t.Fatalf("create profile: %d %s", rec.Code, rec.Body.String()) }
+	var created models.Profile
+	_ = json.Unmarshal(rec.Body.Bytes(), &created)
+
+	// Create version with an entry that will produce a change and another that is same
+	v := models.ProfileVersion{Notes: "v1",
+		Entries: []models.ProfileEntry{
+			{ResourcePath: "/redfish/v1/Managers/M1/NetworkProtocol", Attribute: "HTTPS.Port", DesiredValue: 444}, // change
+			{ResourcePath: "/redfish/v1/Systems/S1/Bios", Attribute: "Attributes.LogicalProc", DesiredValue: true}, // same
+		},
+	}
+	body, _ = json.Marshal(v)
+	req = httptest.NewRequest(http.MethodPost, "/api/profiles/"+created.ID+"/versions", bytes.NewReader(body))
+	req.SetBasicAuth("admin", "admin")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated { t.Fatalf("create version: %d %s", rec.Code, rec.Body.String()) }
+
+	// Preview
+	req = httptest.NewRequest(http.MethodGet, "/api/profiles/"+created.ID+"/preview?bmc=b1", nil)
+	req.SetBasicAuth("admin", "admin")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK { t.Fatalf("preview expected 200, got %d: %s", rec.Code, rec.Body.String()) }
+	var preview struct {
+		Changes   []map[string]any `json:"changes"`
+		Same      []map[string]any `json:"same"`
+		Unmatched []map[string]any `json:"unmatched"`
+		Summary   struct{ Total, Changes, Same, Unmatched int }
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &preview); err != nil { t.Fatalf("decode preview: %v", err) }
+	if preview.Summary.Total != 2 { t.Fatalf("expected total 2, got %d", preview.Summary.Total) }
+	if preview.Summary.Changes != 1 || len(preview.Changes) != 1 { t.Fatalf("expected 1 change, got %+v", preview.Summary) }
+	if preview.Summary.Same != 1 || len(preview.Same) != 1 { t.Fatalf("expected 1 same, got %+v", preview.Summary) }
+}

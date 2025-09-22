@@ -23,6 +23,7 @@ import (
 	"html/template"
 	"log/slog"
 	"net/http"
+    "reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -1431,6 +1432,105 @@ func (h *Handler) handleProfilesRestful(w http.ResponseWriter, r *http.Request) 
 
 	// Subresources: versions, assignments
 	switch parts[3] {
+	case "preview":
+		if r.Method != http.MethodGet { http.Error(w, "Method not allowed", http.StatusMethodNotAllowed); return }
+		bmcName := r.URL.Query().Get("bmc")
+		if strings.TrimSpace(bmcName) == "" { w.WriteHeader(http.StatusBadRequest); json.NewEncoder(w).Encode(map[string]string{"error": "bmc is required"}); return }
+		// Determine version: from query ?version=, otherwise latest
+		var verNum int
+		if vq := r.URL.Query().Get("version"); vq != "" {
+			n, err := strconv.Atoi(vq)
+			if err != nil || n <= 0 { w.WriteHeader(http.StatusBadRequest); json.NewEncoder(w).Encode(map[string]string{"error": "invalid version"}); return }
+			verNum = n
+		} else {
+			vs, err := h.db.GetProfileVersions(r.Context(), id)
+			if err != nil { w.WriteHeader(http.StatusInternalServerError); json.NewEncoder(w).Encode(map[string]string{"error": err.Error()}); return }
+			for _, vv := range vs { if vv.Version > verNum { verNum = vv.Version } }
+			if verNum == 0 { w.WriteHeader(http.StatusNotFound); json.NewEncoder(w).Encode(map[string]string{"error": "no versions for profile"}); return }
+		}
+
+		// Load profile version with entries
+		pv, err := h.db.GetProfileVersion(r.Context(), id, verNum)
+		if err != nil { w.WriteHeader(http.StatusInternalServerError); json.NewEncoder(w).Encode(map[string]string{"error": err.Error()}); return }
+		if pv == nil { http.NotFound(w, r); return }
+
+		// Ensure current settings are available; trigger discovery
+		ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+		defer cancel()
+		if _, err := h.bmcSvc.DiscoverSettings(ctx, bmcName, ""); err != nil {
+			slog.Warn("Discovery failed during preview", "bmc", bmcName, "error", err)
+		}
+		descs, err := h.db.GetSettingsDescriptors(ctx, bmcName, "")
+		if err != nil { w.WriteHeader(http.StatusInternalServerError); json.NewEncoder(w).Encode(map[string]string{"error": err.Error()}); return }
+		// Build a flattened view of current settings so profile entries can
+		// reference nested keys like "Attributes.LogicalProc" or "HTTPS.Port".
+		cur := make(map[string]interface{})
+		var flatten func(resourcePath, attr string, val interface{})
+		flatten = func(resourcePath, attr string, val interface{}) {
+			// Direct key
+			cur[resourcePath+"|"+attr] = val
+			// Special-case BIOS where values live under Attributes at apply-time
+			if strings.Contains(resourcePath, "/Bios") {
+				cur[resourcePath+"|Attributes."+attr] = val
+			}
+			// Recurse into objects to expose leaf paths via dot notation
+			if m, ok := val.(map[string]interface{}); ok {
+				for k, v := range m {
+					flatten(resourcePath, attr+"."+k, v)
+				}
+			}
+		}
+		for _, d := range descs {
+			flatten(d.ResourcePath, d.Attribute, d.CurrentValue)
+		}
+
+		type change struct {
+			ResourcePath        string      `json:"resource_path"`
+			Attribute           string      `json:"attribute"`
+			Current             interface{} `json:"current"`
+			Desired             interface{} `json:"desired"`
+			ApplyTimePreference string      `json:"apply_time_preference,omitempty"`
+			OEMVendor           string      `json:"oem_vendor,omitempty"`
+		}
+		type previewResp struct {
+			ProfileID string   `json:"profile_id"`
+			Version   int      `json:"version"`
+			BMC       string   `json:"bmc"`
+			Changes   []change `json:"changes"`
+			Same      []change `json:"same"`
+			Unmatched []change `json:"unmatched"`
+			Summary   struct {
+				Total     int `json:"total"`
+				Changes   int `json:"changes"`
+				Same      int `json:"same"`
+				Unmatched int `json:"unmatched"`
+			} `json:"summary"`
+		}
+
+		var resp previewResp
+		resp.ProfileID = id
+		resp.Version = verNum
+		resp.BMC = bmcName
+		for _, e := range pv.Entries {
+			key := e.ResourcePath + "|" + e.Attribute
+			c := change{ResourcePath: e.ResourcePath, Attribute: e.Attribute, Desired: e.DesiredValue, ApplyTimePreference: e.ApplyTimePreference, OEMVendor: e.OEMVendor}
+			if v, ok := cur[key]; ok {
+				c.Current = v
+				if reflect.DeepEqual(v, e.DesiredValue) {
+					resp.Same = append(resp.Same, c)
+				} else {
+					resp.Changes = append(resp.Changes, c)
+				}
+			} else {
+				resp.Unmatched = append(resp.Unmatched, c)
+			}
+		}
+		resp.Summary.Total = len(pv.Entries)
+		resp.Summary.Changes = len(resp.Changes)
+		resp.Summary.Same = len(resp.Same)
+		resp.Summary.Unmatched = len(resp.Unmatched)
+		json.NewEncoder(w).Encode(resp)
+		return
 	case "versions":
 		if len(parts) == 4 {
 			switch r.Method {
