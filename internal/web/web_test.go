@@ -17,6 +17,7 @@
 package web
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -815,5 +816,603 @@ func TestBMCSettingsDetailAPI(t *testing.T) {
 	}
 	if desc.ID != id {
 		t.Fatalf("expected id %s, got %s", id, desc.ID)
+	}
+}
+
+func TestProfilesAPI(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+	db, err := database.New(dbPath)
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+	if err := db.Migrate(ctx); err != nil {
+		t.Fatalf("migration failed: %v", err)
+	}
+
+	// Admin for basic auth
+	passwordHash, _ := pkgAuth.HashPassword("admin")
+	admin := &models.User{ID: "u1", Username: "admin", PasswordHash: passwordHash, Role: models.RoleAdmin, Enabled: true}
+	if err := db.CreateUser(ctx, admin); err != nil {
+		t.Fatalf("failed to create user: %v", err)
+	}
+
+	handler := New(db)
+
+	// Create profile
+	pr := models.Profile{Name: "Baseline", Description: "desc"}
+	body, _ := json.Marshal(pr)
+	req := httptest.NewRequest(http.MethodPost, "/api/profiles", bytes.NewReader(body))
+	req.SetBasicAuth("admin", "admin")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create profile expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var created models.Profile
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode created: %v", err)
+	}
+	if created.ID == "" {
+		t.Fatalf("missing profile id")
+	}
+
+	// List profiles
+	req = httptest.NewRequest(http.MethodGet, "/api/profiles", nil)
+	req.SetBasicAuth("admin", "admin")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list profiles expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var plist []models.Profile
+	if err := json.Unmarshal(rec.Body.Bytes(), &plist); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	if len(plist) != 1 {
+		t.Fatalf("expected 1 profile, got %d", len(plist))
+	}
+
+	// Get profile
+	req = httptest.NewRequest(http.MethodGet, "/api/profiles/"+created.ID, nil)
+	req.SetBasicAuth("admin", "admin")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get profile expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var got models.Profile
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode get: %v", err)
+	}
+	if got.ID != created.ID {
+		t.Fatalf("id mismatch")
+	}
+
+	// Create version
+	v := models.ProfileVersion{Notes: "v1", Entries: []models.ProfileEntry{{ResourcePath: "/redfish/v1/Managers/M1/NetworkProtocol", Attribute: "HTTPS.Port", DesiredValue: 443}}}
+	body, _ = json.Marshal(v)
+	req = httptest.NewRequest(http.MethodPost, "/api/profiles/"+created.ID+"/versions", bytes.NewReader(body))
+	req.SetBasicAuth("admin", "admin")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create version expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var vcreated models.ProfileVersion
+	if err := json.Unmarshal(rec.Body.Bytes(), &vcreated); err != nil {
+		t.Fatalf("decode version: %v", err)
+	}
+	if vcreated.Version != 1 {
+		t.Fatalf("expected version 1, got %d", vcreated.Version)
+	}
+
+	// List versions
+	req = httptest.NewRequest(http.MethodGet, "/api/profiles/"+created.ID+"/versions", nil)
+	req.SetBasicAuth("admin", "admin")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list versions expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var vlist []models.ProfileVersion
+	if err := json.Unmarshal(rec.Body.Bytes(), &vlist); err != nil {
+		t.Fatalf("decode vlist: %v", err)
+	}
+	if len(vlist) != 1 {
+		t.Fatalf("expected 1 version, got %d", len(vlist))
+	}
+
+	// Get version
+	req = httptest.NewRequest(http.MethodGet, "/api/profiles/"+created.ID+"/versions/1", nil)
+	req.SetBasicAuth("admin", "admin")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get version expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var vgot models.ProfileVersion
+	if err := json.Unmarshal(rec.Body.Bytes(), &vgot); err != nil {
+		t.Fatalf("decode vget: %v", err)
+	}
+	if vgot.Version != 1 {
+		t.Fatalf("wrong version")
+	}
+
+	// Create assignment
+	a := models.ProfileAssignment{TargetType: "bmc", TargetValue: "b1", Version: 1}
+	body, _ = json.Marshal(a)
+	req = httptest.NewRequest(http.MethodPost, "/api/profiles/"+created.ID+"/assignments", bytes.NewReader(body))
+	req.SetBasicAuth("admin", "admin")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create assignment expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var acreated models.ProfileAssignment
+	if err := json.Unmarshal(rec.Body.Bytes(), &acreated); err != nil {
+		t.Fatalf("decode assign: %v", err)
+	}
+	if acreated.ID == "" {
+		t.Fatalf("missing assignment id")
+	}
+
+	// List assignments
+	req = httptest.NewRequest(http.MethodGet, "/api/profiles/"+created.ID+"/assignments", nil)
+	req.SetBasicAuth("admin", "admin")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list assignments expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var alist []models.ProfileAssignment
+	if err := json.Unmarshal(rec.Body.Bytes(), &alist); err != nil {
+		t.Fatalf("decode alist: %v", err)
+	}
+	if len(alist) != 1 {
+		t.Fatalf("expected 1 assignment, got %d", len(alist))
+	}
+
+	// Delete assignment
+	req = httptest.NewRequest(http.MethodDelete, "/api/profiles/"+created.ID+"/assignments/"+alist[0].ID, nil)
+	req.SetBasicAuth("admin", "admin")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("delete assignment expected 204, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// Delete profile
+	req = httptest.NewRequest(http.MethodDelete, "/api/profiles/"+created.ID, nil)
+	req.SetBasicAuth("admin", "admin")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("delete profile expected 204, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestProfilesPreviewAPI(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+	db, err := database.New(dbPath)
+	if err != nil {
+		t.Fatalf("db new: %v", err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+	if err := db.Migrate(ctx); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	// Admin user
+	passwordHash, _ := pkgAuth.HashPassword("admin")
+	admin := &models.User{ID: "u1", Username: "admin", PasswordHash: passwordHash, Role: models.RoleAdmin, Enabled: true}
+	if err := db.CreateUser(ctx, admin); err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	// Mock BMC redfish server that exposes settings endpoints used by discovery
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		username, password, ok := r.BasicAuth()
+		if !ok || username != "admin" || password != "password" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/redfish/v1/Systems":
+			json.NewEncoder(w).Encode(map[string]any{"Members": []map[string]string{{"@odata.id": "/redfish/v1/Systems/S1"}}})
+		case "/redfish/v1/Systems/S1/Bios":
+			json.NewEncoder(w).Encode(map[string]any{
+				"@Redfish.Settings": map[string]any{"SettingsObject": map[string]any{"@odata.id": "/redfish/v1/Systems/S1/Bios/Settings"}},
+				"Attributes":        map[string]any{"LogicalProc": true},
+			})
+		case "/redfish/v1/Managers":
+			json.NewEncoder(w).Encode(map[string]any{"Members": []map[string]string{{"@odata.id": "/redfish/v1/Managers/M1"}}})
+		case "/redfish/v1/Managers/M1/NetworkProtocol":
+			json.NewEncoder(w).Encode(map[string]any{
+				"@Redfish.Settings": map[string]any{"SettingsObject": map[string]any{"@odata.id": "/redfish/v1/Managers/M1/NetworkProtocol/Settings"}},
+				"HTTPS":             map[string]any{"Port": float64(443)},
+			})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	// Seed BMC with credentials matching server basic auth
+	b := &models.BMC{Name: "b1", Address: server.URL, Username: "admin", Password: "password", Enabled: true}
+	if err := db.CreateBMC(ctx, b); err != nil {
+		t.Fatalf("create bmc: %v", err)
+	}
+
+	handler := New(db)
+
+	// Discover settings (list endpoint) to persist current value snapshot
+	req := httptest.NewRequest(http.MethodGet, "/api/bmcs/b1/settings", nil)
+	req.SetBasicAuth("admin", "admin")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("settings list expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// Create a profile whose desired value differs from current (HTTPS.Port currently 443, set 444)
+	p := models.Profile{Name: "baseline"}
+	body, _ := json.Marshal(p)
+	req = httptest.NewRequest(http.MethodPost, "/api/profiles", bytes.NewReader(body))
+	req.SetBasicAuth("admin", "admin")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create profile: %d %s", rec.Code, rec.Body.String())
+	}
+	var created models.Profile
+	_ = json.Unmarshal(rec.Body.Bytes(), &created)
+
+	// Create version with an entry that will produce a change and another that is same
+	v := models.ProfileVersion{Notes: "v1",
+		Entries: []models.ProfileEntry{
+			{ResourcePath: "/redfish/v1/Managers/M1/NetworkProtocol", Attribute: "HTTPS.Port", DesiredValue: 444},  // change
+			{ResourcePath: "/redfish/v1/Systems/S1/Bios", Attribute: "Attributes.LogicalProc", DesiredValue: true}, // same
+		},
+	}
+	body, _ = json.Marshal(v)
+	req = httptest.NewRequest(http.MethodPost, "/api/profiles/"+created.ID+"/versions", bytes.NewReader(body))
+	req.SetBasicAuth("admin", "admin")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create version: %d %s", rec.Code, rec.Body.String())
+	}
+
+	// Preview
+	req = httptest.NewRequest(http.MethodGet, "/api/profiles/"+created.ID+"/preview?bmc=b1", nil)
+	req.SetBasicAuth("admin", "admin")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("preview expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var preview struct {
+		Changes   []map[string]any `json:"changes"`
+		Same      []map[string]any `json:"same"`
+		Unmatched []map[string]any `json:"unmatched"`
+		Summary   struct{ Total, Changes, Same, Unmatched int }
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &preview); err != nil {
+		t.Fatalf("decode preview: %v", err)
+	}
+	if preview.Summary.Total != 2 {
+		t.Fatalf("expected total 2, got %d", preview.Summary.Total)
+	}
+	if preview.Summary.Changes != 1 || len(preview.Changes) != 1 {
+		t.Fatalf("expected 1 change, got %+v", preview.Summary)
+	}
+	if preview.Summary.Same != 1 || len(preview.Same) != 1 {
+		t.Fatalf("expected 1 same, got %+v", preview.Summary)
+	}
+}
+
+func TestProfilesImportExportAPI(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+	db, err := database.New(dbPath)
+	if err != nil {
+		t.Fatalf("db new: %v", err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+	if err := db.Migrate(ctx); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	// Admin user
+	passwordHash, _ := pkgAuth.HashPassword("admin")
+	admin := &models.User{ID: "u1", Username: "admin", PasswordHash: passwordHash, Role: models.RoleAdmin, Enabled: true}
+	if err := db.CreateUser(ctx, admin); err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	handler := New(db)
+
+	// Create a profile and a version
+	p := models.Profile{Name: "export-src", Description: "d"}
+	body, _ := json.Marshal(p)
+	req := httptest.NewRequest(http.MethodPost, "/api/profiles", bytes.NewReader(body))
+	req.SetBasicAuth("admin", "admin")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create profile: %d %s", rec.Code, rec.Body.String())
+	}
+	var created models.Profile
+	_ = json.Unmarshal(rec.Body.Bytes(), &created)
+
+	v := models.ProfileVersion{Notes: "v1", Entries: []models.ProfileEntry{{ResourcePath: "/redfish/v1/Managers/M1/NetworkProtocol", Attribute: "HTTPS.Port", DesiredValue: 444}}}
+	body, _ = json.Marshal(v)
+	req = httptest.NewRequest(http.MethodPost, "/api/profiles/"+created.ID+"/versions", bytes.NewReader(body))
+	req.SetBasicAuth("admin", "admin")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create version: %d %s", rec.Code, rec.Body.String())
+	}
+
+	// Export latest
+	req = httptest.NewRequest(http.MethodPost, "/api/profiles/"+created.ID+"/export", bytes.NewReader([]byte(`{}`)))
+	req.SetBasicAuth("admin", "admin")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("export expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var exported struct {
+		Profile  models.Profile
+		Versions []models.ProfileVersion
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &exported); err != nil {
+		t.Fatalf("decode export: %v", err)
+	}
+	if exported.Profile.ID != created.ID || len(exported.Versions) != 1 {
+		t.Fatalf("unexpected export content")
+	}
+
+	// Import as new profile: clear IDs and change name
+	exported.Profile.ID = ""
+	exported.Profile.Name = "import-dest"
+	for i := range exported.Versions {
+		exported.Versions[i].ID = ""
+		exported.Versions[i].ProfileID = ""
+		// keep version numbers
+		for j := range exported.Versions[i].Entries {
+			exported.Versions[i].Entries[j].ID = ""
+			exported.Versions[i].Entries[j].ProfileVersionID = ""
+		}
+	}
+	body, _ = json.Marshal(exported)
+	req = httptest.NewRequest(http.MethodPost, "/api/profiles/import", bytes.NewReader(body))
+	req.SetBasicAuth("admin", "admin")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("import expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// Verify new profile exists
+	req = httptest.NewRequest(http.MethodGet, "/api/profiles", nil)
+	req.SetBasicAuth("admin", "admin")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list expected 200, got %d", rec.Code)
+	}
+	var ps []models.Profile
+	_ = json.Unmarshal(rec.Body.Bytes(), &ps)
+	found := false
+	for _, pp := range ps {
+		if pp.Name == "import-dest" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("imported profile not found")
+	}
+}
+
+func TestProfilesSnapshotAPI(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+	db, err := database.New(dbPath)
+	if err != nil {
+		t.Fatalf("db new: %v", err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+	if err := db.Migrate(ctx); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	// Admin user
+	passwordHash, _ := pkgAuth.HashPassword("admin")
+	admin := &models.User{ID: "u1", Username: "admin", PasswordHash: passwordHash, Role: models.RoleAdmin, Enabled: true}
+	if err := db.CreateUser(ctx, admin); err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	// Mock BMC Redfish server with BIOS and HTTPS.Port
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		username, password, ok := r.BasicAuth()
+		if !ok || username != "admin" || password != "password" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/redfish/v1/Systems":
+			json.NewEncoder(w).Encode(map[string]any{"Members": []map[string]string{{"@odata.id": "/redfish/v1/Systems/S1"}}})
+		case "/redfish/v1/Systems/S1/Bios":
+			json.NewEncoder(w).Encode(map[string]any{
+				"@Redfish.Settings": map[string]any{"SettingsObject": map[string]any{"@odata.id": "/redfish/v1/Systems/S1/Bios/Settings"}},
+				"Attributes":        map[string]any{"LogicalProc": true},
+			})
+		case "/redfish/v1/Managers":
+			json.NewEncoder(w).Encode(map[string]any{"Members": []map[string]string{{"@odata.id": "/redfish/v1/Managers/M1"}}})
+		case "/redfish/v1/Managers/M1/NetworkProtocol":
+			json.NewEncoder(w).Encode(map[string]any{
+				"@Redfish.Settings": map[string]any{"SettingsObject": map[string]any{"@odata.id": "/redfish/v1/Managers/M1/NetworkProtocol/Settings"}},
+				"HTTPS":             map[string]any{"Port": float64(443)},
+			})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	// Seed BMC
+	b := &models.BMC{Name: "b1", Address: server.URL, Username: "admin", Password: "password", Enabled: true}
+	if err := db.CreateBMC(ctx, b); err != nil {
+		t.Fatalf("create bmc: %v", err)
+	}
+
+	handler := New(db)
+
+	// Create profile via snapshot
+	snapReqBody := map[string]any{"name": "snap1", "description": "baseline"}
+	sb, _ := json.Marshal(snapReqBody)
+	req := httptest.NewRequest(http.MethodPost, "/api/profiles/snapshot?bmc=b1", bytes.NewReader(sb))
+	req.SetBasicAuth("admin", "admin")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("snapshot expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var out struct {
+		Profile models.Profile
+		Version models.ProfileVersion
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode snapshot: %v", err)
+	}
+	if out.Profile.ID == "" || out.Version.Version != 1 {
+		t.Fatalf("invalid snapshot result")
+	}
+	if len(out.Version.Entries) == 0 {
+		t.Fatalf("expected entries in snapshot")
+	}
+
+	// Spot-check entries include flattened keys and correct values
+	hasHTTPS := false
+	hasLogical := false
+	for _, e := range out.Version.Entries {
+		if e.ResourcePath == "/redfish/v1/Managers/M1/NetworkProtocol" && e.Attribute == "HTTPS.Port" {
+			if v, ok := e.DesiredValue.(float64); !ok || int(v) != 443 {
+				t.Fatalf("expected HTTPS.Port 443")
+			}
+			hasHTTPS = true
+		}
+		if e.ResourcePath == "/redfish/v1/Systems/S1/Bios" && e.Attribute == "Attributes.LogicalProc" {
+			if vb, ok := e.DesiredValue.(bool); !ok || vb != true {
+				t.Fatalf("expected Attributes.LogicalProc true")
+			}
+			hasLogical = true
+		}
+	}
+	if !hasHTTPS || !hasLogical {
+		t.Fatalf("snapshot entries missing expected keys")
+	}
+}
+
+func TestProfilesDiffAPI(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+	db, err := database.New(dbPath)
+	if err != nil {
+		t.Fatalf("db new: %v", err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+	if err := db.Migrate(ctx); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	// Admin user
+	passwordHash, _ := pkgAuth.HashPassword("admin")
+	admin := &models.User{ID: "u1", Username: "admin", PasswordHash: passwordHash, Role: models.RoleAdmin, Enabled: true}
+	if err := db.CreateUser(ctx, admin); err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	handler := New(db)
+
+	// Create a profile and two versions with differing entries
+	p := models.Profile{Name: "diff-p"}
+	body, _ := json.Marshal(p)
+	req := httptest.NewRequest(http.MethodPost, "/api/profiles", bytes.NewReader(body))
+	req.SetBasicAuth("admin", "admin")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create profile: %d %s", rec.Code, rec.Body.String())
+	}
+	var created models.Profile
+	_ = json.Unmarshal(rec.Body.Bytes(), &created)
+
+	v1 := models.ProfileVersion{Notes: "v1", Entries: []models.ProfileEntry{
+		{ResourcePath: "/redfish/v1/Managers/M1/NetworkProtocol", Attribute: "HTTPS.Port", DesiredValue: 443},
+		{ResourcePath: "/redfish/v1/Systems/S1/Bios", Attribute: "Attributes.LogicalProc", DesiredValue: true},
+	}}
+	body, _ = json.Marshal(v1)
+	req = httptest.NewRequest(http.MethodPost, "/api/profiles/"+created.ID+"/versions", bytes.NewReader(body))
+	req.SetBasicAuth("admin", "admin")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create v1: %d %s", rec.Code, rec.Body.String())
+	}
+
+	v2 := models.ProfileVersion{Notes: "v2", Entries: []models.ProfileEntry{
+		{ResourcePath: "/redfish/v1/Managers/M1/NetworkProtocol", Attribute: "HTTPS.Port", DesiredValue: 444},     // changed
+		{ResourcePath: "/redfish/v1/Managers/M1/NetworkProtocol", Attribute: "HTTPS.Enabled", DesiredValue: true}, // added
+		// LogicalProc removed
+	}}
+	body, _ = json.Marshal(v2)
+	req = httptest.NewRequest(http.MethodPost, "/api/profiles/"+created.ID+"/versions", bytes.NewReader(body))
+	req.SetBasicAuth("admin", "admin")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create v2: %d %s", rec.Code, rec.Body.String())
+	}
+
+	// Diff v1 -> v2
+	diffReq := map[string]any{"left": map[string]any{"profile_id": created.ID, "version": 1}, "right": map[string]any{"profile_id": created.ID, "version": 2}}
+	body, _ = json.Marshal(diffReq)
+	req = httptest.NewRequest(http.MethodPost, "/api/profiles/diff", bytes.NewReader(body))
+	req.SetBasicAuth("admin", "admin")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("diff expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var diff struct {
+		Added   []map[string]any
+		Removed []map[string]any
+		Changed []map[string]any
+		Summary struct{ Added, Removed, Changed int }
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &diff); err != nil {
+		t.Fatalf("decode diff: %v", err)
+	}
+	if diff.Summary.Added != 1 || diff.Summary.Removed != 1 || diff.Summary.Changed != 1 {
+		t.Fatalf("unexpected diff summary: %+v", diff.Summary)
 	}
 }

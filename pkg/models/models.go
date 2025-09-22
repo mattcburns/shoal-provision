@@ -176,3 +176,48 @@ type SettingValue struct {
 	CurrentValue    interface{} `json:"current_value" db:"current_value"`
 	SourceTimestamp string      `json:"source_timestamp" db:"source_timestamp"`
 }
+
+// Profiles (005)
+
+// Profile represents a reusable set of desired settings
+type Profile struct {
+	ID                 string    `json:"id" db:"id"`
+	Name               string    `json:"name" db:"name"`
+	Description        string    `json:"description,omitempty" db:"description"`
+	CreatedBy          string    `json:"created_by,omitempty" db:"created_by"`
+	HardwareSelector   string    `json:"hardware_selector,omitempty" db:"hardware_selector"`
+	FirmwareRangesJSON string    `json:"firmware_ranges_json,omitempty" db:"firmware_ranges_json"`
+	CreatedAt          time.Time `json:"created_at" db:"created_at"`
+	UpdatedAt          time.Time `json:"updated_at" db:"updated_at"`
+}
+
+// ProfileVersion is a versioned collection of entries
+type ProfileVersion struct {
+	ID        string         `json:"id" db:"id"`
+	ProfileID string         `json:"profile_id" db:"profile_id"`
+	Version   int            `json:"version" db:"version"`
+	CreatedAt time.Time      `json:"created_at" db:"created_at"`
+	Notes     string         `json:"notes,omitempty" db:"notes"`
+	Entries   []ProfileEntry `json:"entries,omitempty"`
+}
+
+// ProfileEntry specifies a desired value for a setting
+type ProfileEntry struct {
+	ID                  string      `json:"id" db:"id"`
+	ProfileVersionID    string      `json:"profile_version_id" db:"profile_version_id"`
+	ResourcePath        string      `json:"resource_path" db:"resource_path"`
+	Attribute           string      `json:"attribute" db:"attribute"`
+	DesiredValue        interface{} `json:"desired_value,omitempty"`
+	ApplyTimePreference string      `json:"apply_time_preference,omitempty" db:"apply_time_preference"`
+	OEMVendor           string      `json:"oem_vendor,omitempty" db:"oem_vendor"`
+}
+
+// ProfileAssignment binds a profile/version to a target
+type ProfileAssignment struct {
+	ID          string    `json:"id" db:"id"`
+	ProfileID   string    `json:"profile_id" db:"profile_id"`
+	Version     int       `json:"version" db:"version"`
+	TargetType  string    `json:"target_type" db:"target_type"`   // e.g., "bmc" or "group"
+	TargetValue string    `json:"target_value" db:"target_value"` // e.g., BMC name or group name
+	CreatedAt   time.Time `json:"created_at" db:"created_at"`
+}

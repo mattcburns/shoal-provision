@@ -23,6 +23,7 @@ import (
 	"html/template"
 	"log/slog"
 	"net/http"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -76,6 +77,14 @@ func New(db *database.DB) http.Handler {
 	// Settings discovery: support both query form and RESTful path form
 	mux.Handle("/api/bmcs/settings", h.requireAuth(http.HandlerFunc(h.handleBMCSettingsAPI)))
 	mux.Handle("/api/bmcs/", h.requireAuth(http.HandlerFunc(h.handleBMCSettingsAPIRestful)))
+
+	// Profiles API (JSON only)
+	mux.Handle("/api/profiles", h.requireAuth(http.HandlerFunc(h.handleProfiles)))
+	// Specific import/export/snapshot endpoints
+	mux.Handle("/api/profiles/import", h.requireAuth(http.HandlerFunc(h.handleProfilesImport)))
+	mux.Handle("/api/profiles/diff", h.requireAuth(http.HandlerFunc(h.handleProfilesDiff)))
+	mux.Handle("/api/profiles/snapshot", h.requireAuth(http.HandlerFunc(h.handleProfilesSnapshot)))
+	mux.Handle("/api/profiles/", h.requireAuth(http.HandlerFunc(h.handleProfilesRestful)))
 
 	// User management routes (admin only)
 	mux.Handle("/users", h.requireAdmin(http.HandlerFunc(h.handleUsers)))
@@ -1327,6 +1336,718 @@ func (h *Handler) handleBMCSettingsAPIRestful(w http.ResponseWriter, r *http.Req
 		slog.Error("Failed to encode settings response", "error", err)
 		w.WriteHeader(http.StatusInternalServerError)
 	}
+}
+
+// Profiles API
+
+// handleProfiles handles /api/profiles list and create
+func (h *Handler) handleProfiles(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	switch r.Method {
+	case http.MethodGet:
+		ps, err := h.db.GetProfiles(r.Context())
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+		json.NewEncoder(w).Encode(ps)
+	case http.MethodPost:
+		var p models.Profile
+		if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{"error": "invalid payload"})
+			return
+		}
+		if strings.TrimSpace(p.Name) == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{"error": "name is required"})
+			return
+		}
+		if p.ID == "" {
+			p.ID = fmt.Sprintf("p_%d", time.Now().UnixNano())
+		}
+		if err := h.db.CreateProfile(r.Context(), &p); err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(p)
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// handleProfilesSnapshot creates a new profile/version from current BMC settings
+// POST /api/profiles/snapshot?bmc={name}
+// Body: {"profile_id":"optional","name":"optional if creating","description":"optional","include_read_only":false}
+func (h *Handler) handleProfilesSnapshot(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	bmcName := r.URL.Query().Get("bmc")
+	if strings.TrimSpace(bmcName) == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": "bmc is required"})
+		return
+	}
+	var req struct {
+		ProfileID       string `json:"profile_id"`
+		Name            string `json:"name"`
+		Description     string `json:"description"`
+		IncludeReadOnly bool   `json:"include_read_only"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err.Error() != "EOF" {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": "invalid payload"})
+		return
+	}
+
+	// Ensure settings discovered and load descriptors
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	defer cancel()
+	if _, err := h.bmcSvc.DiscoverSettings(ctx, bmcName, ""); err != nil {
+		slog.Warn("Discovery failed during snapshot", "bmc", bmcName, "error", err)
+	}
+	descs, err := h.db.GetSettingsDescriptors(ctx, bmcName, "")
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+
+	// Build entries: use flattened attributes for nested maps
+	entries := make([]models.ProfileEntry, 0, len(descs))
+	var flatten func(resourcePath, attr string, val interface{})
+	flatten = func(resourcePath, attr string, val interface{}) {
+		// Add direct entry
+		entries = append(entries, models.ProfileEntry{ResourcePath: resourcePath, Attribute: attr, DesiredValue: val})
+		if strings.Contains(resourcePath, "/Bios") {
+			entries = append(entries, models.ProfileEntry{ResourcePath: resourcePath, Attribute: "Attributes." + attr, DesiredValue: val})
+		}
+		if m, ok := val.(map[string]interface{}); ok {
+			for k, v := range m {
+				flatten(resourcePath, attr+"."+k, v)
+			}
+		}
+	}
+	for _, d := range descs {
+		if !req.IncludeReadOnly && d.ReadOnly {
+			continue
+		}
+		flatten(d.ResourcePath, d.Attribute, d.CurrentValue)
+	}
+
+	// If provided, ensure profile exists; otherwise create one
+	var prof *models.Profile
+	if req.ProfileID != "" {
+		p, err := h.db.GetProfile(r.Context(), req.ProfileID)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+		if p == nil {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{"error": "profile_id not found"})
+			return
+		}
+		prof = p
+	} else {
+		if strings.TrimSpace(req.Name) == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{"error": "name is required when creating profile"})
+			return
+		}
+		p := &models.Profile{ID: fmt.Sprintf("p_%d", time.Now().UnixNano()), Name: req.Name, Description: req.Description}
+		if user := getUserFromContext(r.Context()); user != nil {
+			p.CreatedBy = user.ID
+		}
+		if err := h.db.CreateProfile(r.Context(), p); err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+		prof = p
+	}
+
+	// Create new version (auto-increment)
+	vs, _ := h.db.GetProfileVersions(r.Context(), prof.ID)
+	max := 0
+	for _, vv := range vs {
+		if vv.Version > max {
+			max = vv.Version
+		}
+	}
+	v := &models.ProfileVersion{ProfileID: prof.ID, Version: max + 1, Notes: fmt.Sprintf("Snapshot of %s", bmcName), Entries: entries}
+	if err := h.db.CreateProfileVersion(r.Context(), v); err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(map[string]any{"profile": prof, "version": v})
+}
+
+// handleProfilesDiff compares two profile versions
+// POST /api/profiles/diff
+// Body: { "left": {"profile_id":"","version":N}, "right": {"profile_id":"","version":N} }
+func (h *Handler) handleProfilesDiff(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	var req struct {
+		Left struct {
+			ProfileID string `json:"profile_id"`
+			Version   int    `json:"version"`
+		} `json:"left"`
+		Right struct {
+			ProfileID string `json:"profile_id"`
+			Version   int    `json:"version"`
+		} `json:"right"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": "invalid payload"})
+		return
+	}
+	if req.Left.ProfileID == "" || req.Right.ProfileID == "" || req.Left.Version <= 0 || req.Right.Version <= 0 {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": "profile_id and version required for both sides"})
+		return
+	}
+	// Load both versions
+	lv, err := h.db.GetProfileVersion(r.Context(), req.Left.ProfileID, req.Left.Version)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+	if lv == nil {
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(map[string]string{"error": "left version not found"})
+		return
+	}
+	rv, err := h.db.GetProfileVersion(r.Context(), req.Right.ProfileID, req.Right.Version)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+	if rv == nil {
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(map[string]string{"error": "right version not found"})
+		return
+	}
+
+	key := func(e models.ProfileEntry) string { return e.ResourcePath + "|" + e.Attribute }
+	lmap := make(map[string]models.ProfileEntry)
+	rmap := make(map[string]models.ProfileEntry)
+	for _, e := range lv.Entries {
+		lmap[key(e)] = e
+	}
+	for _, e := range rv.Entries {
+		rmap[key(e)] = e
+	}
+
+	type diffEntry struct {
+		ResourcePath string      `json:"resource_path"`
+		Attribute    string      `json:"attribute"`
+		Left         interface{} `json:"left,omitempty"`
+		Right        interface{} `json:"right,omitempty"`
+	}
+	resp := struct {
+		Added   []diffEntry `json:"added"`
+		Removed []diffEntry `json:"removed"`
+		Changed []diffEntry `json:"changed"`
+		Summary struct {
+			LeftCount  int `json:"left_count"`
+			RightCount int `json:"right_count"`
+			Added      int `json:"added"`
+			Removed    int `json:"removed"`
+			Changed    int `json:"changed"`
+		} `json:"summary"`
+	}{}
+
+	// Added/Changed
+	for k, re := range rmap {
+		if le, ok := lmap[k]; !ok {
+			resp.Added = append(resp.Added, diffEntry{ResourcePath: re.ResourcePath, Attribute: re.Attribute, Right: re.DesiredValue})
+		} else {
+			if !reflect.DeepEqual(le.DesiredValue, re.DesiredValue) {
+				resp.Changed = append(resp.Changed, diffEntry{ResourcePath: re.ResourcePath, Attribute: re.Attribute, Left: le.DesiredValue, Right: re.DesiredValue})
+			}
+		}
+	}
+	// Removed
+	for k, le := range lmap {
+		if _, ok := rmap[k]; !ok {
+			resp.Removed = append(resp.Removed, diffEntry{ResourcePath: le.ResourcePath, Attribute: le.Attribute, Left: le.DesiredValue})
+		}
+	}
+
+	resp.Summary.LeftCount = len(lmap)
+	resp.Summary.RightCount = len(rmap)
+	resp.Summary.Added = len(resp.Added)
+	resp.Summary.Removed = len(resp.Removed)
+	resp.Summary.Changed = len(resp.Changed)
+	json.NewEncoder(w).Encode(resp)
+}
+
+// handleProfilesImport handles POST /api/profiles/import to ingest a profile JSON
+func (h *Handler) handleProfilesImport(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+
+	// Accept either a single profile with versions, or an array of them
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	var single struct {
+		Profile  models.Profile          `json:"profile"`
+		Versions []models.ProfileVersion `json:"versions"`
+	}
+	// Try single first
+	if err := dec.Decode(&single); err != nil {
+		// Reset by re-decoding into multi using new decoder
+		r.Body.Close()
+		http.Error(w, "invalid payload", http.StatusBadRequest)
+		return
+	}
+
+	// Convenience to process one payload form uniformly
+	payloads := []struct {
+		Profile  models.Profile
+		Versions []models.ProfileVersion
+	}{{Profile: single.Profile, Versions: single.Versions}}
+
+	// Create or update the profile and versions
+	ctx := r.Context()
+	user := getUserFromContext(ctx)
+	for _, pl := range payloads {
+		p := pl.Profile
+		if strings.TrimSpace(p.Name) == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{"error": "profile.name is required"})
+			return
+		}
+		// If ID empty, generate and create; if has ID try to update name/desc fields
+		if p.ID == "" {
+			p.ID = fmt.Sprintf("p_%d", time.Now().UnixNano())
+			if user != nil {
+				p.CreatedBy = user.ID
+			}
+			if err := h.db.CreateProfile(ctx, &p); err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+				return
+			}
+		} else {
+			if user != nil && p.CreatedBy == "" {
+				p.CreatedBy = user.ID
+			}
+			if err := h.db.UpdateProfile(ctx, &p); err != nil {
+				// If update fails because it doesn't exist, fallback to create
+				if err := h.db.CreateProfile(ctx, &p); err != nil {
+					w.WriteHeader(http.StatusInternalServerError)
+					json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+					return
+				}
+			}
+		}
+
+		// Upsert versions: create entries for each provided version number
+		for i := range pl.Versions {
+			v := pl.Versions[i]
+			v.ProfileID = p.ID
+			if v.Version == 0 {
+				// Autonumber after latest
+				vs, _ := h.db.GetProfileVersions(ctx, p.ID)
+				max := 0
+				for _, vv := range vs {
+					if vv.Version > max {
+						max = vv.Version
+					}
+				}
+				v.Version = max + 1
+			}
+			if err := h.db.CreateProfileVersion(ctx, &v); err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+				return
+			}
+		}
+	}
+
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(map[string]any{"status": "imported", "count": len(payloads)})
+}
+
+// handleProfilesRestful handles /api/profiles/{id}/... routes
+func (h *Handler) handleProfilesRestful(w http.ResponseWriter, r *http.Request) {
+	if !strings.HasPrefix(r.URL.Path, "/api/profiles/") {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	// [api, profiles, {id}, ...]
+	if len(parts) < 3 {
+		http.NotFound(w, r)
+		return
+	}
+	id := parts[2]
+	if len(parts) == 3 {
+		switch r.Method {
+		case http.MethodGet:
+			p, err := h.db.GetProfile(r.Context(), id)
+			if err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+				return
+			}
+			if p == nil {
+				http.NotFound(w, r)
+				return
+			}
+			json.NewEncoder(w).Encode(p)
+		case http.MethodDelete:
+			if err := h.db.DeleteProfile(r.Context(), id); err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+		case http.MethodPut:
+			var p models.Profile
+			if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				json.NewEncoder(w).Encode(map[string]string{"error": "invalid payload"})
+				return
+			}
+			p.ID = id
+			if err := h.db.UpdateProfile(r.Context(), &p); err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+				return
+			}
+			json.NewEncoder(w).Encode(p)
+		default:
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+		return
+	}
+
+	// Subresources: versions, assignments
+	switch parts[3] {
+	case "export":
+		// POST /api/profiles/{id}/export with optional {"version":N}
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var req struct {
+			Version int `json:"version"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		vnum := req.Version
+		if vnum <= 0 {
+			vs, err := h.db.GetProfileVersions(r.Context(), id)
+			if err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+				return
+			}
+			for _, vv := range vs {
+				if vv.Version > vnum {
+					vnum = vv.Version
+				}
+			}
+			if vnum == 0 {
+				w.WriteHeader(http.StatusNotFound)
+				json.NewEncoder(w).Encode(map[string]string{"error": "no versions for profile"})
+				return
+			}
+		}
+		p, err := h.db.GetProfile(r.Context(), id)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+		if p == nil {
+			http.NotFound(w, r)
+			return
+		}
+		pv, err := h.db.GetProfileVersion(r.Context(), id, vnum)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+		if pv == nil {
+			http.NotFound(w, r)
+			return
+		}
+		out := map[string]any{
+			"profile":  p,
+			"versions": []models.ProfileVersion{*pv},
+		}
+		json.NewEncoder(w).Encode(out)
+		return
+	case "preview":
+		if r.Method != http.MethodGet {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		bmcName := r.URL.Query().Get("bmc")
+		if strings.TrimSpace(bmcName) == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{"error": "bmc is required"})
+			return
+		}
+		// Determine version: from query ?version=, otherwise latest
+		var verNum int
+		if vq := r.URL.Query().Get("version"); vq != "" {
+			n, err := strconv.Atoi(vq)
+			if err != nil || n <= 0 {
+				w.WriteHeader(http.StatusBadRequest)
+				json.NewEncoder(w).Encode(map[string]string{"error": "invalid version"})
+				return
+			}
+			verNum = n
+		} else {
+			vs, err := h.db.GetProfileVersions(r.Context(), id)
+			if err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+				return
+			}
+			for _, vv := range vs {
+				if vv.Version > verNum {
+					verNum = vv.Version
+				}
+			}
+			if verNum == 0 {
+				w.WriteHeader(http.StatusNotFound)
+				json.NewEncoder(w).Encode(map[string]string{"error": "no versions for profile"})
+				return
+			}
+		}
+
+		// Load profile version with entries
+		pv, err := h.db.GetProfileVersion(r.Context(), id, verNum)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+		if pv == nil {
+			http.NotFound(w, r)
+			return
+		}
+
+		// Ensure current settings are available; trigger discovery
+		ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+		defer cancel()
+		if _, err := h.bmcSvc.DiscoverSettings(ctx, bmcName, ""); err != nil {
+			slog.Warn("Discovery failed during preview", "bmc", bmcName, "error", err)
+		}
+		descs, err := h.db.GetSettingsDescriptors(ctx, bmcName, "")
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+		// Build a flattened view of current settings so profile entries can
+		// reference nested keys like "Attributes.LogicalProc" or "HTTPS.Port".
+		cur := make(map[string]interface{})
+		var flatten func(resourcePath, attr string, val interface{})
+		flatten = func(resourcePath, attr string, val interface{}) {
+			// Direct key
+			cur[resourcePath+"|"+attr] = val
+			// Special-case BIOS where values live under Attributes at apply-time
+			if strings.Contains(resourcePath, "/Bios") {
+				cur[resourcePath+"|Attributes."+attr] = val
+			}
+			// Recurse into objects to expose leaf paths via dot notation
+			if m, ok := val.(map[string]interface{}); ok {
+				for k, v := range m {
+					flatten(resourcePath, attr+"."+k, v)
+				}
+			}
+		}
+		for _, d := range descs {
+			flatten(d.ResourcePath, d.Attribute, d.CurrentValue)
+		}
+
+		type change struct {
+			ResourcePath        string      `json:"resource_path"`
+			Attribute           string      `json:"attribute"`
+			Current             interface{} `json:"current"`
+			Desired             interface{} `json:"desired"`
+			ApplyTimePreference string      `json:"apply_time_preference,omitempty"`
+			OEMVendor           string      `json:"oem_vendor,omitempty"`
+		}
+		type previewResp struct {
+			ProfileID string   `json:"profile_id"`
+			Version   int      `json:"version"`
+			BMC       string   `json:"bmc"`
+			Changes   []change `json:"changes"`
+			Same      []change `json:"same"`
+			Unmatched []change `json:"unmatched"`
+			Summary   struct {
+				Total     int `json:"total"`
+				Changes   int `json:"changes"`
+				Same      int `json:"same"`
+				Unmatched int `json:"unmatched"`
+			} `json:"summary"`
+		}
+
+		var resp previewResp
+		resp.ProfileID = id
+		resp.Version = verNum
+		resp.BMC = bmcName
+		for _, e := range pv.Entries {
+			key := e.ResourcePath + "|" + e.Attribute
+			c := change{ResourcePath: e.ResourcePath, Attribute: e.Attribute, Desired: e.DesiredValue, ApplyTimePreference: e.ApplyTimePreference, OEMVendor: e.OEMVendor}
+			if v, ok := cur[key]; ok {
+				c.Current = v
+				if reflect.DeepEqual(v, e.DesiredValue) {
+					resp.Same = append(resp.Same, c)
+				} else {
+					resp.Changes = append(resp.Changes, c)
+				}
+			} else {
+				resp.Unmatched = append(resp.Unmatched, c)
+			}
+		}
+		resp.Summary.Total = len(pv.Entries)
+		resp.Summary.Changes = len(resp.Changes)
+		resp.Summary.Same = len(resp.Same)
+		resp.Summary.Unmatched = len(resp.Unmatched)
+		json.NewEncoder(w).Encode(resp)
+		return
+	case "versions":
+		if len(parts) == 4 {
+			switch r.Method {
+			case http.MethodGet:
+				vs, err := h.db.GetProfileVersions(r.Context(), id)
+				if err != nil {
+					w.WriteHeader(http.StatusInternalServerError)
+					json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+					return
+				}
+				json.NewEncoder(w).Encode(vs)
+			case http.MethodPost:
+				var v models.ProfileVersion
+				if err := json.NewDecoder(r.Body).Decode(&v); err != nil {
+					w.WriteHeader(http.StatusBadRequest)
+					json.NewEncoder(w).Encode(map[string]string{"error": "invalid payload"})
+					return
+				}
+				v.ProfileID = id
+				if v.Version == 0 {
+					// Auto-increment version from latest
+					vs, _ := h.db.GetProfileVersions(r.Context(), id)
+					max := 0
+					for _, vv := range vs {
+						if vv.Version > max {
+							max = vv.Version
+						}
+					}
+					v.Version = max + 1
+				}
+				if err := h.db.CreateProfileVersion(r.Context(), &v); err != nil {
+					w.WriteHeader(http.StatusInternalServerError)
+					json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+					return
+				}
+				w.WriteHeader(http.StatusCreated)
+				json.NewEncoder(w).Encode(v)
+			default:
+				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			}
+			return
+		}
+		if len(parts) == 5 {
+			// GET specific version
+			if r.Method != http.MethodGet {
+				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+				return
+			}
+			vnum, err := strconv.Atoi(parts[4])
+			if err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				json.NewEncoder(w).Encode(map[string]string{"error": "invalid version"})
+				return
+			}
+			v, err := h.db.GetProfileVersion(r.Context(), id, vnum)
+			if err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+				return
+			}
+			if v == nil {
+				http.NotFound(w, r)
+				return
+			}
+			json.NewEncoder(w).Encode(v)
+			return
+		}
+	case "assignments":
+		if len(parts) == 4 {
+			switch r.Method {
+			case http.MethodGet:
+				as, err := h.db.GetProfileAssignments(r.Context(), id)
+				if err != nil {
+					w.WriteHeader(http.StatusInternalServerError)
+					json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+					return
+				}
+				json.NewEncoder(w).Encode(as)
+			case http.MethodPost:
+				var a models.ProfileAssignment
+				if err := json.NewDecoder(r.Body).Decode(&a); err != nil {
+					w.WriteHeader(http.StatusBadRequest)
+					json.NewEncoder(w).Encode(map[string]string{"error": "invalid payload"})
+					return
+				}
+				a.ProfileID = id
+				if err := h.db.CreateProfileAssignment(r.Context(), &a); err != nil {
+					w.WriteHeader(http.StatusInternalServerError)
+					json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+					return
+				}
+				w.WriteHeader(http.StatusCreated)
+				json.NewEncoder(w).Encode(a)
+			default:
+				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			}
+			return
+		}
+		if len(parts) == 5 && r.Method == http.MethodDelete {
+			// DELETE specific assignment id
+			aid := parts[4]
+			if err := h.db.DeleteProfileAssignment(r.Context(), aid); err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+	}
+
+	http.NotFound(w, r)
 }
 
 // Authentication middleware
