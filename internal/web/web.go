@@ -1005,7 +1005,7 @@ func (h *Handler) handleBMCDetails(w http.ResponseWriter, r *http.Request) {
 			<div style="margin-top:10px; overflow:auto;">
 				<table class="table" id="prof-apply-table">
 					<thead>
-						<tr><th>Target</th><th>Method</th><th>Summary</th><th>Status</th></tr>
+						<tr><th>Target</th><th>Method</th><th>Summary</th><th>Status</th><th>Details</th></tr>
 					</thead>
 					<tbody></tbody>
 				</table>
@@ -1506,6 +1506,7 @@ function initSettingsTab(bmcName) {
 		const btnExec = document.getElementById('prof-execute');
 		const statusDiv = document.getElementById('prof-apply-status');
 		const tableBody = document.querySelector('#prof-apply-table tbody');
+        let isBusy = false;
 
 		if (!profSelect || profSelect.dataset.initialized === '1') {
 			return;
@@ -1516,6 +1517,19 @@ function initSettingsTab(bmcName) {
 		btnDry.addEventListener('click', () => doApply(true));
 		btnExec.addEventListener('click', () => doApply(false));
 		profSelect.addEventListener('change', () => loadVersions(profSelect.value));
+
+		// Toggle details rows
+		tableBody.addEventListener('click', function(e){
+			const t = e.target;
+			if (t && t.classList && t.classList.contains('prof-toggle')) {
+				const tr = t.closest('tr');
+				if (!tr) return;
+				const det = tr.nextElementSibling;
+				if (det && det.classList.contains('detail-row')) {
+					det.style.display = (det.style.display === 'none' || det.style.display === '') ? 'table-row' : 'none';
+				}
+			}
+		});
 
 		loadProfiles();
 
@@ -1561,8 +1575,9 @@ function initSettingsTab(bmcName) {
 			tableBody.innerHTML = '';
 		}
 		function setStatus(text) {
-			statusDiv.textContent = text || '';
-		}
+            const prefix = isBusy ? '⏳ ' : '';
+            statusDiv.textContent = (prefix + (text || '')).trim();
+        }
 		function renderPlanned(data) {
 			const reqs = data.requests || [];
 			const same = (data.same || []).length;
@@ -1573,7 +1588,7 @@ function initSettingsTab(bmcName) {
 				const tgt = r.request_url || r.resource_path || r.target_path || '';
 				const m = r.http_method || 'PATCH';
 				const count = (r.entries && r.entries.length) ? (r.entries.length + ' entr.') : '';
-				return '<tr><td>' + escapeHtml(tgt) + '</td><td>' + m + '</td><td>' + count + '</td><td>-</td></tr>';
+				return '<tr><td>' + escapeHtml(tgt) + '</td><td>' + m + '</td><td>' + count + '</td><td>-</td><td>-</td></tr>';
 			}).join('');
 		}
 		function renderResults(data) {
@@ -1590,7 +1605,18 @@ function initSettingsTab(bmcName) {
 				const m = r.http_method || 'PATCH';
 				const count = (r.entries && r.entries.length) ? (r.entries.length + ' entr.') : '';
 				const st = (res.ok ? 'OK' : 'ERR') + (res.status_code ? (' (' + res.status_code + ')') : '');
-				return '<tr><td>' + escapeHtml(tgt) + '</td><td>' + m + '</td><td>' + count + '</td><td>' + st + '</td></tr>';
+				const body = escapeHtml(res.body || '');
+				const err = escapeHtml(res.error || '');
+				return (
+					'<tr>' +
+						'<td>' + escapeHtml(tgt) + '</td>' +
+						'<td>' + m + '</td>' +
+						'<td>' + count + '</td>' +
+						'<td>' + st + '</td>' +
+						'<td>' + ((body || err) ? '<button type="button" class="btn prof-toggle">View</button>' : '-') + '</td>' +
+					'</tr>' +
+					((body || err) ? ('<tr class="detail-row" style="display:none;"><td colspan="5"><pre style="white-space:pre-wrap;word-break:break-word;">' + (err ? ('Error:\n' + err + '\n\n') : '') + (body ? ('Response:\n' + body) : '') + '</pre></td></tr>') : '')
+				);
 			}).join('');
 		}
 
@@ -1599,6 +1625,7 @@ function initSettingsTab(bmcName) {
 			const pid = profSelect.value;
 			const ver = verSelect.value;
 			if (!pid) { setStatus('Select a profile first'); return; }
+			setBusy(true);
 			setStatus('Previewing…');
 			let url = '/api/profiles/' + encodeURIComponent(pid) + '/preview?bmc=' + encodeURIComponent(bmcName);
 			if (ver) url += '&version=' + encodeURIComponent(ver);
@@ -1609,7 +1636,7 @@ function initSettingsTab(bmcName) {
 				renderPlanned(data);
 			} catch (e) {
 				setStatus('Preview error');
-			}
+			} finally { setBusy(false); }
 		}
 
 		async function doApply(dryRun) {
@@ -1617,6 +1644,7 @@ function initSettingsTab(bmcName) {
 			const pid = profSelect.value;
 			const ver = verSelect.value;
 			if (!pid) { setStatus('Select a profile first'); return; }
+			setBusy(true);
 			setStatus(dryRun ? 'Planning…' : 'Applying…');
 			const body = { bmc: bmcName, dryRun: !!dryRun, continueOnError: !!coeChk.checked, version: ver ? parseInt(ver,10) : 0 };
 			try {
@@ -1630,8 +1658,15 @@ function initSettingsTab(bmcName) {
 				if (data.dry_run) renderPlanned(data); else renderResults(data);
 			} catch (e) {
 				setStatus('Apply error');
-			}
+			} finally { setBusy(false); }
 		}
+
+        function setBusy(b) {
+            isBusy = !!b;
+            [btnPrevw, btnDry, btnExec, profSelect, verSelect, coeChk].forEach(el => { if (el) el.disabled = isBusy; });
+            // Refresh status to reflect spinner prefix
+            setStatus(statusDiv.textContent.replace(/^⏳\s*/, ''));
+        }
 
 		function escapeHtml(s){
 			return String(s || '').replace(/[&<>"']/g, function(c){ return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[c]); });
