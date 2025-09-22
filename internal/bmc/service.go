@@ -699,11 +699,138 @@ func (s *Service) DiscoverSettings(ctx context.Context, bmcName string, resource
 		}
 	}
 
+	// 009: Probe Systems -> EthernetInterfaces (per-NIC settings)
+	if systemID != "" {
+		nicCollPath := fmt.Sprintf("/redfish/v1/Systems/%s/EthernetInterfaces", systemID)
+		if resourceFilter == "" || strings.Contains(nicCollPath, resourceFilter) || strings.Contains("EthernetInterfaces", resourceFilter) {
+			if nicColl, err := s.fetchRedfishResource(ctx, bmc, nicCollPath); err == nil {
+				if members, ok := nicColl["Members"].([]interface{}); ok {
+					for _, m := range members {
+						mm, ok := m.(map[string]interface{})
+						if !ok {
+							continue
+						}
+						odataID, _ := mm["@odata.id"].(string)
+						if odataID == "" {
+							continue
+						}
+						if nicData, err := s.fetchRedfishResource(ctx, bmc, odataID); err == nil && nicData != nil {
+							applyTimes, settingsObj := extractApplyTimesAndSettingsObject(nicData)
+							if settingsObj != "" {
+								current := pickWritableLookingFields(nicData)
+								descs := buildDescriptorsFromMap(bmcName, odataID, current, false, "", applyTimes, settingsObj)
+								descs = s.enrichDescriptors(ctx, bmc, nicData, descs)
+								descriptors = append(descriptors, descs...)
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// 009: Probe Systems -> Storage (controllers, volumes, drives)
+	if systemID != "" {
+		storageCollPath := fmt.Sprintf("/redfish/v1/Systems/%s/Storage", systemID)
+		if resourceFilter == "" || strings.Contains(storageCollPath, resourceFilter) || strings.Contains("/Storage", resourceFilter) {
+			if storageColl, err := s.fetchRedfishResource(ctx, bmc, storageCollPath); err == nil {
+				if members, ok := storageColl["Members"].([]interface{}); ok {
+					for _, m := range members {
+						mm, ok := m.(map[string]interface{})
+						if !ok {
+							continue
+						}
+						storageOID, _ := mm["@odata.id"].(string)
+						if storageOID == "" {
+							continue
+						}
+						// Storage subsystem resource itself
+						if storageData, err := s.fetchRedfishResource(ctx, bmc, storageOID); err == nil && storageData != nil {
+							applyTimes, settingsObj := extractApplyTimesAndSettingsObject(storageData)
+							if settingsObj != "" {
+								current := pickWritableLookingFields(storageData)
+								descs := buildDescriptorsFromMap(bmcName, storageOID, current, false, "", applyTimes, settingsObj)
+								descs = s.enrichDescriptors(ctx, bmc, storageData, descs)
+								descriptors = append(descriptors, descs...)
+							}
+
+							// Volumes collection under this storage
+							volCollPath := storageOID + "/Volumes"
+							if volColl, err := s.fetchRedfishResource(ctx, bmc, volCollPath); err == nil {
+								if vms, ok := volColl["Members"].([]interface{}); ok {
+									for _, vm := range vms {
+										vr, ok := vm.(map[string]interface{})
+										if !ok {
+											continue
+										}
+										vid, _ := vr["@odata.id"].(string)
+										if vid == "" {
+											continue
+										}
+										if volData, err := s.fetchRedfishResource(ctx, bmc, vid); err == nil && volData != nil {
+											ats, so := extractApplyTimesAndSettingsObject(volData)
+											if so != "" {
+												current := pickWritableLookingFields(volData)
+												descs := buildDescriptorsFromMap(bmcName, vid, current, false, "", ats, so)
+												descs = s.enrichDescriptors(ctx, bmc, volData, descs)
+												descriptors = append(descriptors, descs...)
+											}
+										}
+									}
+								}
+							}
+
+							// Drives linked under this storage
+							if drives, ok := storageData["Drives"].([]interface{}); ok {
+								for _, d := range drives {
+									dr, ok := d.(map[string]interface{})
+									if !ok {
+										continue
+									}
+									did, _ := dr["@odata.id"].(string)
+									if did == "" {
+										continue
+									}
+									if driveData, err := s.fetchRedfishResource(ctx, bmc, did); err == nil && driveData != nil {
+										ats, so := extractApplyTimesAndSettingsObject(driveData)
+										if so != "" {
+											current := pickWritableLookingFields(driveData)
+											descs := buildDescriptorsFromMap(bmcName, did, current, false, "", ats, so)
+											descs = s.enrichDescriptors(ctx, bmc, driveData, descs)
+											descriptors = append(descriptors, descs...)
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
 	// Persist discovered descriptors and values for later detail queries
 	if err := s.db.UpsertSettingDescriptors(ctx, bmcName, descriptors); err != nil {
 		slog.Warn("Failed to persist settings descriptors", "bmc", bmcName, "error", err)
 	}
 	return descriptors, nil
+}
+
+// pickWritableLookingFields selects fields from a resource that are likely to be configurable
+// by excluding metadata and linkage fields. Nested objects are preserved as-is.
+func pickWritableLookingFields(resource map[string]interface{}) map[string]interface{} {
+	current := make(map[string]interface{})
+	for k, v := range resource {
+		if strings.HasPrefix(k, "@") {
+			continue
+		}
+		switch k {
+		case "Id", "Name", "Description", "Links", "Oem", "Actions", "Status", "Members", "Drives":
+			continue
+		}
+		current[k] = v
+	}
+	return current
 }
 
 func extractApplyTimesAndSettingsObject(resource map[string]interface{}) ([]string, string) {
