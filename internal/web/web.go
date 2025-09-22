@@ -17,10 +17,12 @@
 package web
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"html/template"
+	"io"
 	"log/slog"
 	"net/http"
 	"reflect"
@@ -2317,6 +2319,7 @@ func (h *Handler) handleProfilesRestful(w http.ResponseWriter, r *http.Request) 
 			RequestBody         map[string]interface{} `json:"request_body"`
 			ApplyTimePreference string                 `json:"apply_time_preference,omitempty"`
 			Entries             []models.ProfileEntry  `json:"entries"`
+			TargetPath          string                 `json:"-"`
 		}
 		var requests []request
 		// Index by target path to merge bodies
@@ -2383,6 +2386,7 @@ func (h *Handler) handleProfilesRestful(w http.ResponseWriter, r *http.Request) 
 					RequestBody:         map[string]interface{}{},
 					ApplyTimePreference: e.ApplyTimePreference,
 					Entries:             []models.ProfileEntry{e},
+					TargetPath:          targetPath,
 				}
 				merge(req.RequestBody, body)
 				requests = append(requests, req)
@@ -2396,29 +2400,102 @@ func (h *Handler) handleProfilesRestful(w http.ResponseWriter, r *http.Request) 
 			}
 		}
 
-		// Build response
-		resp := map[string]any{
+		// If dry-run, return the planned requests and summary
+		if reqBody.DryRun {
+			resp := map[string]any{
+				"profile_id": id,
+				"version":    verNum,
+				"bmc":        bmcName,
+				"dry_run":    true,
+				"requests":   requests,
+				"same":       same,
+				"unmatched":  unmatched,
+			}
+			changedCount := 0
+			for _, rq := range requests {
+				changedCount += len(rq.Entries)
+			}
+			totalEntries := changedCount + len(same) + len(unmatched)
+			resp["summary"] = map[string]int{
+				"total_entries": totalEntries,
+				"request_count": len(requests),
+				"same":          len(same),
+				"unmatched":     len(unmatched),
+			}
+			json.NewEncoder(w).Encode(resp)
+			return
+		}
+
+		// Execute non-dry-run: issue requests sequentially, honor continueOnError
+		type execResult struct {
+			TargetPath string `json:"target_path"`
+			StatusCode int    `json:"status_code"`
+			OK         bool   `json:"ok"`
+			Error      string `json:"error,omitempty"`
+			Body       string `json:"body,omitempty"`
+		}
+		results := make([]execResult, 0, len(requests))
+		successes := 0
+		failures := 0
+		// Ensure user is on context for auditing in proxy
+		user := getUserFromContext(r.Context())
+		execCtx := r.Context()
+		if user != nil {
+			execCtx = context.WithValue(execCtx, "user", user)
+		}
+		for _, rq := range requests {
+			payload, _ := json.Marshal(rq.RequestBody)
+			pr, _ := http.NewRequestWithContext(execCtx, http.MethodPatch, "http://placeholder/", bytes.NewReader(payload))
+			pr.Header.Set("Content-Type", "application/json")
+			pr.Header.Set("Accept", "application/json")
+			resp, err := h.bmcSvc.ProxyRequest(execCtx, bmcName, rq.TargetPath, pr)
+			if err != nil {
+				results = append(results, execResult{TargetPath: rq.TargetPath, StatusCode: 0, OK: false, Error: err.Error()})
+				failures++
+				if !reqBody.ContinueOnError {
+					break
+				}
+				continue
+			}
+			// Read response body
+			var rb []byte
+			if resp.Body != nil {
+				b, _ := io.ReadAll(resp.Body)
+				rb = b
+				resp.Body.Close()
+			}
+			ok := resp.StatusCode >= 200 && resp.StatusCode < 300
+			if ok {
+				successes++
+			} else {
+				failures++
+			}
+			bodyStr := string(rb)
+			if len(bodyStr) > 4096 {
+				bodyStr = bodyStr[:4096]
+			}
+			results = append(results, execResult{TargetPath: rq.TargetPath, StatusCode: resp.StatusCode, OK: ok, Body: bodyStr})
+			if !ok && !reqBody.ContinueOnError {
+				break
+			}
+		}
+
+		respObj := map[string]any{
 			"profile_id": id,
 			"version":    verNum,
 			"bmc":        bmcName,
-			"dry_run":    true,
+			"dry_run":    false,
 			"requests":   requests,
+			"results":    results,
 			"same":       same,
 			"unmatched":  unmatched,
+			"summary": map[string]int{
+				"request_count": len(requests),
+				"success":       successes,
+				"failed":        failures,
+			},
 		}
-		// Summary
-		changedCount := 0
-		for _, rq := range requests {
-			changedCount += len(rq.Entries)
-		}
-		totalEntries := changedCount + len(same) + len(unmatched)
-		resp["summary"] = map[string]int{
-			"total_entries": totalEntries,
-			"request_count": len(requests),
-			"same":          len(same),
-			"unmatched":     len(unmatched),
-		}
-		json.NewEncoder(w).Encode(resp)
+		json.NewEncoder(w).Encode(respObj)
 		return
 	case "export":
 		// POST /api/profiles/{id}/export with optional {"version":N}
