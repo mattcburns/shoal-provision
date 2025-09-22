@@ -977,6 +977,40 @@ func (h *Handler) handleBMCDetails(w http.ResponseWriter, r *http.Request) {
 				</div>
 			</div>
 		</div>
+
+		<div class="details-section">
+			<h3>Configuration Profiles</h3>
+			<form id="prof-apply-form" style="display:flex; gap:8px; align-items:flex-end; flex-wrap:wrap;">
+				<div>
+					<label>Profile</label>
+					<select id="prof-select" style="min-width:260px;">
+						<option value="">Select a profile…</option>
+					</select>
+				</div>
+				<div>
+					<label>Version</label>
+					<select id="prof-version" style="min-width:120px;">
+						<option value="">Latest</option>
+					</select>
+				</div>
+				<div>
+					<label><input type="checkbox" id="prof-coe" /> Continue on error</label>
+				</div>
+				<button id="prof-preview" type="button" class="btn">Preview</button>
+				<button id="prof-dryrun" type="button" class="btn">Dry‑run Apply</button>
+				<button id="prof-execute" type="button" class="btn btn-primary">Execute Apply</button>
+			</form>
+
+			<div id="prof-apply-status" style="margin-top:8px;"></div>
+			<div style="margin-top:10px; overflow:auto;">
+				<table class="table" id="prof-apply-table">
+					<thead>
+						<tr><th>Target</th><th>Method</th><th>Summary</th><th>Status</th></tr>
+					</thead>
+					<tbody></tbody>
+				</table>
+			</div>
+		</div>
 	</div>
 
 	<div id="tab-changes-content" style="display:none;">
@@ -1386,6 +1420,7 @@ function initSettingsTab(bmcName) {
 		settings.style.display = '';
 		changes.style.display = 'none';
 		fetchSettings();
+		initProfilesUI();
 	}
 	function showChanges() {
 		tabChangesBtn.classList.add('btn-primary');
@@ -1458,6 +1493,148 @@ function initSettingsTab(bmcName) {
 			}).join('');
 		} catch (e) {
 			tbody.innerHTML = '<tr><td colspan="6">Error loading settings</td></tr>';
+		}
+	}
+
+	// Configuration Profiles UI wiring
+	function initProfilesUI() {
+		const profSelect = document.getElementById('prof-select');
+		const verSelect = document.getElementById('prof-version');
+		const coeChk = document.getElementById('prof-coe');
+		const btnPrevw = document.getElementById('prof-preview');
+		const btnDry = document.getElementById('prof-dryrun');
+		const btnExec = document.getElementById('prof-execute');
+		const statusDiv = document.getElementById('prof-apply-status');
+		const tableBody = document.querySelector('#prof-apply-table tbody');
+
+		if (!profSelect || profSelect.dataset.initialized === '1') {
+			return;
+		}
+		profSelect.dataset.initialized = '1';
+
+		btnPrevw.addEventListener('click', () => doPreview());
+		btnDry.addEventListener('click', () => doApply(true));
+		btnExec.addEventListener('click', () => doApply(false));
+		profSelect.addEventListener('change', () => loadVersions(profSelect.value));
+
+		loadProfiles();
+
+		async function loadProfiles() {
+			clearResults();
+			setStatus('Loading profiles…');
+			try {
+				const res = await fetch('/api/profiles');
+				if (!res.ok) { setStatus('Failed to load profiles (' + res.status + ')'); return; }
+				const list = await res.json();
+				profSelect.innerHTML = '<option value="">Select a profile…</option>' + (list || []).map(p => '<option value="' + (p.id || p.ID || '') + '">' + (p.name || p.Name || p.id) + '</option>').join('');
+			} catch (e) {
+				setStatus('Error loading profiles');
+				return;
+			}
+			setStatus('');
+		}
+
+		async function loadVersions(profileId) {
+			verSelect.innerHTML = '<option value="">Latest</option>';
+			if (!profileId) return;
+			setStatus('Loading versions…');
+			try {
+				const res = await fetch('/api/profiles/' + encodeURIComponent(profileId) + '/versions');
+				if (!res.ok) { setStatus('Failed to load versions (' + res.status + ')'); return; }
+				let vers = await res.json();
+				if (!Array.isArray(vers)) vers = [];
+				// sort desc by Version field
+				vers.sort((a,b) => (b.version||b.Version||0) - (a.version||a.Version||0));
+				const opts = vers.map(v => {
+					const vn = v.version || v.Version || '';
+					return '<option value="' + vn + '">' + vn + '</option>';
+				}).join('');
+				verSelect.innerHTML = '<option value="">Latest</option>' + opts;
+				setStatus('');
+			} catch (e) {
+				setStatus('Error loading versions');
+			}
+		}
+
+		function clearResults() {
+			statusDiv.textContent = '';
+			tableBody.innerHTML = '';
+		}
+		function setStatus(text) {
+			statusDiv.textContent = text || '';
+		}
+		function renderPlanned(data) {
+			const reqs = data.requests || [];
+			const same = (data.same || []).length;
+			const unmatched = (data.unmatched || []).length;
+			const summary = data.summary || {};
+			setStatus('Planned: ' + (summary.request_count || reqs.length) + ' request(s), same: ' + same + ', unmatched: ' + unmatched);
+			tableBody.innerHTML = reqs.map(r => {
+				const tgt = r.request_url || r.resource_path || r.target_path || '';
+				const m = r.http_method || 'PATCH';
+				const count = (r.entries && r.entries.length) ? (r.entries.length + ' entr.') : '';
+				return '<tr><td>' + escapeHtml(tgt) + '</td><td>' + m + '</td><td>' + count + '</td><td>-</td></tr>';
+			}).join('');
+		}
+		function renderResults(data) {
+			const reqs = data.requests || [];
+			const results = data.results || [];
+			const sum = data.summary || {};
+			setStatus('Executed: success ' + (sum.success||0) + ', failed ' + (sum.failed||0) + ' of ' + (sum.request_count||results.length) + ' requests');
+			// Map by target path for easier matching
+			const byTarget = {};
+			reqs.forEach(r => { const k = r.target_path || r.request_url || r.resource_path; if (k) byTarget[k] = r; });
+			tableBody.innerHTML = results.map(res => {
+				const tgt = res.target_path || '';
+				const r = byTarget[tgt] || {};
+				const m = r.http_method || 'PATCH';
+				const count = (r.entries && r.entries.length) ? (r.entries.length + ' entr.') : '';
+				const st = (res.ok ? 'OK' : 'ERR') + (res.status_code ? (' (' + res.status_code + ')') : '');
+				return '<tr><td>' + escapeHtml(tgt) + '</td><td>' + m + '</td><td>' + count + '</td><td>' + st + '</td></tr>';
+			}).join('');
+		}
+
+		async function doPreview() {
+			clearResults();
+			const pid = profSelect.value;
+			const ver = verSelect.value;
+			if (!pid) { setStatus('Select a profile first'); return; }
+			setStatus('Previewing…');
+			let url = '/api/profiles/' + encodeURIComponent(pid) + '/preview?bmc=' + encodeURIComponent(bmcName);
+			if (ver) url += '&version=' + encodeURIComponent(ver);
+			try {
+				const res = await fetch(url);
+				if (!res.ok) { setStatus('Preview failed (' + res.status + ')'); return; }
+				const data = await res.json();
+				renderPlanned(data);
+			} catch (e) {
+				setStatus('Preview error');
+			}
+		}
+
+		async function doApply(dryRun) {
+			clearResults();
+			const pid = profSelect.value;
+			const ver = verSelect.value;
+			if (!pid) { setStatus('Select a profile first'); return; }
+			setStatus(dryRun ? 'Planning…' : 'Applying…');
+			const body = { bmc: bmcName, dryRun: !!dryRun, continueOnError: !!coeChk.checked, version: ver ? parseInt(ver,10) : 0 };
+			try {
+				const res = await fetch('/api/profiles/' + encodeURIComponent(pid) + '/apply', {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify(body)
+				});
+				if (!res.ok) { setStatus('Apply failed (' + res.status + ')'); return; }
+				const data = await res.json();
+				if (data.dry_run) renderPlanned(data); else renderResults(data);
+			} catch (e) {
+				setStatus('Apply error');
+			}
+		}
+
+		function escapeHtml(s){
+			return String(s || '').replace(/[&<>"']/g, function(c){ return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[c]); });
 		}
 	}
 }
