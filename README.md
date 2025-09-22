@@ -417,6 +417,7 @@ Endpoints:
 - `GET /api/profiles/{id}/versions/{version}` — Get a specific version
 - `POST /api/profiles/{id}/versions` — Create new version with entries
 - `GET /api/profiles/{id}/preview?bmc={name}[&version=N]` — Compare desired vs. current BMC values
+- `POST /api/profiles/{id}/apply` — Apply (dry‑run preview for now). Body: `{ "bmc": "<name>", "dryRun": true, "continueOnError": false, "version": N }`. Returns grouped Redfish requests (`PATCH`) that would be sent, plus `same`/`unmatched` items and a summary. Operator role required.
 - `POST /api/profiles/{id}/export` — Export `{profile, versions:[...]}` (defaults to latest version when body is `{}`)
 - `POST /api/profiles/import` — Import `{profile, versions}` (creates or updates)
 - `POST /api/profiles/snapshot?bmc={name}` — Create a new version from live settings
@@ -437,6 +438,48 @@ Preview differences against a BMC:
 curl -s -u admin:admin \
   "http://localhost:8080/api/profiles/<profile-id>/preview?bmc=bmc1" | jq .
 ```
+
+Apply preview (dry-run):
+```bash
+curl -s -u admin:admin \
+  -X POST "http://localhost:8080/api/profiles/<profile-id>/apply" \
+  -H "Content-Type: application/json" \
+  -d '{
+        "bmc": "bmc1",
+        "dryRun": true,
+        "continueOnError": false
+      }' | jq .
+```
+
+Response shape (example):
+```json
+{
+  "profile_id": "p_...",
+  "version": 2,
+  "bmc": "bmc1",
+  "dry_run": true,
+  "requests": [
+    {
+      "resource_path": "/redfish/v1/Managers/Manager.Embedded.1/NetworkProtocol",
+      "http_method": "PATCH",
+      "request_url": "https://bmc1/redfish/v1/Managers/Manager.Embedded.1/NetworkProtocol",
+      "request_body": { "HTTPS": { "Port": 444 } },
+      "apply_time_preference": "OnReset",
+      "entries": [ { "resource_path": "...", "attribute": "HTTPS.Port", "desired_value": 444 } ]
+    }
+  ],
+  "same": [ ... ],
+  "unmatched": [ ... ],
+  "summary": { "total_entries": 12, "request_count": 3, "same": 8, "unmatched": 1 }
+}
+```
+
+Notes:
+- Requests are grouped by Redfish resource target and use `PATCH`.
+- BIOS settings are applied via the `/Settings` subresource with payload rooted under `Attributes` (e.g., `{"Attributes": {"LogicalProc": true}}`).
+- `version` can be provided in the body; if omitted, the latest version is used.
+- Only users with the `operator` or `admin` role may call this endpoint.
+- This milestone returns a dry‑run preview only; execution is implemented in the next milestone.
 
 Diff two profile versions:
 ```bash
