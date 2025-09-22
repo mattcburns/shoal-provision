@@ -825,6 +825,128 @@ func TestBMCSettingsDetailAPI(t *testing.T) {
 	}
 }
 
+func TestBMCSettingsPaginationAndSearch(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+	db, err := database.New(dbPath)
+	if err != nil {
+		t.Fatalf("db new: %v", err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+	if err := db.Migrate(ctx); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	// Admin
+	passwordHash, _ := pkgAuth.HashPassword("admin")
+	admin := &models.User{ID: "u1", Username: "admin", PasswordHash: passwordHash, Role: models.RoleAdmin, Enabled: true}
+	if err := db.CreateUser(ctx, admin); err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	// Mock BMC exposing multiple settings
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		username, password, ok := r.BasicAuth()
+		if !ok || username != "admin" || password != "password" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/redfish/v1/Systems":
+			json.NewEncoder(w).Encode(map[string]any{"Members": []map[string]string{{"@odata.id": "/redfish/v1/Systems/S1"}}})
+		case "/redfish/v1/Systems/S1/Bios":
+			json.NewEncoder(w).Encode(map[string]any{
+				"@Redfish.Settings": map[string]any{"SettingsObject": map[string]any{"@odata.id": "/redfish/v1/Systems/S1/Bios/Settings"}},
+				"Attributes":        map[string]any{"LogicalProc": true, "Virtualization": true},
+			})
+		case "/redfish/v1/Managers":
+			json.NewEncoder(w).Encode(map[string]any{"Members": []map[string]string{{"@odata.id": "/redfish/v1/Managers/M1"}}})
+		case "/redfish/v1/Managers/M1/NetworkProtocol":
+			json.NewEncoder(w).Encode(map[string]any{
+				"@Redfish.Settings": map[string]any{"SettingsObject": map[string]any{"@odata.id": "/redfish/v1/Managers/M1/NetworkProtocol/Settings"}},
+				"HTTPS":             map[string]any{"Port": float64(443)},
+			})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	// BMC
+	b := &models.BMC{Name: "b1", Address: server.URL, Username: "admin", Password: "password", Enabled: true}
+	if err := db.CreateBMC(ctx, b); err != nil {
+		t.Fatalf("create bmc: %v", err)
+	}
+
+	handler := New(db)
+
+	// Fetch with small page size
+	req := httptest.NewRequest(http.MethodGet, "/api/bmcs/b1/settings?page_size=1", nil)
+	req.SetBasicAuth("admin", "admin")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("page1 expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp1 struct {
+		Descriptors []models.SettingDescriptor `json:"descriptors"`
+		Total       int                        `json:"total"`
+		Page        int                        `json:"page"`
+		PageSize    int                        `json:"page_size"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp1); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp1.Page != 1 || resp1.PageSize != 1 {
+		t.Fatalf("pagination metadata wrong: %+v", resp1)
+	}
+	if len(resp1.Descriptors) != 1 {
+		t.Fatalf("expected 1 descriptor on page, got %d", len(resp1.Descriptors))
+	}
+	if resp1.Total < 2 {
+		t.Fatalf("expected total >= 2, got %d", resp1.Total)
+	}
+
+	// Next page
+	req = httptest.NewRequest(http.MethodGet, "/api/bmcs/b1/settings?page=2&page_size=1", nil)
+	req.SetBasicAuth("admin", "admin")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("page2 expected 200, got %d", rec.Code)
+	}
+	var resp2 struct {
+		Descriptors []models.SettingDescriptor `json:"descriptors"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp2); err != nil {
+		t.Fatalf("decode2: %v", err)
+	}
+	if len(resp2.Descriptors) != 1 {
+		t.Fatalf("expected 1 descriptor on page2, got %d", len(resp2.Descriptors))
+	}
+
+	// Search filter should match BIOS attribute by name
+	req = httptest.NewRequest(http.MethodGet, "/api/bmcs/b1/settings?search=logicalproc", nil)
+	req.SetBasicAuth("admin", "admin")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("search expected 200, got %d", rec.Code)
+	}
+	var respSearch struct {
+		Descriptors []models.SettingDescriptor `json:"descriptors"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &respSearch); err != nil {
+		t.Fatalf("decode search: %v", err)
+	}
+	if len(respSearch.Descriptors) == 0 {
+		t.Fatalf("expected search to return results")
+	}
+}
+
 func TestProfilesAPI(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "test.db")
@@ -1122,6 +1244,155 @@ func TestProfilesPreviewAPI(t *testing.T) {
 	}
 	if preview.Summary.Same != 1 || len(preview.Same) != 1 {
 		t.Fatalf("expected 1 same, got %+v", preview.Summary)
+	}
+}
+
+func TestProfilesApplyDryRunAPI(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+	db, err := database.New(dbPath)
+	if err != nil {
+		t.Fatalf("db new: %v", err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+	if err := db.Migrate(ctx); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	// Admin user (operator allowed)
+	passwordHash, _ := pkgAuth.HashPassword("admin")
+	admin := &models.User{ID: "u1", Username: "admin", PasswordHash: passwordHash, Role: models.RoleAdmin, Enabled: true}
+	if err := db.CreateUser(ctx, admin); err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	// Mock BMC exposing redfish like in preview test
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		username, password, ok := r.BasicAuth()
+		if !ok || username != "admin" || password != "password" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/redfish/v1/Systems":
+			json.NewEncoder(w).Encode(map[string]any{"Members": []map[string]string{{"@odata.id": "/redfish/v1/Systems/S1"}}})
+		case "/redfish/v1/Systems/S1/Bios":
+			json.NewEncoder(w).Encode(map[string]any{
+				"@Redfish.Settings": map[string]any{"SettingsObject": map[string]any{"@odata.id": "/redfish/v1/Systems/S1/Bios/Settings"}},
+				"Attributes":        map[string]any{"LogicalProc": true},
+			})
+		case "/redfish/v1/Managers":
+			json.NewEncoder(w).Encode(map[string]any{"Members": []map[string]string{{"@odata.id": "/redfish/v1/Managers/M1"}}})
+		case "/redfish/v1/Managers/M1/NetworkProtocol":
+			json.NewEncoder(w).Encode(map[string]any{
+				"@Redfish.Settings": map[string]any{"SettingsObject": map[string]any{"@odata.id": "/redfish/v1/Managers/M1/NetworkProtocol/Settings"}},
+				"HTTPS":             map[string]any{"Port": float64(443)},
+			})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	// Seed BMC
+	b := &models.BMC{Name: "b1", Address: server.URL, Username: "admin", Password: "password", Enabled: true}
+	if err := db.CreateBMC(ctx, b); err != nil {
+		t.Fatalf("create bmc: %v", err)
+	}
+
+	handler := New(db)
+
+	// Discover to persist snapshot
+	req := httptest.NewRequest(http.MethodGet, "/api/bmcs/b1/settings", nil)
+	req.SetBasicAuth("admin", "admin")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("settings list expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// Create profile and version with two entries (one change, one same)
+	p := models.Profile{Name: "baseline"}
+	body, _ := json.Marshal(p)
+	req = httptest.NewRequest(http.MethodPost, "/api/profiles", bytes.NewReader(body))
+	req.SetBasicAuth("admin", "admin")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create profile: %d %s", rec.Code, rec.Body.String())
+	}
+	var created models.Profile
+	_ = json.Unmarshal(rec.Body.Bytes(), &created)
+
+	v := models.ProfileVersion{Notes: "v1",
+		Entries: []models.ProfileEntry{
+			{ResourcePath: "/redfish/v1/Managers/M1/NetworkProtocol", Attribute: "HTTPS.Port", DesiredValue: 444},
+			{ResourcePath: "/redfish/v1/Systems/S1/Bios", Attribute: "Attributes.LogicalProc", DesiredValue: true},
+		},
+	}
+	body, _ = json.Marshal(v)
+	req = httptest.NewRequest(http.MethodPost, "/api/profiles/"+created.ID+"/versions", bytes.NewReader(body))
+	req.SetBasicAuth("admin", "admin")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create version: %d %s", rec.Code, rec.Body.String())
+	}
+
+	// Apply dry-run
+	payload := map[string]any{"bmc": "b1", "dryRun": true}
+	body, _ = json.Marshal(payload)
+	req = httptest.NewRequest(http.MethodPost, "/api/profiles/"+created.ID+"/apply", bytes.NewReader(body))
+	req.SetBasicAuth("admin", "admin")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("apply dry-run expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var apply map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &apply); err != nil {
+		t.Fatalf("decode apply: %v", err)
+	}
+	summary, _ := apply["summary"].(map[string]any)
+	if summary == nil {
+		t.Fatalf("missing summary in response: %s", rec.Body.String())
+	}
+	if int(summary["total_entries"].(float64)) != 2 {
+		t.Fatalf("expected total_entries 2, got %v", summary["total_entries"])
+	}
+	if int(summary["request_count"].(float64)) != 1 {
+		t.Fatalf("expected 1 request, got %v", summary["request_count"])
+	}
+	reqs, _ := apply["requests"].([]interface{})
+	if len(reqs) == 0 {
+		t.Fatalf("expected at least one request")
+	}
+	// Verify one request targets NetworkProtocol and contains HTTPS.Port 444
+	found := false
+	for _, it := range reqs {
+		r := it.(map[string]any)
+		rp, _ := r["resource_path"].(string)
+		ru, _ := r["request_url"].(string)
+		if strings.Contains(rp, "NetworkProtocol") || strings.Contains(ru, "NetworkProtocol") {
+			if m := r["http_method"].(string); m != http.MethodPatch {
+				t.Fatalf("expected PATCH, got %s", m)
+			}
+			if body, ok := r["request_body"].(map[string]any); ok {
+				if https, ok := body["HTTPS"].(map[string]any); ok {
+					if port, ok := https["Port"].(float64); ok {
+						if int(port) == 444 {
+							found = true
+						}
+					}
+				}
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("did not find merged HTTPS.Port change in requests: %+v", apply["requests"])
 	}
 }
 

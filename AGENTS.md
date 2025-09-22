@@ -10,12 +10,15 @@ These are the most important rules. They are not suggestions. You MUST follow th
 
 **No work is permitted on the `master` branch.** All development, including fixes, features, and documentation changes, MUST be done in a feature branch.
 
-1.  **ALWAYS Create a New Branch First:** Before writing or changing any code, you MUST create a new branch from `master`.
+1.  If we are already on a branch other than `master` then you do not need to create an additional feature branch. We
+    don't want to create branches upon branches for changes.
+
+2.  **ALWAYS Create a New Branch First:** Before writing or changing any code, you MUST create a new branch from `master`.
     ```bash
     git checkout -b <branch_name>
     ```
 
-2.  **Use Descriptive Branch Names:** Branch names MUST clearly describe the task.
+3.  **Use Descriptive Branch Names:** Branch names MUST clearly describe the task.
     -   **Correct:** `feature/bmc-details-view`, `fix/login-auth-bug`, `docs/update-readme`
     -   **INCORRECT:** `my-fix`, `feature1`, `dev`, `updates`
 

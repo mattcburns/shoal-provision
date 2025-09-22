@@ -903,6 +903,7 @@ func (h *Handler) handleBMCDetails(w http.ResponseWriter, r *http.Request) {
 	<!-- Tabs -->
 	<div style="margin-bottom: 10px;">
 		<button id="tab-overview" class="btn btn-primary">Overview</button>
+		<button id="tab-settings" class="btn">Settings</button>
 		<button id="tab-changes" class="btn">Changes</button>
 	</div>
 
@@ -929,6 +930,50 @@ func (h *Handler) handleBMCDetails(w http.ResponseWriter, r *http.Request) {
 		<div class="details-section">
 			<h3>System Event Log</h3>
 			<div id="sel-entries"></div>
+		</div>
+	</div>
+
+	<div id="tab-settings-content" style="display:none;">
+		<div class="details-section">
+			<h3>Settings</h3>
+			<form id="settings-filters" style="display:flex; gap:8px; align-items:flex-end; flex-wrap:wrap;">
+				<div>
+					<label>Resource</label>
+					<input type="text" id="set-resource" placeholder="Bios|NetworkProtocol" />
+				</div>
+				<div>
+					<label>Search</label>
+					<input type="text" id="set-search" placeholder="attribute/name/path" />
+				</div>
+				<div>
+					<label>OEM</label>
+					<select id="set-oem">
+						<option value="">Any</option>
+						<option value="true">OEM only</option>
+						<option value="false">Non-OEM</option>
+					</select>
+				</div>
+				<div>
+					<label>Page size</label>
+					<input type="number" id="set-page-size" value="25" min="1" max="200" style="width:100px;" />
+				</div>
+				<button type="submit" class="btn btn-primary">Apply</button>
+			</form>
+
+			<div style="margin-top:10px;">
+				<div id="set-summary" style="margin-bottom:8px;"></div>
+				<table class="table" id="settings-table">
+					<thead>
+						<tr><th>Resource</th><th>Attribute</th><th>Current</th><th>Type</th><th>OEM</th><th>Apply</th></tr>
+					</thead>
+					<tbody></tbody>
+				</table>
+				<div style="display:flex; gap:8px; align-items:center;">
+					<button id="set-prev" class="btn">Prev</button>
+					<span id="set-page-info"></span>
+					<button id="set-next" class="btn">Next</button>
+				</div>
+			</div>
 		</div>
 	</div>
 
@@ -1223,6 +1268,7 @@ function loadBMCDetails() {
             displayStorageDevices(data.storage_devices);
             displaySELEntries(data.sel_entries);
 			initChangesTab(bmcName);
+			initSettingsTab(bmcName);
         })
         .catch(function(error) {
             document.getElementById('loading-indicator').style.display = 'none';
@@ -1313,6 +1359,106 @@ function initChangesTab(bmcName) {
 		}).join('');
 	}
 }
+
+function initSettingsTab(bmcName) {
+	const tabOverviewBtn = document.getElementById('tab-overview');
+	const tabSettingsBtn = document.getElementById('tab-settings');
+	const tabChangesBtn = document.getElementById('tab-changes');
+	const overview = document.getElementById('tab-overview-content');
+	const settings = document.getElementById('tab-settings-content');
+	const changes = document.getElementById('tab-changes-content');
+
+	function showOverview() {
+		tabOverviewBtn.classList.add('btn-primary');
+		tabSettingsBtn.classList.remove('btn-primary');
+		tabChangesBtn.classList.remove('btn-primary');
+		overview.style.display = '';
+		settings.style.display = 'none';
+		changes.style.display = 'none';
+	}
+	function showSettings() {
+		tabSettingsBtn.classList.add('btn-primary');
+		tabOverviewBtn.classList.remove('btn-primary');
+		tabChangesBtn.classList.remove('btn-primary');
+		overview.style.display = 'none';
+		settings.style.display = '';
+		changes.style.display = 'none';
+		fetchSettings();
+	}
+	function showChanges() {
+		tabChangesBtn.classList.add('btn-primary');
+		tabOverviewBtn.classList.remove('btn-primary');
+		tabSettingsBtn.classList.remove('btn-primary');
+		overview.style.display = 'none';
+		settings.style.display = 'none';
+		changes.style.display = '';
+	}
+	tabOverviewBtn.addEventListener('click', showOverview);
+	tabSettingsBtn.addEventListener('click', showSettings);
+	tabChangesBtn.addEventListener('click', showChanges);
+
+	let page = 1;
+	const tbody = document.querySelector('#settings-table tbody');
+	const summary = document.getElementById('set-summary');
+	const pageInfo = document.getElementById('set-page-info');
+	const filtersForm = document.getElementById('settings-filters');
+	const btnPrev = document.getElementById('set-prev');
+	const btnNext = document.getElementById('set-next');
+
+	filtersForm.addEventListener('submit', function(e){ e.preventDefault(); page = 1; fetchSettings(); });
+	btnPrev.addEventListener('click', function(){ if (page>1) { page--; fetchSettings(); }});
+	btnNext.addEventListener('click', function(){ page++; fetchSettings(); });
+
+	async function fetchSettings() {
+		const resource = document.getElementById('set-resource').value.trim();
+		const search = document.getElementById('set-search').value.trim();
+		const oem = document.getElementById('set-oem').value;
+		const pageSize = parseInt(document.getElementById('set-page-size').value || '25', 10);
+		const params = new URLSearchParams();
+		if (resource) params.set('resource', resource);
+		if (search) params.set('search', search);
+		if (oem) params.set('oem', oem);
+		if (page) params.set('page', String(page));
+		if (pageSize) params.set('page_size', String(pageSize));
+		const url = '/api/bmcs/' + encodeURIComponent(bmcName) + '/settings?' + params.toString();
+		tbody.innerHTML = '<tr><td colspan="6">Loading...</td></tr>';
+		try {
+			const res = await fetch(url);
+			if (!res.ok) {
+				tbody.innerHTML = '<tr><td colspan="6">Error ' + res.status + '</td></tr>';
+				return;
+			}
+			const data = await res.json();
+			const list = data.descriptors || [];
+			const total = data.total || list.length;
+			const pageSizeResp = data.page_size || pageSize;
+			const pageResp = data.page || page;
+			summary.textContent = 'Total ' + total + ' settings';
+			pageInfo.textContent = 'Page ' + pageResp + (pageSizeResp ? (' of ~' + Math.ceil(total / pageSizeResp)) : '');
+			btnPrev.disabled = (pageResp <= 1);
+			btnNext.disabled = (pageSizeResp ? (pageResp * pageSizeResp >= total) : list.length === 0);
+			if (!Array.isArray(list) || list.length === 0) {
+				tbody.innerHTML = '<tr><td colspan="6">No settings found</td></tr>';
+				return;
+			}
+			tbody.innerHTML = list.map(function(d){
+				const cur = (d.current_value == null) ? '' : JSON.stringify(d.current_value);
+				const oem = d.oem ? (d.oem_vendor || 'OEM') : '';
+				const apply = (d.apply_times && d.apply_times.length) ? d.apply_times.join(',') : '';
+				return '<tr>' +
+					'<td>' + (d.resource_path || '') + '</td>' +
+					'<td>' + (d.attribute || '') + '</td>' +
+					'<td>' + cur + '</td>' +
+					'<td>' + (d.type || '') + '</td>' +
+					'<td>' + oem + '</td>' +
+					'<td>' + apply + '</td>' +
+					'</tr>';
+			}).join('');
+		} catch (e) {
+			tbody.innerHTML = '<tr><td colspan="6">Error loading settings</td></tr>';
+		}
+	}
+}
 </script>
 {{end}}`
 
@@ -1378,7 +1524,21 @@ func (h *Handler) handleBMCSettingsAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resource := r.URL.Query().Get("resource")
+	q := r.URL.Query()
+	resource := q.Get("resource")
+	search := strings.TrimSpace(q.Get("search"))
+	oemParam := strings.TrimSpace(q.Get("oem"))
+	page, pageSize := 1, 0
+	if p := strings.TrimSpace(q.Get("page")); p != "" {
+		if n, err := strconv.Atoi(p); err == nil && n > 0 {
+			page = n
+		}
+	}
+	if ps := strings.TrimSpace(q.Get("page_size")); ps != "" {
+		if n, err := strconv.Atoi(ps); err == nil && n > 0 {
+			pageSize = n
+		}
+	}
 
 	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancel()
@@ -1391,10 +1551,59 @@ func (h *Handler) handleBMCSettingsAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Apply filters: OEM and free-text search over attribute/display/description/resource path
+	filtered := make([]models.SettingDescriptor, 0, len(descriptors))
+	wantOEM := -1 // -1 any, 0 false, 1 true
+	if oemParam != "" {
+		switch strings.ToLower(oemParam) {
+		case "1", "true", "yes":
+			wantOEM = 1
+		case "0", "false", "no":
+			wantOEM = 0
+		}
+	}
+	s := strings.ToLower(search)
+	for _, d := range descriptors {
+		if wantOEM == 1 && !d.OEM {
+			continue
+		}
+		if wantOEM == 0 && d.OEM {
+			continue
+		}
+		if s != "" {
+			hay := strings.ToLower(d.Attribute + " " + d.DisplayName + " " + d.Description + " " + d.ResourcePath + " " + d.OEMVendor)
+			if !strings.Contains(hay, s) {
+				continue
+			}
+		}
+		filtered = append(filtered, d)
+	}
+
+	total := len(filtered)
+	// Pagination
+	if pageSize > 0 {
+		start := (page - 1) * pageSize
+		if start < 0 {
+			start = 0
+		}
+		end := start + pageSize
+		if start >= total {
+			filtered = []models.SettingDescriptor{}
+		} else {
+			if end > total {
+				end = total
+			}
+			filtered = filtered[start:end]
+		}
+	}
+
 	resp := models.SettingsResponse{
 		BMCName:     bmcName,
 		Resource:    resource,
-		Descriptors: descriptors,
+		Descriptors: filtered,
+		Page:        page,
+		PageSize:    pageSize,
+		Total:       total,
 	}
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
 		slog.Error("Failed to encode settings response", "error", err)
@@ -1467,7 +1676,21 @@ func (h *Handler) handleBMCSettingsAPIRestful(w http.ResponseWriter, r *http.Req
 
 	// List path
 	// Optional resource filter via query
-	resource := r.URL.Query().Get("resource")
+	q := r.URL.Query()
+	resource := q.Get("resource")
+	search := strings.TrimSpace(q.Get("search"))
+	oemParam := strings.TrimSpace(q.Get("oem"))
+	page, pageSize := 1, 0
+	if p := strings.TrimSpace(q.Get("page")); p != "" {
+		if n, err := strconv.Atoi(p); err == nil && n > 0 {
+			page = n
+		}
+	}
+	if ps := strings.TrimSpace(q.Get("page_size")); ps != "" {
+		if n, err := strconv.Atoi(ps); err == nil && n > 0 {
+			pageSize = n
+		}
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 
@@ -1488,10 +1711,57 @@ func (h *Handler) handleBMCSettingsAPIRestful(w http.ResponseWriter, r *http.Req
 		return
 	}
 
+	// Apply filters and pagination like query handler
+	filtered := make([]models.SettingDescriptor, 0, len(descriptors))
+	wantOEM := -1
+	if oemParam != "" {
+		switch strings.ToLower(oemParam) {
+		case "1", "true", "yes":
+			wantOEM = 1
+		case "0", "false", "no":
+			wantOEM = 0
+		}
+	}
+	s := strings.ToLower(search)
+	for _, d := range descriptors {
+		if wantOEM == 1 && !d.OEM {
+			continue
+		}
+		if wantOEM == 0 && d.OEM {
+			continue
+		}
+		if s != "" {
+			hay := strings.ToLower(d.Attribute + " " + d.DisplayName + " " + d.Description + " " + d.ResourcePath + " " + d.OEMVendor)
+			if !strings.Contains(hay, s) {
+				continue
+			}
+		}
+		filtered = append(filtered, d)
+	}
+	total := len(filtered)
+	if pageSize > 0 {
+		start := (page - 1) * pageSize
+		if start < 0 {
+			start = 0
+		}
+		end := start + pageSize
+		if start >= total {
+			filtered = []models.SettingDescriptor{}
+		} else {
+			if end > total {
+				end = total
+			}
+			filtered = filtered[start:end]
+		}
+	}
+
 	resp := models.SettingsResponse{
 		BMCName:     bmcName,
 		Resource:    resource,
-		Descriptors: descriptors,
+		Descriptors: filtered,
+		Page:        page,
+		PageSize:    pageSize,
+		Total:       total,
 	}
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
 		slog.Error("Failed to encode settings response", "error", err)
@@ -1909,6 +2179,247 @@ func (h *Handler) handleProfilesRestful(w http.ResponseWriter, r *http.Request) 
 
 	// Subresources: versions, assignments
 	switch parts[3] {
+	case "apply":
+		// POST /api/profiles/{id}/apply { bmc, dryRun?:true, continueOnError?:false }
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		// RBAC: operator or admin required
+		if u := getUserFromContext(r.Context()); !auth.IsOperator(u) {
+			http.Error(w, "Access denied. Operator privileges required.", http.StatusForbidden)
+			return
+		}
+		var reqBody struct {
+			BMC             string `json:"bmc"`
+			DryRun          bool   `json:"dryRun"`
+			ContinueOnError bool   `json:"continueOnError"`
+			Version         int    `json:"version"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&reqBody); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{"error": "invalid payload"})
+			return
+		}
+		bmcName := strings.TrimSpace(reqBody.BMC)
+		if bmcName == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{"error": "bmc is required"})
+			return
+		}
+		// Determine version: explicit, else latest
+		verNum := reqBody.Version
+		if verNum <= 0 {
+			vs, err := h.db.GetProfileVersions(r.Context(), id)
+			if err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+				return
+			}
+			for _, vv := range vs {
+				if vv.Version > verNum {
+					verNum = vv.Version
+				}
+			}
+			if verNum == 0 {
+				w.WriteHeader(http.StatusNotFound)
+				json.NewEncoder(w).Encode(map[string]string{"error": "no versions for profile"})
+				return
+			}
+		}
+		// Load profile version
+		pv, err := h.db.GetProfileVersion(r.Context(), id, verNum)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+		if pv == nil {
+			http.NotFound(w, r)
+			return
+		}
+		// Ensure current settings are available; try discovery
+		ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+		defer cancel()
+		if _, err := h.bmcSvc.DiscoverSettings(ctx, bmcName, ""); err != nil {
+			slog.Warn("Discovery failed during apply preview", "bmc", bmcName, "error", err)
+		}
+		descs, err := h.db.GetSettingsDescriptors(ctx, bmcName, "")
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+		// Flatten current values for comparison
+		cur := make(map[string]interface{})
+		var flatten func(resourcePath, attr string, val interface{})
+		flatten = func(resourcePath, attr string, val interface{}) {
+			cur[resourcePath+"|"+attr] = val
+			if strings.Contains(resourcePath, "/Bios") {
+				cur[resourcePath+"|Attributes."+attr] = val
+			}
+			if m, ok := val.(map[string]interface{}); ok {
+				for k, v := range m {
+					flatten(resourcePath, attr+"."+k, v)
+				}
+			}
+		}
+		for _, d := range descs {
+			flatten(d.ResourcePath, d.Attribute, d.CurrentValue)
+		}
+
+		// Helper to build nested maps from dotted attribute paths
+		buildNested := func(root string, dotted string, value interface{}) map[string]interface{} {
+			m := map[string]interface{}{}
+			cur := m
+			parts := []string{}
+			if root != "" {
+				parts = append(parts, root)
+			}
+			if dotted != "" {
+				parts = append(parts, strings.Split(dotted, ".")...)
+			}
+			for i, p := range parts {
+				if i == len(parts)-1 {
+					cur[p] = value
+				} else {
+					nm := map[string]interface{}{}
+					if existing, ok := cur[p].(map[string]interface{}); ok {
+						nm = existing
+					}
+					cur[p] = nm
+					cur = nm
+				}
+			}
+			return m
+		}
+		// Helper to deep-merge maps
+		var merge func(dst, src map[string]interface{})
+		merge = func(dst, src map[string]interface{}) {
+			for k, v := range src {
+				if vm, ok := v.(map[string]interface{}); ok {
+					if dm, ok := dst[k].(map[string]interface{}); ok {
+						merge(dm, vm)
+					} else {
+						dst[k] = v
+					}
+				} else {
+					dst[k] = v
+				}
+			}
+		}
+
+		// Build request groups
+		type request struct {
+			ResourcePath        string                 `json:"resource_path"`
+			HTTPMethod          string                 `json:"http_method"`
+			RequestURL          string                 `json:"request_url"`
+			RequestBody         map[string]interface{} `json:"request_body"`
+			ApplyTimePreference string                 `json:"apply_time_preference,omitempty"`
+			Entries             []models.ProfileEntry  `json:"entries"`
+		}
+		var requests []request
+		// Index by target path to merge bodies
+		reqByPath := map[string]int{}
+
+		// Get BMC base address to build full URLs
+		bmc, err := h.db.GetBMCByName(ctx, bmcName)
+		if err != nil || bmc == nil {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{"error": "invalid bmc"})
+			return
+		}
+		normAddr := bmc.Address
+		if !strings.HasPrefix(normAddr, "http://") && !strings.HasPrefix(normAddr, "https://") {
+			normAddr = "https://" + normAddr
+		}
+		normAddr = strings.TrimRight(normAddr, "/")
+
+		// Track same/unmatched for summary
+		type change struct {
+			ResourcePath        string      `json:"resource_path"`
+			Attribute           string      `json:"attribute"`
+			Current             interface{} `json:"current"`
+			Desired             interface{} `json:"desired"`
+			ApplyTimePreference string      `json:"apply_time_preference,omitempty"`
+			OEMVendor           string      `json:"oem_vendor,omitempty"`
+		}
+		var same, unmatched []change
+
+		for _, e := range pv.Entries {
+			key := e.ResourcePath + "|" + e.Attribute
+			// Only consider entries that would change
+			if v, ok := cur[key]; ok {
+				if reflect.DeepEqual(v, e.DesiredValue) {
+					same = append(same, change{ResourcePath: e.ResourcePath, Attribute: e.Attribute, Current: v, Desired: e.DesiredValue, ApplyTimePreference: e.ApplyTimePreference, OEMVendor: e.OEMVendor})
+					continue
+				}
+			} else {
+				// No current match - still include as change, but mark unmatched too
+				unmatched = append(unmatched, change{ResourcePath: e.ResourcePath, Attribute: e.Attribute, Desired: e.DesiredValue, ApplyTimePreference: e.ApplyTimePreference, OEMVendor: e.OEMVendor})
+			}
+
+			targetPath := e.ResourcePath
+			dotted := e.Attribute
+			root := ""
+			// BIOS settings go to /Settings with Attributes root
+			if strings.Contains(e.ResourcePath, "/Bios") {
+				targetPath = strings.TrimRight(e.ResourcePath, "/") + "/Settings"
+				if strings.HasPrefix(dotted, "Attributes.") {
+					dotted = strings.TrimPrefix(dotted, "Attributes.")
+				}
+				root = "Attributes"
+			}
+			body := buildNested(root, dotted, e.DesiredValue)
+			// Merge into existing request for same target
+			idx, exists := reqByPath[targetPath]
+			if !exists {
+				// Build full URL
+				fullURL := normAddr + targetPath
+				req := request{
+					ResourcePath:        e.ResourcePath,
+					HTTPMethod:          http.MethodPatch,
+					RequestURL:          fullURL,
+					RequestBody:         map[string]interface{}{},
+					ApplyTimePreference: e.ApplyTimePreference,
+					Entries:             []models.ProfileEntry{e},
+				}
+				merge(req.RequestBody, body)
+				requests = append(requests, req)
+				reqByPath[targetPath] = len(requests) - 1
+			} else {
+				merge(requests[idx].RequestBody, body)
+				requests[idx].Entries = append(requests[idx].Entries, e)
+				if requests[idx].ApplyTimePreference == "" {
+					requests[idx].ApplyTimePreference = e.ApplyTimePreference
+				}
+			}
+		}
+
+		// Build response
+		resp := map[string]any{
+			"profile_id": id,
+			"version":    verNum,
+			"bmc":        bmcName,
+			"dry_run":    true,
+			"requests":   requests,
+			"same":       same,
+			"unmatched":  unmatched,
+		}
+		// Summary
+		changedCount := 0
+		for _, rq := range requests {
+			changedCount += len(rq.Entries)
+		}
+		totalEntries := changedCount + len(same) + len(unmatched)
+		resp["summary"] = map[string]int{
+			"total_entries": totalEntries,
+			"request_count": len(requests),
+			"same":          len(same),
+			"unmatched":     len(unmatched),
+		}
+		json.NewEncoder(w).Encode(resp)
+		return
 	case "export":
 		// POST /api/profiles/{id}/export with optional {"version":N}
 		if r.Method != http.MethodPost {
