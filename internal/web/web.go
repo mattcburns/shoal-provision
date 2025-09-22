@@ -80,8 +80,9 @@ func New(db *database.DB) http.Handler {
 
 	// Profiles API (JSON only)
 	mux.Handle("/api/profiles", h.requireAuth(http.HandlerFunc(h.handleProfiles)))
-	// Specific import endpoint must be registered explicitly
+	// Specific import/export/snapshot endpoints
 	mux.Handle("/api/profiles/import", h.requireAuth(http.HandlerFunc(h.handleProfilesImport)))
+	mux.Handle("/api/profiles/snapshot", h.requireAuth(http.HandlerFunc(h.handleProfilesSnapshot)))
 	mux.Handle("/api/profiles/", h.requireAuth(http.HandlerFunc(h.handleProfilesRestful)))
 
 	// User management routes (admin only)
@@ -1375,6 +1376,120 @@ func (h *Handler) handleProfiles(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+// handleProfilesSnapshot creates a new profile/version from current BMC settings
+// POST /api/profiles/snapshot?bmc={name}
+// Body: {"profile_id":"optional","name":"optional if creating","description":"optional","include_read_only":false}
+func (h *Handler) handleProfilesSnapshot(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	bmcName := r.URL.Query().Get("bmc")
+	if strings.TrimSpace(bmcName) == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": "bmc is required"})
+		return
+	}
+	var req struct {
+		ProfileID       string `json:"profile_id"`
+		Name            string `json:"name"`
+		Description     string `json:"description"`
+		IncludeReadOnly bool   `json:"include_read_only"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err.Error() != "EOF" {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": "invalid payload"})
+		return
+	}
+
+	// Ensure settings discovered and load descriptors
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	defer cancel()
+	if _, err := h.bmcSvc.DiscoverSettings(ctx, bmcName, ""); err != nil {
+		slog.Warn("Discovery failed during snapshot", "bmc", bmcName, "error", err)
+	}
+	descs, err := h.db.GetSettingsDescriptors(ctx, bmcName, "")
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+
+	// Build entries: use flattened attributes for nested maps
+	entries := make([]models.ProfileEntry, 0, len(descs))
+	var flatten func(resourcePath, attr string, val interface{})
+	flatten = func(resourcePath, attr string, val interface{}) {
+		// Add direct entry
+		entries = append(entries, models.ProfileEntry{ResourcePath: resourcePath, Attribute: attr, DesiredValue: val})
+		if strings.Contains(resourcePath, "/Bios") {
+			entries = append(entries, models.ProfileEntry{ResourcePath: resourcePath, Attribute: "Attributes." + attr, DesiredValue: val})
+		}
+		if m, ok := val.(map[string]interface{}); ok {
+			for k, v := range m {
+				flatten(resourcePath, attr+"."+k, v)
+			}
+		}
+	}
+	for _, d := range descs {
+		if !req.IncludeReadOnly && d.ReadOnly {
+			continue
+		}
+		flatten(d.ResourcePath, d.Attribute, d.CurrentValue)
+	}
+
+	// If provided, ensure profile exists; otherwise create one
+	var prof *models.Profile
+	if req.ProfileID != "" {
+		p, err := h.db.GetProfile(r.Context(), req.ProfileID)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+		if p == nil {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{"error": "profile_id not found"})
+			return
+		}
+		prof = p
+	} else {
+		if strings.TrimSpace(req.Name) == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{"error": "name is required when creating profile"})
+			return
+		}
+		p := &models.Profile{ID: fmt.Sprintf("p_%d", time.Now().UnixNano()), Name: req.Name, Description: req.Description}
+		if user := getUserFromContext(r.Context()); user != nil {
+			p.CreatedBy = user.ID
+		}
+		if err := h.db.CreateProfile(r.Context(), p); err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+		prof = p
+	}
+
+	// Create new version (auto-increment)
+	vs, _ := h.db.GetProfileVersions(r.Context(), prof.ID)
+	max := 0
+	for _, vv := range vs {
+		if vv.Version > max {
+			max = vv.Version
+		}
+	}
+	v := &models.ProfileVersion{ProfileID: prof.ID, Version: max + 1, Notes: fmt.Sprintf("Snapshot of %s", bmcName), Entries: entries}
+	if err := h.db.CreateProfileVersion(r.Context(), v); err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(map[string]any{"profile": prof, "version": v})
 }
 
 // handleProfilesImport handles POST /api/profiles/import to ingest a profile JSON

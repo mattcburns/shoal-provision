@@ -1225,3 +1225,107 @@ func TestProfilesImportExportAPI(t *testing.T) {
 		t.Fatalf("imported profile not found")
 	}
 }
+
+func TestProfilesSnapshotAPI(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+	db, err := database.New(dbPath)
+	if err != nil {
+		t.Fatalf("db new: %v", err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+	if err := db.Migrate(ctx); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	// Admin user
+	passwordHash, _ := pkgAuth.HashPassword("admin")
+	admin := &models.User{ID: "u1", Username: "admin", PasswordHash: passwordHash, Role: models.RoleAdmin, Enabled: true}
+	if err := db.CreateUser(ctx, admin); err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	// Mock BMC Redfish server with BIOS and HTTPS.Port
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		username, password, ok := r.BasicAuth()
+		if !ok || username != "admin" || password != "password" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/redfish/v1/Systems":
+			json.NewEncoder(w).Encode(map[string]any{"Members": []map[string]string{{"@odata.id": "/redfish/v1/Systems/S1"}}})
+		case "/redfish/v1/Systems/S1/Bios":
+			json.NewEncoder(w).Encode(map[string]any{
+				"@Redfish.Settings": map[string]any{"SettingsObject": map[string]any{"@odata.id": "/redfish/v1/Systems/S1/Bios/Settings"}},
+				"Attributes":        map[string]any{"LogicalProc": true},
+			})
+		case "/redfish/v1/Managers":
+			json.NewEncoder(w).Encode(map[string]any{"Members": []map[string]string{{"@odata.id": "/redfish/v1/Managers/M1"}}})
+		case "/redfish/v1/Managers/M1/NetworkProtocol":
+			json.NewEncoder(w).Encode(map[string]any{
+				"@Redfish.Settings": map[string]any{"SettingsObject": map[string]any{"@odata.id": "/redfish/v1/Managers/M1/NetworkProtocol/Settings"}},
+				"HTTPS":             map[string]any{"Port": float64(443)},
+			})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	// Seed BMC
+	b := &models.BMC{Name: "b1", Address: server.URL, Username: "admin", Password: "password", Enabled: true}
+	if err := db.CreateBMC(ctx, b); err != nil {
+		t.Fatalf("create bmc: %v", err)
+	}
+
+	handler := New(db)
+
+	// Create profile via snapshot
+	snapReqBody := map[string]any{"name": "snap1", "description": "baseline"}
+	sb, _ := json.Marshal(snapReqBody)
+	req := httptest.NewRequest(http.MethodPost, "/api/profiles/snapshot?bmc=b1", bytes.NewReader(sb))
+	req.SetBasicAuth("admin", "admin")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("snapshot expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var out struct {
+		Profile models.Profile
+		Version models.ProfileVersion
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode snapshot: %v", err)
+	}
+	if out.Profile.ID == "" || out.Version.Version != 1 {
+		t.Fatalf("invalid snapshot result")
+	}
+	if len(out.Version.Entries) == 0 {
+		t.Fatalf("expected entries in snapshot")
+	}
+
+	// Spot-check entries include flattened keys and correct values
+	hasHTTPS := false
+	hasLogical := false
+	for _, e := range out.Version.Entries {
+		if e.ResourcePath == "/redfish/v1/Managers/M1/NetworkProtocol" && e.Attribute == "HTTPS.Port" {
+			if v, ok := e.DesiredValue.(float64); !ok || int(v) != 443 {
+				t.Fatalf("expected HTTPS.Port 443")
+			}
+			hasHTTPS = true
+		}
+		if e.ResourcePath == "/redfish/v1/Systems/S1/Bios" && e.Attribute == "Attributes.LogicalProc" {
+			if vb, ok := e.DesiredValue.(bool); !ok || vb != true {
+				t.Fatalf("expected Attributes.LogicalProc true")
+			}
+			hasLogical = true
+		}
+	}
+	if !hasHTTPS || !hasLogical {
+		t.Fatalf("snapshot entries missing expected keys")
+	}
+}
