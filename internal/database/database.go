@@ -1345,6 +1345,7 @@ type AuditFilter struct {
 	Action       string
 	Method       string
 	PathContains string
+	Query        string
 	StatusMin    int
 	StatusMax    int
 	Since        time.Time
@@ -1379,6 +1380,11 @@ func (db *DB) ListAuditsFiltered(ctx context.Context, f AuditFilter) ([]models.A
 	if strings.TrimSpace(f.PathContains) != "" {
 		where = append(where, "path LIKE ?")
 		args = append(args, "%"+f.PathContains+"%")
+	}
+	if q := strings.TrimSpace(f.Query); q != "" {
+		like := "%" + q + "%"
+		where = append(where, "(path LIKE ? OR user_name LIKE ? OR action LIKE ? OR method LIKE ?)")
+		args = append(args, like, like, like, like)
 	}
 	if f.StatusMin > 0 {
 		where = append(where, "status_code >= ?")

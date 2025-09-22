@@ -239,6 +239,7 @@ func (h *Handler) handleBMCProxy(w http.ResponseWriter, r *http.Request, path st
 	user, _ := h.auth.AuthenticateRequest(r)
 	ctx := r.Context()
 	if user != nil {
+		// Use web handler's typed context key if available via import; otherwise keep legacy for API path
 		ctx = context.WithValue(ctx, "user", user)
 	}
 	// Proxy request to BMC

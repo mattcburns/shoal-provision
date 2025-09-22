@@ -580,6 +580,7 @@ Every build goes through automated quality gates:
 Shoal records an audit trail for proxied Redfish operations and other actions.
 
 - UI: Navigate to `/audit` (link visible to admins). Filter by BMC, user, action, method, path substring, HTTP status range, and date range. Results render a table and provide a JSON export link.
+- Per-BMC view: On the BMC details page (`/bmcs/details?name=...`), a "Changes" tab shows audits scoped to that BMC with the same filters and an export link. Non-admins see metadata only; admins see full request/response bodies.
 
 - API: `GET /api/audit` supports filters and a limit parameter:
   - `bmc`: exact BMC name

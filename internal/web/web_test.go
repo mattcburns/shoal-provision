@@ -545,6 +545,12 @@ func TestHandleBMCDetails(t *testing.T) {
 		if !strings.Contains(body, "System Event Log") {
 			t.Error("Response should contain System Event Log section")
 		}
+		if !strings.Contains(body, "Changes (Audit)") {
+			t.Error("Response should contain Changes tab section")
+		}
+		if !strings.Contains(body, "changes-table") {
+			t.Error("Response should contain changes table placeholder")
+		}
 		if !strings.Contains(body, "loadBMCDetails()") {
 			t.Error("Response should contain JavaScript to load BMC details")
 		}
@@ -1498,13 +1504,20 @@ func TestAuditEndpoints(t *testing.T) {
 		t.Fatalf("unexpected detail: %+v", det)
 	}
 
-	// Non-admin forbidden
+	// Operator allowed (metadata only) and bodies should be hidden
 	req = httptest.NewRequest(http.MethodGet, "/api/audit", nil)
 	req.SetBasicAuth("op", "op")
 	rec = httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("operator should be forbidden, got %d", rec.Code)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("operator should be allowed metadata-only, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var opList []models.AuditRecord
+	if err := json.Unmarshal(rec.Body.Bytes(), &opList); err != nil {
+		t.Fatalf("decode operator list: %v", err)
+	}
+	if len(opList) == 0 || opList[0].RequestBody != "" || opList[0].ResponseBody != "" {
+		t.Fatalf("operator should not see bodies: %+v", opList)
 	}
 
 	// Admin UI page loads
