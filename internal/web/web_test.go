@@ -100,6 +100,93 @@ func (ts *testSetup) addAuth(req *http.Request) {
 	})
 }
 
+func TestProfilesUI_ReadOnlyPages(t *testing.T) {
+	ts := createTestSetup(t)
+	defer ts.DB.Close()
+
+	ctx := context.Background()
+
+	// Seed: one profile with two versions and a couple entries
+	prof := &models.Profile{
+		Name:        "Baseline",
+		Description: "Golden settings",
+		CreatedBy:   "tester",
+	}
+	if err := ts.DB.CreateProfile(ctx, prof); err != nil {
+		t.Fatalf("CreateProfile: %v", err)
+	}
+	v1 := &models.ProfileVersion{ProfileID: prof.ID, Version: 1, Notes: "initial", Entries: []models.ProfileEntry{
+		{ResourcePath: "/redfish/v1/Systems/1/EthernetInterfaces/1", Attribute: "MACAddress", DesiredValue: "AA:BB:CC:00:11:22"},
+		{ResourcePath: "/redfish/v1/Systems/1", Attribute: "AssetTag", DesiredValue: "ASSET-001"},
+	}}
+	if err := ts.DB.CreateProfileVersion(ctx, v1); err != nil {
+		t.Fatalf("CreateProfileVersion v1: %v", err)
+	}
+	v2 := &models.ProfileVersion{ProfileID: prof.ID, Version: 2, Notes: "update tag", Entries: []models.ProfileEntry{
+		{ResourcePath: "/redfish/v1/Systems/1", Attribute: "AssetTag", DesiredValue: "ASSET-002"},
+	}}
+	if err := ts.DB.CreateProfileVersion(ctx, v2); err != nil {
+		t.Fatalf("CreateProfileVersion v2: %v", err)
+	}
+
+	t.Run("List Page", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/profiles", nil)
+		ts.addAuth(req)
+		w := httptest.NewRecorder()
+		ts.Handler.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("/profiles status got %d", w.Code)
+		}
+		body := w.Body.String()
+		if !strings.Contains(body, "Configuration Profiles") {
+			t.Errorf("expected header present")
+		}
+		if !strings.Contains(body, prof.Name) {
+			t.Errorf("expected profile name in list")
+		}
+		if !strings.Contains(body, "/profiles/") {
+			t.Errorf("expected link to profile detail")
+		}
+	})
+
+	t.Run("Detail Page", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/profiles/"+prof.ID, nil)
+		ts.addAuth(req)
+		w := httptest.NewRecorder()
+		ts.Handler.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("/profiles/{id} status got %d", w.Code)
+		}
+		body := w.Body.String()
+		if !strings.Contains(body, "Profile:") || !strings.Contains(body, prof.Name) {
+			t.Errorf("expected profile title")
+		}
+		if !strings.Contains(body, "Versions") {
+			t.Errorf("expected versions section")
+		}
+		if !strings.Contains(body, "/profiles/"+prof.ID+"/versions/1") || !strings.Contains(body, "/profiles/"+prof.ID+"/versions/2") {
+			t.Errorf("expected version links")
+		}
+	})
+
+	t.Run("Version Page", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/profiles/"+prof.ID+"/versions/2", nil)
+		ts.addAuth(req)
+		w := httptest.NewRecorder()
+		ts.Handler.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("/profiles/{id}/versions/{v} status got %d", w.Code)
+		}
+		body := w.Body.String()
+		if !strings.Contains(body, "Entries") {
+			t.Errorf("expected entries section")
+		}
+		if !strings.Contains(body, "AssetTag") || !strings.Contains(body, "ASSET-002") {
+			t.Errorf("expected entry details visible")
+		}
+	})
+}
+
 func TestHandleEditBMC(t *testing.T) {
 	ts := createTestSetup(t)
 	defer ts.DB.Close()
