@@ -3084,28 +3084,37 @@ func (h *Handler) handleProfilesRestful(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		if len(parts) == 5 {
-			// GET specific version
-			if r.Method != http.MethodGet {
-				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-				return
-			}
 			vnum, err := strconv.Atoi(parts[4])
 			if err != nil {
 				w.WriteHeader(http.StatusBadRequest)
 				json.NewEncoder(w).Encode(map[string]string{"error": "invalid version"})
 				return
 			}
-			v, err := h.db.GetProfileVersion(r.Context(), id, vnum)
-			if err != nil {
-				w.WriteHeader(http.StatusInternalServerError)
-				json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			switch r.Method {
+			case http.MethodGet:
+				v, err := h.db.GetProfileVersion(r.Context(), id, vnum)
+				if err != nil {
+					w.WriteHeader(http.StatusInternalServerError)
+					json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+					return
+				}
+				if v == nil {
+					http.NotFound(w, r)
+					return
+				}
+				json.NewEncoder(w).Encode(v)
 				return
-			}
-			if v == nil {
-				http.NotFound(w, r)
+			case http.MethodDelete:
+				if err := h.db.DeleteProfileVersion(r.Context(), id, vnum); err != nil {
+					w.WriteHeader(http.StatusInternalServerError)
+					json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+					return
+				}
+				w.WriteHeader(http.StatusNoContent)
 				return
+			default:
+				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			}
-			json.NewEncoder(w).Encode(v)
 			return
 		}
 	case "assignments":
@@ -3372,6 +3381,34 @@ func (h *Handler) handleProfilesPage(w http.ResponseWriter, r *http.Request) {
 
 	page := `{{define "content"}}
 <h2>Configuration Profiles</h2>
+<div style="margin:10px 0;">
+	<button class="btn btn-primary" onclick="document.getElementById('new-prof').style.display='block'">New Profile</button>
+	<div id="new-prof" class="card" style="display:none; padding:10px; margin-top:10px; max-width:520px;">
+		<h3>Create Profile</h3>
+		<form id="new-prof-form">
+			<div class="form-group"><label>Name</label><input id="np-name" required/></div>
+			<div class="form-group"><label>Description</label><input id="np-desc"/></div>
+			<div>
+				<button type="submit" class="btn btn-primary">Create</button>
+				<button type="button" class="btn" onclick="document.getElementById('new-prof').style.display='none'">Cancel</button>
+			</div>
+			<div id="np-msg" style="margin-top:8px;"></div>
+		</form>
+	</div>
+	<script>
+	document.getElementById('new-prof-form').addEventListener('submit', async (e) => {
+		e.preventDefault();
+		const name = document.getElementById('np-name').value.trim();
+		const desc = document.getElementById('np-desc').value.trim();
+		const msg = document.getElementById('np-msg');
+		msg.textContent = 'Creating...';
+		const res = await fetch('/api/profiles', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({name:name, description:desc})});
+		if (!res.ok) { msg.textContent = 'Error: ' + res.status; return; }
+		const p = await res.json();
+		window.location = '/profiles/' + encodeURIComponent(p.id);
+	});
+	</script>
+</div>
 <table class="table">
 	<thead><tr><th>Name</th><th>Description</th><th>Created By</th><th>Updated</th><th></th></tr></thead>
 	<tbody>
@@ -3381,13 +3418,24 @@ func (h *Handler) handleProfilesPage(w http.ResponseWriter, r *http.Request) {
 				<td>{{.Description}}</td>
 				<td>{{.CreatedBy}}</td>
 				<td>{{.UpdatedAt.Format "2006-01-02 15:04:05"}}</td>
-				<td><a class="btn" href="/profiles/{{.ID}}">View</a></td>
+				<td>
+					<a class="btn" href="/profiles/{{.ID}}">View</a>
+					<button class="btn btn-danger" onclick="delProf('{{.ID}}','{{.Name}}')">Delete</button>
+				</td>
 			</tr>
 		{{else}}
 			<tr><td colspan="5">No profiles found.</td></tr>
 		{{end}}
 	</tbody>
 </table>
+<script>
+async function delProf(id, name){
+	if(!confirm('Delete profile "' + name + '"? This cannot be undone.')) return;
+	const res = await fetch('/api/profiles/' + encodeURIComponent(id), {method:'DELETE'});
+	if(!res.ok && res.status !== 204){ alert('Delete failed: ' + res.status); return; }
+	location.reload();
+}
+</script>
 {{end}}`
 
 	tmpl := template.Must(h.templates.Clone())
@@ -3451,11 +3499,60 @@ func (h *Handler) renderProfileDetailPage(w http.ResponseWriter, r *http.Request
 
 	page := `{{define "content"}}
 <a href="/profiles" class="btn">← Back to Profiles</a>
-<h2>Profile: {{.Profile.Name}}</h2>
-<p>{{.Profile.Description}}</p>
-<div><strong>Created By:</strong> {{.Profile.CreatedBy}} &nbsp; <strong>Updated:</strong> {{.Profile.UpdatedAt.Format "2006-01-02 15:04:05"}}</div>
+	<h2>Profile: {{.Profile.Name}}</h2>
+	<div class="card" style="max-width:680px; padding:10px;">
+		<form id="edit-prof">
+			<div class="form-group"><label>Name</label><input id="ep-name" value="{{.Profile.Name}}" required/></div>
+			<div class="form-group"><label>Description</label><input id="ep-desc" value="{{.Profile.Description}}"/></div>
+			<div>
+				<button type="submit" class="btn btn-primary">Save</button>
+				<button type="button" class="btn btn-danger" onclick="delProf('{{.Profile.ID}}')">Delete Profile</button>
+				<span id="ep-msg" style="margin-left:8px;"></span>
+			</div>
+		</form>
+		<script>
+		document.getElementById('edit-prof').addEventListener('submit', async (e) => {
+			e.preventDefault();
+			const name = document.getElementById('ep-name').value.trim();
+			const desc = document.getElementById('ep-desc').value.trim();
+			const msg = document.getElementById('ep-msg');
+			msg.textContent = 'Saving...';
+			const res = await fetch('/api/profiles/' + encodeURIComponent('{{.Profile.ID}}'), {method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify({name:name, description:desc})});
+			if (!res.ok) { msg.textContent = 'Error ' + res.status; return; }
+			msg.textContent = 'Saved';
+		});
+		async function delProf(id){
+			if(!confirm('Delete this profile and all its versions?')) return;
+			const res = await fetch('/api/profiles/' + encodeURIComponent(id), {method:'DELETE'});
+			if(!res.ok && res.status !== 204){ alert('Delete failed: ' + res.status); return; }
+			window.location = '/profiles';
+		}
+		</script>
+		<div style="margin-top:8px;"><strong>Created By:</strong> {{.Profile.CreatedBy}} &nbsp; <strong>Updated:</strong> {{.Profile.UpdatedAt.Format "2006-01-02 15:04:05"}}</div>
+	</div>
 
 <h3>Versions</h3>
+<div class="card" style="max-width:680px; padding:10px;">
+	<form id="new-ver">
+		<div class="form-group"><label>Notes</label><input id="nv-notes" placeholder="e.g., manual edit"/></div>
+		<div>
+			<button type="submit" class="btn btn-primary">Create Version</button>
+			<span id="nv-msg" style="margin-left:8px;"></span>
+		</div>
+	</form>
+	<script>
+	document.getElementById('new-ver').addEventListener('submit', async (e) => {
+		e.preventDefault();
+		const notes = document.getElementById('nv-notes').value.trim();
+		const msg = document.getElementById('nv-msg');
+		msg.textContent = 'Creating...';
+		const res = await fetch('/api/profiles/' + encodeURIComponent('{{.Profile.ID}}') + '/versions', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({notes:notes, entries:[]})});
+		if(!res.ok){ msg.textContent = 'Error ' + res.status; return; }
+		const v = await res.json();
+		window.location = '/profiles/' + encodeURIComponent('{{.Profile.ID}}') + '/versions/' + v.version;
+	});
+	</script>
+</div>
 <table class="table">
 	<thead><tr><th>Version</th><th>Created</th><th>Notes</th><th></th></tr></thead>
 	<tbody>
@@ -3510,6 +3607,17 @@ func (h *Handler) renderProfileVersionPage(w http.ResponseWriter, r *http.Reques
 <a href="/profiles/{{.Profile.ID}}" class="btn">← Back to Profile</a>
 <h2>Profile: {{.Profile.Name}} — Version {{.Version.Version}}</h2>
 <div><strong>Created:</strong> {{.Version.CreatedAt.Format "2006-01-02 15:04:05"}} &nbsp; <strong>Notes:</strong> {{.Version.Notes}}</div>
+<div style="margin:8px 0;">
+	<button class="btn btn-danger" onclick="delVer('{{.Profile.ID}}', {{.Version.Version}})">Delete Version</button>
+	<script>
+	async function delVer(pid, ver){
+		if(!confirm('Delete version ' + ver + '?')) return;
+		const res = await fetch('/api/profiles/' + encodeURIComponent(pid) + '/versions/' + ver, {method:'DELETE'});
+		if(!res.ok && res.status !== 204){ alert('Delete failed: ' + res.status); return; }
+		window.location = '/profiles/' + encodeURIComponent(pid);
+	}
+	</script>
+</div>
 
 <h3>Entries</h3>
 <table class="table">
