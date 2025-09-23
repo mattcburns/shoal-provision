@@ -744,6 +744,13 @@ func TestHandleBMCDetails(t *testing.T) {
 		if !strings.Contains(body, "BMC Details - BMC Details - test-details-bmc") {
 			t.Error("Response should contain BMC details title")
 		}
+		// Drag-and-drop Boot Order list should be present
+		if !strings.Contains(body, "id=\"boot-order-list\"") {
+			t.Error("Boot Order list should be present")
+		}
+		if !strings.Contains(body, "role=\"listbox\"") {
+			t.Error("Boot Order list should advertise role listbox for accessibility")
+		}
 		if !strings.Contains(body, "Back to BMC List") {
 			t.Error("Response should contain back link")
 		}
