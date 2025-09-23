@@ -1020,6 +1020,46 @@ func (h *Handler) handleBMCDetails(w http.ResponseWriter, r *http.Request) {
 					<tbody></tbody>
 				</table>
 			</div>
+
+			<div style="margin-top:16px;">
+				<button id="prof-snapshot-open" type="button" class="btn btn-warning">Snapshot Current Settings</button>
+			</div>
+
+			<!-- Simple Snapshot Modal -->
+			<div id="snap-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.4); z-index:1000;">
+				<div style="background:#fff; max-width:640px; margin:60px auto; padding:20px; border-radius:8px; box-shadow:0 4px 16px rgba(0,0,0,0.2);">
+					<h3>Create Snapshot</h3>
+					<p>Create a new profile or add a new version to an existing profile from this BMC's current settings.</p>
+					<form id="snap-form" style="display:flex; flex-direction:column; gap:10px;">
+						<div>
+							<label><input type="radio" name="snap-mode" value="new" checked /> New Profile</label>
+							<label style="margin-left:20px;"><input type="radio" name="snap-mode" value="existing" /> Existing Profile</label>
+						</div>
+						<div id="snap-new-fields" style="display:flex; gap:10px; flex-wrap:wrap;">
+							<div style="flex:1 1 220px;">
+								<label for="snap-name">Profile Name</label>
+								<input id="snap-name" placeholder="e.g., Baseline for rack-12" />
+							</div>
+							<div style="flex:1 1 300px;">
+								<label for="snap-desc">Description</label>
+								<input id="snap-desc" placeholder="Optional description" />
+							</div>
+						</div>
+						<div id="snap-existing-fields" style="display:none;">
+							<label for="snap-profile-id">Profile</label>
+							<select id="snap-profile-id" style="min-width:260px;"><option value="">Select…</option></select>
+						</div>
+						<div>
+							<label><input type="checkbox" id="snap-include-ro" /> Include read-only settings</label>
+						</div>
+						<div id="snap-status" style="min-height:20px; color:#333;"></div>
+						<div style="display:flex; gap:10px; justify-content:flex-end;">
+							<button type="button" id="snap-cancel" class="btn">Cancel</button>
+							<button type="submit" id="snap-submit" class="btn btn-primary">Create Snapshot</button>
+						</div>
+					</form>
+				</div>
+			</div>
 		</div>
 	</div>
 
@@ -1516,6 +1556,20 @@ function initSettingsTab(bmcName) {
 		const btnExec = document.getElementById('prof-execute');
 		const statusDiv = document.getElementById('prof-apply-status');
 		const tableBody = document.querySelector('#prof-apply-table tbody');
+		// Snapshot modal elements
+		const snapOpen = document.getElementById('prof-snapshot-open');
+		const snapModal = document.getElementById('snap-modal');
+		const snapForm = document.getElementById('snap-form');
+		const snapModeNew = () => document.querySelector('input[name="snap-mode"][value="new"]');
+		const snapModeExisting = () => document.querySelector('input[name="snap-mode"][value="existing"]');
+		const snapNewFields = document.getElementById('snap-new-fields');
+		const snapExistingFields = document.getElementById('snap-existing-fields');
+		const snapName = document.getElementById('snap-name');
+		const snapDesc = document.getElementById('snap-desc');
+		const snapProfileId = document.getElementById('snap-profile-id');
+		const snapIncludeRO = document.getElementById('snap-include-ro');
+		const snapStatus = document.getElementById('snap-status');
+		const snapCancel = document.getElementById('snap-cancel');
         let isBusy = false;
 
 		if (!profSelect || profSelect.dataset.initialized === '1') {
@@ -1542,6 +1596,64 @@ function initSettingsTab(bmcName) {
 		});
 
 		loadProfiles();
+
+		// Snapshot wiring
+		if (snapOpen && snapModal && snapForm) {
+			snapOpen.addEventListener('click', () => { snapStatus.textContent=''; snapModal.style.display='block'; ensureProfilesLoadedForSnap(); updateSnapMode(); });
+			snapCancel.addEventListener('click', () => { snapModal.style.display='none'; });
+			[snapModeNew(), snapModeExisting()].forEach(r => r && r.addEventListener('change', updateSnapMode));
+			snapForm.addEventListener('submit', async (e) => {
+				e.preventDefault();
+				if (isBusy) return;
+				const isNew = snapModeNew() && snapModeNew().checked;
+				const includeRO = !!(snapIncludeRO && snapIncludeRO.checked);
+				const payload = { include_read_only: includeRO };
+				if (isNew) {
+					const nm = (snapName && snapName.value || '').trim();
+					if (!nm) { snapStatus.textContent = 'Profile name is required'; return; }
+					payload.name = nm;
+					if (snapDesc && snapDesc.value) payload.description = snapDesc.value;
+				} else {
+					const pid = (snapProfileId && snapProfileId.value) || '';
+					if (!pid) { snapStatus.textContent = 'Select a profile'; return; }
+					payload.profile_id = pid;
+				}
+				setBusy(true);
+				snapStatus.textContent = 'Creating snapshot…';
+				try {
+					const res = await fetch('/api/profiles/snapshot?bmc=' + encodeURIComponent(bmcName), { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+					if (!res.ok) { snapStatus.textContent = 'Snapshot failed (' + res.status + ')'; setBusy(false); return; }
+					const data = await res.json();
+					snapStatus.textContent = 'Snapshot created: profile ' + (data.profile && (data.profile.name || data.profile.id)) + ', version ' + (data.version && data.version.version);
+					// Refresh versions if this profile is selected
+					if (profSelect && data.profile && profSelect.value === (data.profile.id || data.profile.ID)) {
+						await loadVersions(profSelect.value);
+					}
+				} catch (e) {
+					snapStatus.textContent = 'Snapshot error';
+				} finally {
+					setBusy(false);
+				}
+			});
+		}
+
+		async function ensureProfilesLoadedForSnap() {
+			if (!snapProfileId) return;
+			if (snapProfileId.dataset.loaded === '1') return;
+			try {
+				const res = await fetch('/api/profiles');
+				let list = [];
+				if (res.ok) list = await res.json();
+				snapProfileId.innerHTML = '<option value="">Select…</option>' + (list || []).map(p => '<option value="' + (p.id || p.ID || '') + '">' + (p.name || p.Name || p.id) + '</option>').join('');
+				snapProfileId.dataset.loaded = '1';
+			} catch {}
+		}
+
+		function updateSnapMode() {
+			const isNew = snapModeNew() && snapModeNew().checked;
+			snapNewFields.style.display = isNew ? 'flex' : 'none';
+			snapExistingFields.style.display = isNew ? 'none' : 'block';
+		}
 
 		async function loadProfiles() {
 			clearResults();
