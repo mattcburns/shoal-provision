@@ -29,6 +29,7 @@ import (
 	"shoal/internal/auth"
 	"shoal/internal/bmc"
 	"shoal/internal/database"
+	"shoal/pkg/contextkeys"
 	"shoal/pkg/models"
 	"shoal/pkg/redfish"
 )
@@ -239,8 +240,7 @@ func (h *Handler) handleBMCProxy(w http.ResponseWriter, r *http.Request, path st
 	user, _ := h.auth.AuthenticateRequest(r)
 	ctx := r.Context()
 	if user != nil {
-		// Use web handler's typed context key if available via import; otherwise keep legacy for API path
-		ctx = context.WithValue(ctx, "user", user)
+		ctx = context.WithValue(ctx, contextkeys.UserKey, user)
 	}
 	// Proxy request to BMC
 	resp, err := h.bmcSvc.ProxyRequest(ctx, bmcName, bmcPath, r)
@@ -249,7 +249,7 @@ func (h *Handler) handleBMCProxy(w http.ResponseWriter, r *http.Request, path st
 		h.writeErrorResponse(w, http.StatusBadGateway, "Base.1.0.InternalError", fmt.Sprintf("Failed to communicate with BMC: %v", err))
 		return
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// Copy response headers
 	for key, values := range resp.Header {
@@ -260,7 +260,9 @@ func (h *Handler) handleBMCProxy(w http.ResponseWriter, r *http.Request, path st
 
 	// Copy status code and body
 	w.WriteHeader(resp.StatusCode)
-	io.Copy(w, resp.Body)
+	if _, cerr := io.Copy(w, resp.Body); cerr != nil {
+		slog.Warn("proxy response copy error", "error", cerr)
+	}
 }
 
 // isBMCProxyRequest checks if the request should be proxied to a BMC
@@ -423,10 +425,7 @@ func (h *Handler) writeJSONResponse(w http.ResponseWriter, status int, data inte
 	}
 }
 
-// handleSessions handles session-related operations (deprecated, replaced by handleSessionService)
-func (h *Handler) handleSessions(w http.ResponseWriter, r *http.Request) {
-	h.writeErrorResponse(w, http.StatusNotImplemented, "Base.1.0.NotImplemented", "Sessions endpoint not implemented here")
-}
+// (removed unused handleSessions)
 
 // handleManagedNodes handles BMC management operations
 func (h *Handler) handleManagedNodes(w http.ResponseWriter, r *http.Request) {

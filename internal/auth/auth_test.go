@@ -27,6 +27,7 @@ import (
 
 	"shoal/internal/database"
 	pkgAuth "shoal/pkg/auth"
+	"shoal/pkg/contextkeys"
 	"shoal/pkg/models"
 )
 
@@ -55,7 +56,7 @@ func setupTestAuth(t *testing.T) (*Authenticator, *database.DB) {
 
 func TestAuthenticateBasic(t *testing.T) {
 	auth, db := setupTestAuth(t)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	ctx := context.Background()
 
@@ -77,7 +78,6 @@ func TestAuthenticateBasic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Authentication failed for valid credentials: %v", err)
 	}
-
 	if user == nil {
 		t.Fatal("User should not be nil for valid credentials")
 	}
@@ -109,7 +109,7 @@ func TestAuthenticateBasic(t *testing.T) {
 
 func TestCreateSession(t *testing.T) {
 	auth, db := setupTestAuth(t)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	ctx := context.Background()
 
@@ -163,7 +163,7 @@ func TestCreateSession(t *testing.T) {
 
 func TestAuthenticateToken(t *testing.T) {
 	auth, db := setupTestAuth(t)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	ctx := context.Background()
 
@@ -213,7 +213,7 @@ func TestAuthenticateToken(t *testing.T) {
 
 func TestDeleteSession(t *testing.T) {
 	auth, db := setupTestAuth(t)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	ctx := context.Background()
 
@@ -250,7 +250,7 @@ func TestDeleteSession(t *testing.T) {
 
 func TestAuthenticateRequest(t *testing.T) {
 	auth, db := setupTestAuth(t)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	ctx := context.Background()
 
@@ -310,7 +310,7 @@ func TestAuthenticateRequest(t *testing.T) {
 
 func TestRequireAuthMiddleware(t *testing.T) {
 	auth, db := setupTestAuth(t)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	ctx := context.Background()
 
@@ -341,7 +341,7 @@ func TestRequireAuthMiddleware(t *testing.T) {
 			return
 		}
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("success"))
+		_, _ = w.Write([]byte("success"))
 	})
 
 	// Wrap with auth middleware
@@ -402,7 +402,7 @@ func TestGetUserFromContext(t *testing.T) {
 		Enabled:  true,
 	}
 
-	ctx := context.WithValue(context.Background(), "user", user)
+	ctx := context.WithValue(context.Background(), contextkeys.UserKey, user)
 
 	retrievedUser, ok := GetUserFromContext(ctx)
 	if !ok {
@@ -427,7 +427,7 @@ func TestGetUserFromContext(t *testing.T) {
 	}
 
 	// Test with wrong type in context
-	ctx = context.WithValue(context.Background(), "user", "not-a-user")
+	ctx = context.WithValue(context.Background(), contextkeys.UserKey, "not-a-user")
 
 	retrievedUser, ok = GetUserFromContext(ctx)
 	if ok {
@@ -492,7 +492,7 @@ func BenchmarkCreateSession(b *testing.B) {
 	if err != nil {
 		b.Fatalf("Failed to create database: %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	ctx := context.Background()
 	if err := db.Migrate(ctx); err != nil {
@@ -510,7 +510,7 @@ func BenchmarkCreateSession(b *testing.B) {
 		}
 
 		// Clean up for next iteration
-		auth.DeleteSession(ctx, session.Token)
+		_ = auth.DeleteSession(ctx, session.Token)
 	}
 }
 
@@ -522,7 +522,7 @@ func BenchmarkAuthenticateBasic(b *testing.B) {
 	if err != nil {
 		b.Fatalf("Failed to create database: %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	ctx := context.Background()
 	if err := db.Migrate(ctx); err != nil {

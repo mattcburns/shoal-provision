@@ -31,14 +31,14 @@ func TestConnectionMethodOperations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.Remove(tempFile.Name())
-	tempFile.Close()
+	defer func() { _ = os.Remove(tempFile.Name()) }()
+	_ = tempFile.Close()
 
 	db, err := New(tempFile.Name())
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	// Run migrations
 	ctx := context.Background()
@@ -225,8 +225,8 @@ func TestConnectionMethodPasswordEncryption(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.Remove(tempFile.Name())
-	tempFile.Close()
+	defer func() { _ = os.Remove(tempFile.Name()) }()
+	_ = tempFile.Close()
 
 	// Use a test encryption key
 	encryptionKey := "test-encryption-key-32-bytes-long!"
@@ -234,7 +234,7 @@ func TestConnectionMethodPasswordEncryption(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	// Run migrations
 	ctx := context.Background()

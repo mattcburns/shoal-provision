@@ -37,7 +37,7 @@ func TestGetFirstManagerID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	ctx := context.Background()
 	if err := db.Migrate(ctx); err != nil {
@@ -56,7 +56,7 @@ func TestGetFirstManagerID(t *testing.T) {
 				},
 			}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(collection)
+			_ = json.NewEncoder(w).Encode(collection)
 		} else {
 			w.WriteHeader(http.StatusNotFound)
 		}
@@ -116,7 +116,7 @@ func TestGetFirstSystemID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	ctx := context.Background()
 	if err := db.Migrate(ctx); err != nil {
@@ -134,7 +134,7 @@ func TestGetFirstSystemID(t *testing.T) {
 				},
 			}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(collection)
+			_ = json.NewEncoder(w).Encode(collection)
 		} else {
 			w.WriteHeader(http.StatusNotFound)
 		}
@@ -194,7 +194,7 @@ func TestIDCacheExpiry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	// Create service with cache
 	svc := New(db)
@@ -217,7 +217,7 @@ func TestIDCacheExpiry(t *testing.T) {
 				},
 			}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(collection)
+			_ = json.NewEncoder(w).Encode(collection)
 		} else {
 			w.WriteHeader(http.StatusNotFound)
 		}
@@ -259,7 +259,7 @@ func TestIDDiscoveryFallback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	ctx := context.Background()
 	if err := db.Migrate(ctx); err != nil {

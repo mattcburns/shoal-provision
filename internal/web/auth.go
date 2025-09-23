@@ -380,6 +380,7 @@ func (h *Handler) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 		data.Error = errMsg
 	}
 
+	// #nosec G101 this is an HTML template, not credentials
 	changePasswordTemplate := `{{define "content"}}
 <h2>Change Password</h2>
 
@@ -388,26 +389,26 @@ func (h *Handler) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 {{end}}
 
 <form method="POST">
-    <div class="form-group">
-        <label for="current_password">Current Password:</label>
-        <input type="password" id="current_password" name="current_password" required>
-    </div>
+	<div class="form-group">
+		<label for="current_password">Current Password:</label>
+		<input type="password" id="current_password" name="current_password" required>
+	</div>
 
-    <div class="form-group">
-        <label for="new_password">New Password:</label>
-        <input type="password" id="new_password" name="new_password" required>
-        <small style="color: #666;">Password must be less than 72 characters (bcrypt limitation)</small>
-    </div>
+	<div class="form-group">
+		<label for="new_password">New Password:</label>
+		<input type="password" id="new_password" name="new_password" required>
+		<small style="color: #666;">Password must be less than 72 characters (bcrypt limitation)</small>
+	</div>
 
-    <div class="form-group">
-        <label for="confirm_password">Confirm New Password:</label>
-        <input type="password" id="confirm_password" name="confirm_password" required>
-    </div>
+	<div class="form-group">
+		<label for="confirm_password">Confirm New Password:</label>
+		<input type="password" id="confirm_password" name="confirm_password" required>
+	</div>
 
-    <div>
-        <button type="submit" class="btn btn-primary">Change Password</button>
-        <a href="/profile" class="btn btn-danger">Cancel</a>
-    </div>
+	<div>
+		<button type="submit" class="btn btn-primary">Change Password</button>
+		<a href="/profile" class="btn btn-danger">Cancel</a>
+	</div>
 </form>
 {{end}}`
 

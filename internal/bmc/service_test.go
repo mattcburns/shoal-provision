@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"shoal/internal/database"
+	"shoal/pkg/contextkeys"
 	"shoal/pkg/models"
 )
 
@@ -38,7 +39,7 @@ func TestBuildBMCURL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create database: %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	service := New(db)
 
@@ -143,7 +144,7 @@ func TestPowerControl(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create database: %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	ctx := context.Background()
 	if err := db.Migrate(ctx); err != nil {
@@ -172,7 +173,7 @@ func TestPowerControl(t *testing.T) {
 		case "/redfish/v1/Systems":
 			// Return a systems collection
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"@odata.id": "/redfish/v1/Systems",
 				"Members": []map[string]string{
 					{"@odata.id": "/redfish/v1/Systems/System1"},
@@ -273,7 +274,7 @@ func TestPowerControlNoSystems(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create database: %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	ctx := context.Background()
 	if err := db.Migrate(ctx); err != nil {
@@ -290,7 +291,7 @@ func TestPowerControlNoSystems(t *testing.T) {
 
 		if r.URL.Path == "/redfish/v1/Systems" {
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"@odata.id": "/redfish/v1/Systems",
 				"Members":   []map[string]string{},
 			})
@@ -333,7 +334,7 @@ func TestGetDetailedBMCStatus(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create database: %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	ctx := context.Background()
 	if err := db.Migrate(ctx); err != nil {
@@ -354,7 +355,7 @@ func TestGetDetailedBMCStatus(t *testing.T) {
 		switch r.URL.Path {
 		case "/redfish/v1/Systems":
 			// Return systems collection
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"@odata.id": "/redfish/v1/Systems",
 				"Members": []map[string]string{
 					{"@odata.id": "/redfish/v1/Systems/System1"},
@@ -362,7 +363,7 @@ func TestGetDetailedBMCStatus(t *testing.T) {
 			})
 		case "/redfish/v1/Systems/System1":
 			// Return system details
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"@odata.id":    "/redfish/v1/Systems/System1",
 				"Id":           "System1",
 				"Name":         "Test System",
@@ -374,7 +375,7 @@ func TestGetDetailedBMCStatus(t *testing.T) {
 			})
 		case "/redfish/v1/Systems/System1/EthernetInterfaces":
 			// Return network interfaces collection
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"@odata.id": "/redfish/v1/Systems/System1/EthernetInterfaces",
 				"Members": []map[string]string{
 					{"@odata.id": "/redfish/v1/Systems/System1/EthernetInterfaces/NIC1"},
@@ -383,7 +384,7 @@ func TestGetDetailedBMCStatus(t *testing.T) {
 			})
 		case "/redfish/v1/Systems/System1/EthernetInterfaces/NIC1":
 			// Return first NIC details
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"@odata.id":   "/redfish/v1/Systems/System1/EthernetInterfaces/NIC1",
 				"Id":          "NIC1",
 				"Name":        "Ethernet Interface 1",
@@ -396,7 +397,7 @@ func TestGetDetailedBMCStatus(t *testing.T) {
 			})
 		case "/redfish/v1/Systems/System1/EthernetInterfaces/NIC2":
 			// Return second NIC details
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"@odata.id":   "/redfish/v1/Systems/System1/EthernetInterfaces/NIC2",
 				"Id":          "NIC2",
 				"Name":        "Ethernet Interface 2",
@@ -408,7 +409,7 @@ func TestGetDetailedBMCStatus(t *testing.T) {
 			})
 		case "/redfish/v1/Systems/System1/Storage":
 			// Return storage collection
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"@odata.id": "/redfish/v1/Systems/System1/Storage",
 				"Members": []map[string]string{
 					{"@odata.id": "/redfish/v1/Systems/System1/Storage/Storage1"},
@@ -416,7 +417,7 @@ func TestGetDetailedBMCStatus(t *testing.T) {
 			})
 		case "/redfish/v1/Systems/System1/Storage/Storage1":
 			// Return storage controller details
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"@odata.id": "/redfish/v1/Systems/System1/Storage/Storage1",
 				"Id":        "Storage1",
 				"Name":      "Storage Controller",
@@ -427,7 +428,7 @@ func TestGetDetailedBMCStatus(t *testing.T) {
 			})
 		case "/redfish/v1/Systems/System1/Storage/Storage1/Drives/Drive1":
 			// Return first drive details
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"@odata.id":     "/redfish/v1/Systems/System1/Storage/Storage1/Drives/Drive1",
 				"Id":            "Drive1",
 				"Name":          "Drive 1",
@@ -441,7 +442,7 @@ func TestGetDetailedBMCStatus(t *testing.T) {
 			})
 		case "/redfish/v1/Systems/System1/Storage/Storage1/Drives/Drive2":
 			// Return second drive details
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"@odata.id":     "/redfish/v1/Systems/System1/Storage/Storage1/Drives/Drive2",
 				"Id":            "Drive2",
 				"Name":          "Drive 2",
@@ -455,7 +456,7 @@ func TestGetDetailedBMCStatus(t *testing.T) {
 			})
 		case "/redfish/v1/Managers":
 			// Return managers collection
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"@odata.id": "/redfish/v1/Managers",
 				"Members": []map[string]string{
 					{"@odata.id": "/redfish/v1/Managers/Manager1"},
@@ -463,7 +464,7 @@ func TestGetDetailedBMCStatus(t *testing.T) {
 			})
 		case "/redfish/v1/Managers/Manager1/LogServices":
 			// Return log services collection
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"@odata.id": "/redfish/v1/Managers/Manager1/LogServices",
 				"Members": []map[string]string{
 					{"@odata.id": "/redfish/v1/Managers/Manager1/LogServices/EventLog"},
@@ -471,14 +472,14 @@ func TestGetDetailedBMCStatus(t *testing.T) {
 			})
 		case "/redfish/v1/Managers/Manager1/LogServices/EventLog":
 			// Return log service details
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"@odata.id": "/redfish/v1/Managers/Manager1/LogServices/EventLog",
 				"Id":        "EventLog",
 				"Name":      "Event Log",
 			})
 		case "/redfish/v1/Managers/Manager1/LogServices/EventLog/Entries":
 			// Return log entries collection
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"@odata.id": "/redfish/v1/Managers/Manager1/LogServices/EventLog/Entries",
 				"Members": []map[string]string{
 					{"@odata.id": "/redfish/v1/Managers/Manager1/LogServices/EventLog/Entries/1"},
@@ -487,7 +488,7 @@ func TestGetDetailedBMCStatus(t *testing.T) {
 			})
 		case "/redfish/v1/Managers/Manager1/LogServices/EventLog/Entries/1":
 			// Return first log entry
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"@odata.id": "/redfish/v1/Managers/Manager1/LogServices/EventLog/Entries/1",
 				"Id":        "1",
 				"Message":   "System boot completed successfully",
@@ -497,7 +498,7 @@ func TestGetDetailedBMCStatus(t *testing.T) {
 			})
 		case "/redfish/v1/Managers/Manager1/LogServices/EventLog/Entries/2":
 			// Return second log entry
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"@odata.id": "/redfish/v1/Managers/Manager1/LogServices/EventLog/Entries/2",
 				"Id":        "2",
 				"Message":   "Temperature sensor reading high",
@@ -646,7 +647,7 @@ func TestGetSystemInfo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create database: %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	ctx := context.Background()
 	if err := db.Migrate(ctx); err != nil {
@@ -665,11 +666,11 @@ func TestGetSystemInfo(t *testing.T) {
 
 		switch r.URL.Path {
 		case "/redfish/v1/Systems":
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"Members": []map[string]string{{"@odata.id": "/redfish/v1/Systems/System1"}},
 			})
 		case "/redfish/v1/Systems/System1":
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"SerialNumber": "TEST123",
 				"SKU":          "TEST-SKU",
 				"PowerState":   "Off",
@@ -726,7 +727,7 @@ func TestGetNetworkInterfaces(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create database: %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	ctx := context.Background()
 	if err := db.Migrate(ctx); err != nil {
@@ -745,17 +746,17 @@ func TestGetNetworkInterfaces(t *testing.T) {
 
 		switch r.URL.Path {
 		case "/redfish/v1/Systems":
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"Members": []map[string]string{{"@odata.id": "/redfish/v1/Systems/System1"}},
 			})
 		case "/redfish/v1/Systems/System1/EthernetInterfaces":
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"Members": []map[string]string{
 					{"@odata.id": "/redfish/v1/Systems/System1/EthernetInterfaces/NIC1"},
 				},
 			})
 		case "/redfish/v1/Systems/System1/EthernetInterfaces/NIC1":
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"Name":        "Test NIC",
 				"Description": "Test Network Interface",
 				"MACAddress":  "11:22:33:44:55:66",
@@ -814,7 +815,7 @@ func TestGetStorageDevices(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create database: %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	ctx := context.Background()
 	if err := db.Migrate(ctx); err != nil {
@@ -833,23 +834,23 @@ func TestGetStorageDevices(t *testing.T) {
 
 		switch r.URL.Path {
 		case "/redfish/v1/Systems":
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"Members": []map[string]string{{"@odata.id": "/redfish/v1/Systems/System1"}},
 			})
 		case "/redfish/v1/Systems/System1/Storage":
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"Members": []map[string]string{
 					{"@odata.id": "/redfish/v1/Systems/System1/Storage/Storage1"},
 				},
 			})
 		case "/redfish/v1/Systems/System1/Storage/Storage1":
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"Drives": []map[string]string{
 					{"@odata.id": "/redfish/v1/Systems/System1/Storage/Storage1/Drives/Drive1"},
 				},
 			})
 		case "/redfish/v1/Systems/System1/Storage/Storage1/Drives/Drive1":
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"Name":          "Test Drive",
 				"Model":         "TestModel-500GB",
 				"SerialNumber":  "TESTSERIAL123",
@@ -913,7 +914,7 @@ func TestGetSimpleStorageDevices(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create database: %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	ctx := context.Background()
 	if err := db.Migrate(ctx); err != nil {
@@ -932,20 +933,20 @@ func TestGetSimpleStorageDevices(t *testing.T) {
 
 		switch r.URL.Path {
 		case "/redfish/v1/Systems":
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"Members": []map[string]string{{"@odata.id": "/redfish/v1/Systems/System1"}},
 			})
 		case "/redfish/v1/Systems/System1/Storage":
 			// Storage collection doesn't exist - return 404
 			w.WriteHeader(http.StatusNotFound)
 		case "/redfish/v1/Systems/System1/SimpleStorage":
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"Members": []map[string]string{
 					{"@odata.id": "/redfish/v1/Systems/System1/SimpleStorage/1"},
 				},
 			})
 		case "/redfish/v1/Systems/System1/SimpleStorage/1":
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"Name":        "Simple Storage Controller",
 				"Description": "System SATA",
 				"Devices": []map[string]interface{}{
@@ -1048,7 +1049,7 @@ func TestGetSELEntries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create database: %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	ctx := context.Background()
 	if err := db.Migrate(ctx); err != nil {
@@ -1067,27 +1068,27 @@ func TestGetSELEntries(t *testing.T) {
 
 		switch r.URL.Path {
 		case "/redfish/v1/Managers":
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"Members": []map[string]string{{"@odata.id": "/redfish/v1/Managers/Manager1"}},
 			})
 		case "/redfish/v1/Managers/Manager1/LogServices":
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"Members": []map[string]string{
 					{"@odata.id": "/redfish/v1/Managers/Manager1/LogServices/EventLog"},
 				},
 			})
 		case "/redfish/v1/Managers/Manager1/LogServices/EventLog":
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"Name": "Event Log",
 			})
 		case "/redfish/v1/Managers/Manager1/LogServices/EventLog/Entries":
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"Members": []map[string]string{
 					{"@odata.id": "/redfish/v1/Managers/Manager1/LogServices/EventLog/Entries/1"},
 				},
 			})
 		case "/redfish/v1/Managers/Manager1/LogServices/EventLog/Entries/1":
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"Id":        "1",
 				"Message":   "Test log message",
 				"Severity":  "Warning",
@@ -1144,7 +1145,7 @@ func TestDiscoverSettingsBasic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create database: %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	ctx := context.Background()
 	if err := db.Migrate(ctx); err != nil {
@@ -1162,11 +1163,11 @@ func TestDiscoverSettingsBasic(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
 		case "/redfish/v1/Systems":
-			json.NewEncoder(w).Encode(map[string]any{
+			_ = json.NewEncoder(w).Encode(map[string]any{
 				"Members": []map[string]string{{"@odata.id": "/redfish/v1/Systems/Sys1"}},
 			})
 		case "/redfish/v1/Systems/Sys1/Bios":
-			json.NewEncoder(w).Encode(map[string]any{
+			_ = json.NewEncoder(w).Encode(map[string]any{
 				"@Redfish.Settings": map[string]any{
 					"SettingsObject":      map[string]any{"@odata.id": "/redfish/v1/Systems/Sys1/Bios/Settings"},
 					"SupportedApplyTimes": []string{"OnReset"},
@@ -1178,11 +1179,11 @@ func TestDiscoverSettingsBasic(t *testing.T) {
 				},
 			})
 		case "/redfish/v1/Managers":
-			json.NewEncoder(w).Encode(map[string]any{
+			_ = json.NewEncoder(w).Encode(map[string]any{
 				"Members": []map[string]string{{"@odata.id": "/redfish/v1/Managers/Mgr1"}},
 			})
 		case "/redfish/v1/Managers/Mgr1/NetworkProtocol":
-			json.NewEncoder(w).Encode(map[string]any{
+			_ = json.NewEncoder(w).Encode(map[string]any{
 				"@Redfish.Settings": map[string]any{"SettingsObject": map[string]any{"@odata.id": "/redfish/v1/Managers/Mgr1/NetworkProtocol/Settings"}},
 				"NTP":               map[string]any{"ProtocolEnabled": true},
 				"HTTP":              map[string]any{"Port": float64(80)},
@@ -1235,7 +1236,7 @@ func TestDiscoverSettings009_NetworkAndStorage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create database: %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	ctx := context.Background()
 	if err := db.Migrate(ctx); err != nil {
@@ -1252,19 +1253,19 @@ func TestDiscoverSettings009_NetworkAndStorage(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
 		case "/redfish/v1/Systems":
-			json.NewEncoder(w).Encode(map[string]any{
+			_ = json.NewEncoder(w).Encode(map[string]any{
 				"Members": []map[string]string{{"@odata.id": "/redfish/v1/Systems/Sys1"}},
 			})
 		case "/redfish/v1/Managers":
-			json.NewEncoder(w).Encode(map[string]any{
+			_ = json.NewEncoder(w).Encode(map[string]any{
 				"Members": []map[string]string{{"@odata.id": "/redfish/v1/Managers/Mgr1"}},
 			})
 		case "/redfish/v1/Systems/Sys1/EthernetInterfaces":
-			json.NewEncoder(w).Encode(map[string]any{
+			_ = json.NewEncoder(w).Encode(map[string]any{
 				"Members": []map[string]string{{"@odata.id": "/redfish/v1/Systems/Sys1/EthernetInterfaces/NIC1"}},
 			})
 		case "/redfish/v1/Systems/Sys1/EthernetInterfaces/NIC1":
-			json.NewEncoder(w).Encode(map[string]any{
+			_ = json.NewEncoder(w).Encode(map[string]any{
 				"@Redfish.Settings": map[string]any{
 					"SettingsObject": map[string]any{"@odata.id": "/redfish/v1/Systems/Sys1/EthernetInterfaces/NIC1/Settings"},
 				},
@@ -1273,11 +1274,11 @@ func TestDiscoverSettings009_NetworkAndStorage(t *testing.T) {
 				"MACAddress": "AA:BB:CC:DD:EE:FF",
 			})
 		case "/redfish/v1/Systems/Sys1/Storage":
-			json.NewEncoder(w).Encode(map[string]any{
+			_ = json.NewEncoder(w).Encode(map[string]any{
 				"Members": []map[string]string{{"@odata.id": "/redfish/v1/Systems/Sys1/Storage/Stor1"}},
 			})
 		case "/redfish/v1/Systems/Sys1/Storage/Stor1":
-			json.NewEncoder(w).Encode(map[string]any{
+			_ = json.NewEncoder(w).Encode(map[string]any{
 				"@Redfish.Settings": map[string]any{
 					"SettingsObject": map[string]any{"@odata.id": "/redfish/v1/Systems/Sys1/Storage/Stor1/Settings"},
 				},
@@ -1285,7 +1286,7 @@ func TestDiscoverSettings009_NetworkAndStorage(t *testing.T) {
 				"Drives":         []map[string]string{{"@odata.id": "/redfish/v1/Systems/Sys1/Storage/Stor1/Drives/Drive1"}},
 			})
 		case "/redfish/v1/Systems/Sys1/Storage/Stor1/Drives/Drive1":
-			json.NewEncoder(w).Encode(map[string]any{
+			_ = json.NewEncoder(w).Encode(map[string]any{
 				"@Redfish.Settings": map[string]any{
 					"SettingsObject": map[string]any{"@odata.id": "/redfish/v1/Systems/Sys1/Storage/Stor1/Drives/Drive1/Settings"},
 				},
@@ -1293,11 +1294,11 @@ func TestDiscoverSettings009_NetworkAndStorage(t *testing.T) {
 				"Model":      "TestDrive",
 			})
 		case "/redfish/v1/Systems/Sys1/Storage/Stor1/Volumes":
-			json.NewEncoder(w).Encode(map[string]any{
+			_ = json.NewEncoder(w).Encode(map[string]any{
 				"Members": []map[string]string{{"@odata.id": "/redfish/v1/Systems/Sys1/Storage/Stor1/Volumes/Vol1"}},
 			})
 		case "/redfish/v1/Systems/Sys1/Storage/Stor1/Volumes/Vol1":
-			json.NewEncoder(w).Encode(map[string]any{
+			_ = json.NewEncoder(w).Encode(map[string]any{
 				"@Redfish.Settings": map[string]any{
 					"SettingsObject": map[string]any{"@odata.id": "/redfish/v1/Systems/Sys1/Storage/Stor1/Volumes/Vol1/Settings"},
 				},
@@ -1343,7 +1344,7 @@ func TestDiscoverSettings009_NetworkAndStorage(t *testing.T) {
 			t.Fatalf("missing action target for %s", d.Attribute)
 		}
 	}
-	if !(hasDHCPv4 && hasVLAN && hasControllerMode && hasWriteCache && hasVolume) {
+	if !hasDHCPv4 || !hasVLAN || !hasControllerMode || !hasWriteCache || !hasVolume {
 		t.Fatalf("missing expected attributes: DHCPv4=%v VLAN=%v ControllerMode=%v WriteCache=%v RAIDType=%v",
 			hasDHCPv4, hasVLAN, hasControllerMode, hasWriteCache, hasVolume)
 	}
@@ -1374,7 +1375,7 @@ func TestTestConnection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create database: %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	// Create a mock BMC server
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1386,7 +1387,7 @@ func TestTestConnection(t *testing.T) {
 
 		if r.URL.Path == "/redfish/v1/" {
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]string{
+			_ = json.NewEncoder(w).Encode(map[string]string{
 				"@odata.id": "/redfish/v1/",
 				"Name":      "Test BMC",
 			})
@@ -1447,7 +1448,7 @@ func TestDiscoverSettings_ApplyTimesAndActionTarget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("db: %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	if err := db.Migrate(context.Background()); err != nil {
 		t.Fatalf("migrate: %v", err)
@@ -1457,11 +1458,11 @@ func TestDiscoverSettings_ApplyTimesAndActionTarget(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
 		case "/redfish/v1/Systems":
-			json.NewEncoder(w).Encode(map[string]any{"Members": []map[string]string{{"@odata.id": "/redfish/v1/Systems/Sys1"}}})
+			_ = json.NewEncoder(w).Encode(map[string]any{"Members": []map[string]string{{"@odata.id": "/redfish/v1/Systems/Sys1"}}})
 		case "/redfish/v1/Managers":
-			json.NewEncoder(w).Encode(map[string]any{"Members": []map[string]string{{"@odata.id": "/redfish/v1/Managers/Mgr1"}}})
+			_ = json.NewEncoder(w).Encode(map[string]any{"Members": []map[string]string{{"@odata.id": "/redfish/v1/Managers/Mgr1"}}})
 		case "/redfish/v1/Systems/Sys1/Bios":
-			json.NewEncoder(w).Encode(map[string]any{
+			_ = json.NewEncoder(w).Encode(map[string]any{
 				"@Redfish.Settings": map[string]any{
 					"SettingsObject":      map[string]any{"@odata.id": "/redfish/v1/Systems/Sys1/Bios/Settings"},
 					"SupportedApplyTimes": []string{"OnReset"},
@@ -1508,7 +1509,7 @@ func TestAttributeRegistryEnrichment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("db: %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	if err := db.Migrate(context.Background()); err != nil {
 		t.Fatalf("migrate: %v", err)
@@ -1519,11 +1520,11 @@ func TestAttributeRegistryEnrichment(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
 		case "/redfish/v1/Systems":
-			json.NewEncoder(w).Encode(map[string]any{"Members": []map[string]string{{"@odata.id": "/redfish/v1/Systems/Sys1"}}})
+			_ = json.NewEncoder(w).Encode(map[string]any{"Members": []map[string]string{{"@odata.id": "/redfish/v1/Systems/Sys1"}}})
 		case "/redfish/v1/Managers":
-			json.NewEncoder(w).Encode(map[string]any{"Members": []map[string]string{{"@odata.id": "/redfish/v1/Managers/Mgr1"}}})
+			_ = json.NewEncoder(w).Encode(map[string]any{"Members": []map[string]string{{"@odata.id": "/redfish/v1/Managers/Mgr1"}}})
 		case "/redfish/v1/Systems/Sys1/Bios":
-			json.NewEncoder(w).Encode(map[string]any{
+			_ = json.NewEncoder(w).Encode(map[string]any{
 				"@Redfish.Settings": map[string]any{
 					"SettingsObject": map[string]any{"@odata.id": "/redfish/v1/Systems/Sys1/Bios/Settings"},
 				},
@@ -1531,7 +1532,7 @@ func TestAttributeRegistryEnrichment(t *testing.T) {
 				"Attributes":        map[string]any{"ProcTurboMode": "Enabled"},
 			})
 		case "/redfish/v1/Registries/Test.Registry":
-			json.NewEncoder(w).Encode(map[string]any{
+			_ = json.NewEncoder(w).Encode(map[string]any{
 				"OwningEntity": "DMTF",
 				"RegistryEntries": map[string]any{
 					"Attributes": []any{
@@ -1587,7 +1588,7 @@ func TestActionInfoEnrichment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("db: %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	if err := db.Migrate(context.Background()); err != nil {
 		t.Fatalf("migrate: %v", err)
@@ -1597,11 +1598,11 @@ func TestActionInfoEnrichment(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
 		case "/redfish/v1/Systems":
-			json.NewEncoder(w).Encode(map[string]any{"Members": []map[string]string{{"@odata.id": "/redfish/v1/Systems/Sys1"}}})
+			_ = json.NewEncoder(w).Encode(map[string]any{"Members": []map[string]string{{"@odata.id": "/redfish/v1/Systems/Sys1"}}})
 		case "/redfish/v1/Managers":
-			json.NewEncoder(w).Encode(map[string]any{"Members": []map[string]string{{"@odata.id": "/redfish/v1/Managers/Mgr1"}}})
+			_ = json.NewEncoder(w).Encode(map[string]any{"Members": []map[string]string{{"@odata.id": "/redfish/v1/Managers/Mgr1"}}})
 		case "/redfish/v1/Managers/Mgr1/NetworkProtocol":
-			json.NewEncoder(w).Encode(map[string]any{
+			_ = json.NewEncoder(w).Encode(map[string]any{
 				"@Redfish.Settings": map[string]any{
 					"SettingsObject": map[string]any{"@odata.id": "/redfish/v1/Managers/Mgr1/NetworkProtocol/Settings"},
 				},
@@ -1614,7 +1615,7 @@ func TestActionInfoEnrichment(t *testing.T) {
 				},
 			})
 		case "/redfish/v1/Managers/Mgr1/NetworkProtocol/ActionInfo":
-			json.NewEncoder(w).Encode(map[string]any{
+			_ = json.NewEncoder(w).Encode(map[string]any{
 				"Parameters": []any{
 					map[string]any{
 						"Name":            "NTP",
@@ -1660,7 +1661,7 @@ func TestDiscoverSettings_RefreshBypassesCache(t *testing.T) {
 	if err != nil {
 		t.Fatalf("db: %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	if err := db.Migrate(context.Background()); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
@@ -1672,11 +1673,11 @@ func TestDiscoverSettings_RefreshBypassesCache(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
 		case "/redfish/v1/Systems":
-			json.NewEncoder(w).Encode(map[string]any{"Members": []map[string]string{{"@odata.id": "/redfish/v1/Systems/Sys1"}}})
+			_ = json.NewEncoder(w).Encode(map[string]any{"Members": []map[string]string{{"@odata.id": "/redfish/v1/Systems/Sys1"}}})
 		case "/redfish/v1/Managers":
-			json.NewEncoder(w).Encode(map[string]any{"Members": []map[string]string{{"@odata.id": "/redfish/v1/Managers/Mgr1"}}})
+			_ = json.NewEncoder(w).Encode(map[string]any{"Members": []map[string]string{{"@odata.id": "/redfish/v1/Managers/Mgr1"}}})
 		case "/redfish/v1/Systems/Sys1/Bios":
-			json.NewEncoder(w).Encode(map[string]any{
+			_ = json.NewEncoder(w).Encode(map[string]any{
 				"@Redfish.Settings": map[string]any{
 					"SettingsObject": map[string]any{"@odata.id": "/redfish/v1/Systems/Sys1/Bios/Settings"},
 				},
@@ -1738,7 +1739,7 @@ func TestDiscoverSettings_RefreshBypassesCache(t *testing.T) {
 	}
 
 	// With refresh context flag, re-discovery should update DB to new value
-	ctxRefresh := context.WithValue(ctx, interface{}("refresh"), true)
+	ctxRefresh := context.WithValue(ctx, contextkeys.RefreshKey, true)
 	descs2, err := svc.DiscoverSettings(ctxRefresh, "bmc1", "")
 	if err != nil {
 		t.Fatalf("discover2: %v", err)
@@ -1765,7 +1766,7 @@ func TestDiscoverSettings013_BootOrder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("db: %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	if err := db.Migrate(context.Background()); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
@@ -1780,11 +1781,11 @@ func TestDiscoverSettings013_BootOrder(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
 		case "/redfish/v1/Systems":
-			json.NewEncoder(w).Encode(map[string]any{"Members": []map[string]string{{"@odata.id": "/redfish/v1/Systems/Sys1"}}})
+			_ = json.NewEncoder(w).Encode(map[string]any{"Members": []map[string]string{{"@odata.id": "/redfish/v1/Systems/Sys1"}}})
 		case "/redfish/v1/Managers":
-			json.NewEncoder(w).Encode(map[string]any{"Members": []map[string]string{{"@odata.id": "/redfish/v1/Managers/M1"}}})
+			_ = json.NewEncoder(w).Encode(map[string]any{"Members": []map[string]string{{"@odata.id": "/redfish/v1/Managers/M1"}}})
 		case "/redfish/v1/Systems/Sys1":
-			json.NewEncoder(w).Encode(map[string]any{
+			_ = json.NewEncoder(w).Encode(map[string]any{
 				"Boot": map[string]any{
 					"BootOrder": []any{"Pxe", "Hdd", "DVD"},
 				},

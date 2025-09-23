@@ -30,6 +30,7 @@ import (
 	"shoal/internal/bmc"
 	"shoal/internal/database"
 	pkgAuth "shoal/pkg/auth"
+	"shoal/pkg/contextkeys"
 	"shoal/pkg/models"
 )
 
@@ -41,7 +42,7 @@ func TestHandleLogin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	if err := db.Migrate(context.Background()); err != nil {
 		t.Fatal(err)
@@ -182,7 +183,7 @@ func TestHandleLogout(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	if err := db.Migrate(context.Background()); err != nil {
 		t.Fatal(err)
@@ -268,7 +269,7 @@ func TestHandleProfile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	if err := db.Migrate(context.Background()); err != nil {
 		t.Fatal(err)
@@ -345,7 +346,7 @@ func TestHandleProfile(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			req := httptest.NewRequest("GET", "/profile"+tt.queryParams, nil)
 			if tt.user != nil {
-				ctx := context.WithValue(req.Context(), "user", tt.user)
+				ctx := context.WithValue(req.Context(), contextkeys.UserKey, tt.user)
 				req = req.WithContext(ctx)
 			}
 
@@ -381,7 +382,7 @@ func TestHandleChangePassword(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	if err := db.Migrate(context.Background()); err != nil {
 		t.Fatal(err)
@@ -498,7 +499,7 @@ func TestHandleChangePassword(t *testing.T) {
 			}
 
 			if tt.user != nil {
-				ctx := context.WithValue(req.Context(), "user", tt.user)
+				ctx := context.WithValue(req.Context(), contextkeys.UserKey, tt.user)
 				req = req.WithContext(ctx)
 			}
 
@@ -542,7 +543,7 @@ func TestAuthenticationMiddleware(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	if err := db.Migrate(context.Background()); err != nil {
 		t.Fatal(err)

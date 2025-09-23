@@ -35,6 +35,7 @@ import (
 	"shoal/internal/bmc"
 	"shoal/internal/database"
 	"shoal/pkg/auth"
+	"shoal/pkg/contextkeys"
 	"shoal/pkg/models"
 )
 
@@ -841,7 +842,7 @@ func (h *Handler) handleTestConnection(w http.ResponseWriter, r *http.Request) {
 			Success: false,
 			Message: "Invalid request format",
 		}
-		json.NewEncoder(w).Encode(response)
+		_ = json.NewEncoder(w).Encode(response)
 		return
 	}
 
@@ -852,7 +853,7 @@ func (h *Handler) handleTestConnection(w http.ResponseWriter, r *http.Request) {
 			Success: false,
 			Message: "BMC address is required",
 		}
-		json.NewEncoder(w).Encode(response)
+		_ = json.NewEncoder(w).Encode(response)
 		return
 	}
 
@@ -867,7 +868,7 @@ func (h *Handler) handleTestConnection(w http.ResponseWriter, r *http.Request) {
 			Success: false,
 			Message: fmt.Sprintf("Connection failed: %v", err),
 		}
-		json.NewEncoder(w).Encode(response)
+		_ = json.NewEncoder(w).Encode(response)
 		return
 	}
 
@@ -876,7 +877,7 @@ func (h *Handler) handleTestConnection(w http.ResponseWriter, r *http.Request) {
 		Success: true,
 		Message: "Connection successful! BMC is reachable and responding with Redfish API",
 	}
-	json.NewEncoder(w).Encode(response)
+	_ = json.NewEncoder(w).Encode(response)
 }
 
 // handleBMCDetails displays detailed information about a specific BMC
@@ -2003,7 +2004,7 @@ func (h *Handler) handleBMCDetailsAPI(w http.ResponseWriter, r *http.Request) {
 	bmcName := r.URL.Query().Get("name")
 	if bmcName == "" {
 		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]string{"error": "BMC name is required"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "BMC name is required"})
 		return
 	}
 
@@ -2016,7 +2017,7 @@ func (h *Handler) handleBMCDetailsAPI(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		slog.Error("Failed to get BMC details", "bmc", bmcName, "error", err)
 		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]string{"error": fmt.Sprintf("Failed to get BMC details: %v", err)})
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": fmt.Sprintf("Failed to get BMC details: %v", err)})
 		return
 	}
 
@@ -2039,7 +2040,7 @@ func (h *Handler) handleBMCSettingsAPI(w http.ResponseWriter, r *http.Request) {
 	bmcName := r.URL.Query().Get("name")
 	if bmcName == "" {
 		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]string{"error": "BMC name is required"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "BMC name is required"})
 		return
 	}
 
@@ -2063,14 +2064,14 @@ func (h *Handler) handleBMCSettingsAPI(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancel()
 	if refresh {
-		ctx = context.WithValue(ctx, "refresh", true)
+		ctx = context.WithValue(ctx, contextkeys.RefreshKey, true)
 	}
 
 	// If refresh=true, enforce operator/admin RBAC
 	if refresh {
 		if u := getUserFromContext(r.Context()); !auth.IsOperator(u) {
 			w.WriteHeader(http.StatusForbidden)
-			json.NewEncoder(w).Encode(map[string]string{"error": "refresh requires operator privileges"})
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "refresh requires operator privileges"})
 			return
 		}
 	}
@@ -2079,7 +2080,7 @@ func (h *Handler) handleBMCSettingsAPI(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		slog.Error("Settings discovery failed", "bmc", bmcName, "error", err)
 		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]string{"error": fmt.Sprintf("Failed to discover settings: %v", err)})
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": fmt.Sprintf("Failed to discover settings: %v", err)})
 		return
 	}
 
@@ -2173,7 +2174,7 @@ func (h *Handler) handleBMCSettingsAPIRestful(w http.ResponseWriter, r *http.Req
 		w.Header().Set("Content-Type", "application/json")
 		if bmcName == "" || id == "" {
 			w.WriteHeader(http.StatusBadRequest)
-			json.NewEncoder(w).Encode(map[string]string{"error": "BMC name and id are required"})
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "BMC name and id are required"})
 			return
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
@@ -2184,7 +2185,7 @@ func (h *Handler) handleBMCSettingsAPIRestful(w http.ResponseWriter, r *http.Req
 		if err != nil {
 			slog.Error("Failed to fetch setting descriptor", "bmc", bmcName, "id", id, "error", err)
 			w.WriteHeader(http.StatusInternalServerError)
-			json.NewEncoder(w).Encode(map[string]string{"error": fmt.Sprintf("Failed to fetch descriptor: %v", err)})
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": fmt.Sprintf("Failed to fetch descriptor: %v", err)})
 			return
 		}
 		if desc == nil {
@@ -2229,7 +2230,7 @@ func (h *Handler) handleBMCSettingsAPIRestful(w http.ResponseWriter, r *http.Req
 
 	if bmcName == "" {
 		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]string{"error": "BMC name is required"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "BMC name is required"})
 		return
 	}
 
@@ -2239,7 +2240,7 @@ func (h *Handler) handleBMCSettingsAPIRestful(w http.ResponseWriter, r *http.Req
 	if refresh {
 		if u := getUserFromContext(r.Context()); !auth.IsOperator(u) {
 			w.WriteHeader(http.StatusForbidden)
-			json.NewEncoder(w).Encode(map[string]string{"error": "refresh requires operator privileges"})
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "refresh requires operator privileges"})
 			return
 		}
 	}
@@ -2248,7 +2249,7 @@ func (h *Handler) handleBMCSettingsAPIRestful(w http.ResponseWriter, r *http.Req
 	if err != nil {
 		slog.Error("Settings discovery failed", "bmc", bmcName, "error", err)
 		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]string{"error": fmt.Sprintf("Failed to discover settings: %v", err)})
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": fmt.Sprintf("Failed to discover settings: %v", err)})
 		return
 	}
 
@@ -2320,20 +2321,20 @@ func (h *Handler) handleProfiles(w http.ResponseWriter, r *http.Request) {
 		ps, err := h.db.GetProfiles(r.Context())
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
-			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 			return
 		}
-		json.NewEncoder(w).Encode(ps)
+		_ = json.NewEncoder(w).Encode(ps)
 	case http.MethodPost:
 		var p models.Profile
 		if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
 			w.WriteHeader(http.StatusBadRequest)
-			json.NewEncoder(w).Encode(map[string]string{"error": "invalid payload"})
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "invalid payload"})
 			return
 		}
 		if strings.TrimSpace(p.Name) == "" {
 			w.WriteHeader(http.StatusBadRequest)
-			json.NewEncoder(w).Encode(map[string]string{"error": "name is required"})
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "name is required"})
 			return
 		}
 		if p.ID == "" {
@@ -2341,11 +2342,11 @@ func (h *Handler) handleProfiles(w http.ResponseWriter, r *http.Request) {
 		}
 		if err := h.db.CreateProfile(r.Context(), &p); err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
-			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 			return
 		}
 		w.WriteHeader(http.StatusCreated)
-		json.NewEncoder(w).Encode(p)
+		_ = json.NewEncoder(w).Encode(p)
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
@@ -2363,7 +2364,7 @@ func (h *Handler) handleProfilesSnapshot(w http.ResponseWriter, r *http.Request)
 	bmcName := r.URL.Query().Get("bmc")
 	if strings.TrimSpace(bmcName) == "" {
 		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]string{"error": "bmc is required"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "bmc is required"})
 		return
 	}
 	var req struct {
@@ -2374,7 +2375,7 @@ func (h *Handler) handleProfilesSnapshot(w http.ResponseWriter, r *http.Request)
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err.Error() != "EOF" {
 		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]string{"error": "invalid payload"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "invalid payload"})
 		return
 	}
 
@@ -2387,7 +2388,7 @@ func (h *Handler) handleProfilesSnapshot(w http.ResponseWriter, r *http.Request)
 	descs, err := h.db.GetSettingsDescriptors(ctx, bmcName, "")
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 		return
 	}
 
@@ -2419,19 +2420,19 @@ func (h *Handler) handleProfilesSnapshot(w http.ResponseWriter, r *http.Request)
 		p, err := h.db.GetProfile(r.Context(), req.ProfileID)
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
-			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 			return
 		}
 		if p == nil {
 			w.WriteHeader(http.StatusBadRequest)
-			json.NewEncoder(w).Encode(map[string]string{"error": "profile_id not found"})
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "profile_id not found"})
 			return
 		}
 		prof = p
 	} else {
 		if strings.TrimSpace(req.Name) == "" {
 			w.WriteHeader(http.StatusBadRequest)
-			json.NewEncoder(w).Encode(map[string]string{"error": "name is required when creating profile"})
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "name is required when creating profile"})
 			return
 		}
 		p := &models.Profile{ID: fmt.Sprintf("p_%d", time.Now().UnixNano()), Name: req.Name, Description: req.Description}
@@ -2440,7 +2441,7 @@ func (h *Handler) handleProfilesSnapshot(w http.ResponseWriter, r *http.Request)
 		}
 		if err := h.db.CreateProfile(r.Context(), p); err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
-			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 			return
 		}
 		prof = p
@@ -2457,12 +2458,12 @@ func (h *Handler) handleProfilesSnapshot(w http.ResponseWriter, r *http.Request)
 	v := &models.ProfileVersion{ProfileID: prof.ID, Version: max + 1, Notes: fmt.Sprintf("Snapshot of %s", bmcName), Entries: entries}
 	if err := h.db.CreateProfileVersion(r.Context(), v); err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 		return
 	}
 
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(map[string]any{"profile": prof, "version": v})
+	_ = json.NewEncoder(w).Encode(map[string]any{"profile": prof, "version": v})
 }
 
 // handleProfilesDiff compares two profile versions
@@ -2486,35 +2487,35 @@ func (h *Handler) handleProfilesDiff(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]string{"error": "invalid payload"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "invalid payload"})
 		return
 	}
 	if req.Left.ProfileID == "" || req.Right.ProfileID == "" || req.Left.Version <= 0 || req.Right.Version <= 0 {
 		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]string{"error": "profile_id and version required for both sides"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "profile_id and version required for both sides"})
 		return
 	}
 	// Load both versions
 	lv, err := h.db.GetProfileVersion(r.Context(), req.Left.ProfileID, req.Left.Version)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 		return
 	}
 	if lv == nil {
 		w.WriteHeader(http.StatusNotFound)
-		json.NewEncoder(w).Encode(map[string]string{"error": "left version not found"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "left version not found"})
 		return
 	}
 	rv, err := h.db.GetProfileVersion(r.Context(), req.Right.ProfileID, req.Right.Version)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 		return
 	}
 	if rv == nil {
 		w.WriteHeader(http.StatusNotFound)
-		json.NewEncoder(w).Encode(map[string]string{"error": "right version not found"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "right version not found"})
 		return
 	}
 
@@ -2569,7 +2570,7 @@ func (h *Handler) handleProfilesDiff(w http.ResponseWriter, r *http.Request) {
 	resp.Summary.Added = len(resp.Added)
 	resp.Summary.Removed = len(resp.Removed)
 	resp.Summary.Changed = len(resp.Changed)
-	json.NewEncoder(w).Encode(resp)
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 // handleProfilesImport handles POST /api/profiles/import to ingest a profile JSON
@@ -2607,7 +2608,7 @@ func (h *Handler) handleProfilesImport(w http.ResponseWriter, r *http.Request) {
 		p := pl.Profile
 		if strings.TrimSpace(p.Name) == "" {
 			w.WriteHeader(http.StatusBadRequest)
-			json.NewEncoder(w).Encode(map[string]string{"error": "profile.name is required"})
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "profile.name is required"})
 			return
 		}
 		// If ID empty, generate and create; if has ID try to update name/desc fields
@@ -2618,7 +2619,7 @@ func (h *Handler) handleProfilesImport(w http.ResponseWriter, r *http.Request) {
 			}
 			if err := h.db.CreateProfile(ctx, &p); err != nil {
 				w.WriteHeader(http.StatusInternalServerError)
-				json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+				_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 				return
 			}
 		} else {
@@ -2629,7 +2630,7 @@ func (h *Handler) handleProfilesImport(w http.ResponseWriter, r *http.Request) {
 				// If update fails because it doesn't exist, fallback to create
 				if err := h.db.CreateProfile(ctx, &p); err != nil {
 					w.WriteHeader(http.StatusInternalServerError)
-					json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+					_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 					return
 				}
 			}
@@ -2652,14 +2653,14 @@ func (h *Handler) handleProfilesImport(w http.ResponseWriter, r *http.Request) {
 			}
 			if err := h.db.CreateProfileVersion(ctx, &v); err != nil {
 				w.WriteHeader(http.StatusInternalServerError)
-				json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+				_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 				return
 			}
 		}
 	}
 
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(map[string]any{"status": "imported", "count": len(payloads)})
+	_ = json.NewEncoder(w).Encode(map[string]any{"status": "imported", "count": len(payloads)})
 }
 
 // handleProfilesRestful handles /api/profiles/{id}/... routes
@@ -2682,18 +2683,18 @@ func (h *Handler) handleProfilesRestful(w http.ResponseWriter, r *http.Request) 
 			p, err := h.db.GetProfile(r.Context(), id)
 			if err != nil {
 				w.WriteHeader(http.StatusInternalServerError)
-				json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+				_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 				return
 			}
 			if p == nil {
 				http.NotFound(w, r)
 				return
 			}
-			json.NewEncoder(w).Encode(p)
+			_ = json.NewEncoder(w).Encode(p)
 		case http.MethodDelete:
 			if err := h.db.DeleteProfile(r.Context(), id); err != nil {
 				w.WriteHeader(http.StatusInternalServerError)
-				json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+				_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 				return
 			}
 			w.WriteHeader(http.StatusNoContent)
@@ -2701,16 +2702,16 @@ func (h *Handler) handleProfilesRestful(w http.ResponseWriter, r *http.Request) 
 			var p models.Profile
 			if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
 				w.WriteHeader(http.StatusBadRequest)
-				json.NewEncoder(w).Encode(map[string]string{"error": "invalid payload"})
+				_ = json.NewEncoder(w).Encode(map[string]string{"error": "invalid payload"})
 				return
 			}
 			p.ID = id
 			if err := h.db.UpdateProfile(r.Context(), &p); err != nil {
 				w.WriteHeader(http.StatusInternalServerError)
-				json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+				_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 				return
 			}
-			json.NewEncoder(w).Encode(p)
+			_ = json.NewEncoder(w).Encode(p)
 		default:
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		}
@@ -2738,13 +2739,13 @@ func (h *Handler) handleProfilesRestful(w http.ResponseWriter, r *http.Request) 
 		}
 		if err := json.NewDecoder(r.Body).Decode(&reqBody); err != nil {
 			w.WriteHeader(http.StatusBadRequest)
-			json.NewEncoder(w).Encode(map[string]string{"error": "invalid payload"})
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "invalid payload"})
 			return
 		}
 		bmcName := strings.TrimSpace(reqBody.BMC)
 		if bmcName == "" {
 			w.WriteHeader(http.StatusBadRequest)
-			json.NewEncoder(w).Encode(map[string]string{"error": "bmc is required"})
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "bmc is required"})
 			return
 		}
 		// Determine version: explicit, else latest
@@ -2753,7 +2754,7 @@ func (h *Handler) handleProfilesRestful(w http.ResponseWriter, r *http.Request) 
 			vs, err := h.db.GetProfileVersions(r.Context(), id)
 			if err != nil {
 				w.WriteHeader(http.StatusInternalServerError)
-				json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+				_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 				return
 			}
 			for _, vv := range vs {
@@ -2763,7 +2764,7 @@ func (h *Handler) handleProfilesRestful(w http.ResponseWriter, r *http.Request) 
 			}
 			if verNum == 0 {
 				w.WriteHeader(http.StatusNotFound)
-				json.NewEncoder(w).Encode(map[string]string{"error": "no versions for profile"})
+				_ = json.NewEncoder(w).Encode(map[string]string{"error": "no versions for profile"})
 				return
 			}
 		}
@@ -2771,7 +2772,7 @@ func (h *Handler) handleProfilesRestful(w http.ResponseWriter, r *http.Request) 
 		pv, err := h.db.GetProfileVersion(r.Context(), id, verNum)
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
-			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 			return
 		}
 		if pv == nil {
@@ -2787,7 +2788,7 @@ func (h *Handler) handleProfilesRestful(w http.ResponseWriter, r *http.Request) 
 		descs, err := h.db.GetSettingsDescriptors(ctx, bmcName, "")
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
-			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 			return
 		}
 		// Flatten current values for comparison
@@ -2867,7 +2868,7 @@ func (h *Handler) handleProfilesRestful(w http.ResponseWriter, r *http.Request) 
 		bmc, err := h.db.GetBMCByName(ctx, bmcName)
 		if err != nil || bmc == nil {
 			w.WriteHeader(http.StatusBadRequest)
-			json.NewEncoder(w).Encode(map[string]string{"error": "invalid bmc"})
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "invalid bmc"})
 			return
 		}
 		normAddr := bmc.Address
@@ -2906,9 +2907,7 @@ func (h *Handler) handleProfilesRestful(w http.ResponseWriter, r *http.Request) 
 			// BIOS settings go to /Settings with Attributes root
 			if strings.Contains(e.ResourcePath, "/Bios") {
 				targetPath = strings.TrimRight(e.ResourcePath, "/") + "/Settings"
-				if strings.HasPrefix(dotted, "Attributes.") {
-					dotted = strings.TrimPrefix(dotted, "Attributes.")
-				}
+				dotted = strings.TrimPrefix(dotted, "Attributes.")
 				root = "Attributes"
 			}
 			body := buildNested(root, dotted, e.DesiredValue)
@@ -2960,7 +2959,7 @@ func (h *Handler) handleProfilesRestful(w http.ResponseWriter, r *http.Request) 
 				"same":          len(same),
 				"unmatched":     len(unmatched),
 			}
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 			return
 		}
 
@@ -2979,7 +2978,7 @@ func (h *Handler) handleProfilesRestful(w http.ResponseWriter, r *http.Request) 
 		user := getUserFromContext(r.Context())
 		execCtx := r.Context()
 		if user != nil {
-			execCtx = context.WithValue(execCtx, "user", user)
+			execCtx = context.WithValue(execCtx, contextkeys.UserKey, user)
 		}
 		for _, rq := range requests {
 			payload, _ := json.Marshal(rq.RequestBody)
@@ -3000,7 +2999,7 @@ func (h *Handler) handleProfilesRestful(w http.ResponseWriter, r *http.Request) 
 			if resp.Body != nil {
 				b, _ := io.ReadAll(resp.Body)
 				rb = b
-				resp.Body.Close()
+				_ = resp.Body.Close()
 			}
 			ok := resp.StatusCode >= 200 && resp.StatusCode < 300
 			if ok {
@@ -3033,7 +3032,7 @@ func (h *Handler) handleProfilesRestful(w http.ResponseWriter, r *http.Request) 
 				"failed":        failures,
 			},
 		}
-		json.NewEncoder(w).Encode(respObj)
+		_ = json.NewEncoder(w).Encode(respObj)
 		return
 	case "export":
 		// POST /api/profiles/{id}/export with optional {"version":N}
@@ -3050,7 +3049,7 @@ func (h *Handler) handleProfilesRestful(w http.ResponseWriter, r *http.Request) 
 			vs, err := h.db.GetProfileVersions(r.Context(), id)
 			if err != nil {
 				w.WriteHeader(http.StatusInternalServerError)
-				json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+				_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 				return
 			}
 			for _, vv := range vs {
@@ -3060,14 +3059,14 @@ func (h *Handler) handleProfilesRestful(w http.ResponseWriter, r *http.Request) 
 			}
 			if vnum == 0 {
 				w.WriteHeader(http.StatusNotFound)
-				json.NewEncoder(w).Encode(map[string]string{"error": "no versions for profile"})
+				_ = json.NewEncoder(w).Encode(map[string]string{"error": "no versions for profile"})
 				return
 			}
 		}
 		p, err := h.db.GetProfile(r.Context(), id)
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
-			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 			return
 		}
 		if p == nil {
@@ -3077,7 +3076,7 @@ func (h *Handler) handleProfilesRestful(w http.ResponseWriter, r *http.Request) 
 		pv, err := h.db.GetProfileVersion(r.Context(), id, vnum)
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
-			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 			return
 		}
 		if pv == nil {
@@ -3088,7 +3087,7 @@ func (h *Handler) handleProfilesRestful(w http.ResponseWriter, r *http.Request) 
 			"profile":  p,
 			"versions": []models.ProfileVersion{*pv},
 		}
-		json.NewEncoder(w).Encode(out)
+		_ = json.NewEncoder(w).Encode(out)
 		return
 	case "preview":
 		if r.Method != http.MethodGet {
@@ -3098,7 +3097,7 @@ func (h *Handler) handleProfilesRestful(w http.ResponseWriter, r *http.Request) 
 		bmcName := r.URL.Query().Get("bmc")
 		if strings.TrimSpace(bmcName) == "" {
 			w.WriteHeader(http.StatusBadRequest)
-			json.NewEncoder(w).Encode(map[string]string{"error": "bmc is required"})
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "bmc is required"})
 			return
 		}
 		// Determine version: from query ?version=, otherwise latest
@@ -3107,7 +3106,7 @@ func (h *Handler) handleProfilesRestful(w http.ResponseWriter, r *http.Request) 
 			n, err := strconv.Atoi(vq)
 			if err != nil || n <= 0 {
 				w.WriteHeader(http.StatusBadRequest)
-				json.NewEncoder(w).Encode(map[string]string{"error": "invalid version"})
+				_ = json.NewEncoder(w).Encode(map[string]string{"error": "invalid version"})
 				return
 			}
 			verNum = n
@@ -3115,7 +3114,7 @@ func (h *Handler) handleProfilesRestful(w http.ResponseWriter, r *http.Request) 
 			vs, err := h.db.GetProfileVersions(r.Context(), id)
 			if err != nil {
 				w.WriteHeader(http.StatusInternalServerError)
-				json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+				_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 				return
 			}
 			for _, vv := range vs {
@@ -3125,7 +3124,7 @@ func (h *Handler) handleProfilesRestful(w http.ResponseWriter, r *http.Request) 
 			}
 			if verNum == 0 {
 				w.WriteHeader(http.StatusNotFound)
-				json.NewEncoder(w).Encode(map[string]string{"error": "no versions for profile"})
+				_ = json.NewEncoder(w).Encode(map[string]string{"error": "no versions for profile"})
 				return
 			}
 		}
@@ -3134,7 +3133,7 @@ func (h *Handler) handleProfilesRestful(w http.ResponseWriter, r *http.Request) 
 		pv, err := h.db.GetProfileVersion(r.Context(), id, verNum)
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
-			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 			return
 		}
 		if pv == nil {
@@ -3151,7 +3150,7 @@ func (h *Handler) handleProfilesRestful(w http.ResponseWriter, r *http.Request) 
 		descs, err := h.db.GetSettingsDescriptors(ctx, bmcName, "")
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
-			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 			return
 		}
 		// Build a flattened view of current settings so profile entries can
@@ -3221,7 +3220,7 @@ func (h *Handler) handleProfilesRestful(w http.ResponseWriter, r *http.Request) 
 		resp.Summary.Changes = len(resp.Changes)
 		resp.Summary.Same = len(resp.Same)
 		resp.Summary.Unmatched = len(resp.Unmatched)
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 		return
 	case "versions":
 		if len(parts) == 4 {
@@ -3230,15 +3229,15 @@ func (h *Handler) handleProfilesRestful(w http.ResponseWriter, r *http.Request) 
 				vs, err := h.db.GetProfileVersions(r.Context(), id)
 				if err != nil {
 					w.WriteHeader(http.StatusInternalServerError)
-					json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+					_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 					return
 				}
-				json.NewEncoder(w).Encode(vs)
+				_ = json.NewEncoder(w).Encode(vs)
 			case http.MethodPost:
 				var v models.ProfileVersion
 				if err := json.NewDecoder(r.Body).Decode(&v); err != nil {
 					w.WriteHeader(http.StatusBadRequest)
-					json.NewEncoder(w).Encode(map[string]string{"error": "invalid payload"})
+					_ = json.NewEncoder(w).Encode(map[string]string{"error": "invalid payload"})
 					return
 				}
 				v.ProfileID = id
@@ -3255,11 +3254,11 @@ func (h *Handler) handleProfilesRestful(w http.ResponseWriter, r *http.Request) 
 				}
 				if err := h.db.CreateProfileVersion(r.Context(), &v); err != nil {
 					w.WriteHeader(http.StatusInternalServerError)
-					json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+					_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 					return
 				}
 				w.WriteHeader(http.StatusCreated)
-				json.NewEncoder(w).Encode(v)
+				_ = json.NewEncoder(w).Encode(v)
 			default:
 				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			}
@@ -3269,7 +3268,7 @@ func (h *Handler) handleProfilesRestful(w http.ResponseWriter, r *http.Request) 
 			vnum, err := strconv.Atoi(parts[4])
 			if err != nil {
 				w.WriteHeader(http.StatusBadRequest)
-				json.NewEncoder(w).Encode(map[string]string{"error": "invalid version"})
+				_ = json.NewEncoder(w).Encode(map[string]string{"error": "invalid version"})
 				return
 			}
 			switch r.Method {
@@ -3277,19 +3276,19 @@ func (h *Handler) handleProfilesRestful(w http.ResponseWriter, r *http.Request) 
 				v, err := h.db.GetProfileVersion(r.Context(), id, vnum)
 				if err != nil {
 					w.WriteHeader(http.StatusInternalServerError)
-					json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+					_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 					return
 				}
 				if v == nil {
 					http.NotFound(w, r)
 					return
 				}
-				json.NewEncoder(w).Encode(v)
+				_ = json.NewEncoder(w).Encode(v)
 				return
 			case http.MethodDelete:
 				if err := h.db.DeleteProfileVersion(r.Context(), id, vnum); err != nil {
 					w.WriteHeader(http.StatusInternalServerError)
-					json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+					_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 					return
 				}
 				w.WriteHeader(http.StatusNoContent)
@@ -3306,25 +3305,25 @@ func (h *Handler) handleProfilesRestful(w http.ResponseWriter, r *http.Request) 
 				as, err := h.db.GetProfileAssignments(r.Context(), id)
 				if err != nil {
 					w.WriteHeader(http.StatusInternalServerError)
-					json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+					_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 					return
 				}
-				json.NewEncoder(w).Encode(as)
+				_ = json.NewEncoder(w).Encode(as)
 			case http.MethodPost:
 				var a models.ProfileAssignment
 				if err := json.NewDecoder(r.Body).Decode(&a); err != nil {
 					w.WriteHeader(http.StatusBadRequest)
-					json.NewEncoder(w).Encode(map[string]string{"error": "invalid payload"})
+					_ = json.NewEncoder(w).Encode(map[string]string{"error": "invalid payload"})
 					return
 				}
 				a.ProfileID = id
 				if err := h.db.CreateProfileAssignment(r.Context(), &a); err != nil {
 					w.WriteHeader(http.StatusInternalServerError)
-					json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+					_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 					return
 				}
 				w.WriteHeader(http.StatusCreated)
-				json.NewEncoder(w).Encode(a)
+				_ = json.NewEncoder(w).Encode(a)
 			default:
 				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			}
@@ -3335,7 +3334,7 @@ func (h *Handler) handleProfilesRestful(w http.ResponseWriter, r *http.Request) 
 			aid := parts[4]
 			if err := h.db.DeleteProfileAssignment(r.Context(), aid); err != nil {
 				w.WriteHeader(http.StatusInternalServerError)
-				json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+				_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 				return
 			}
 			w.WriteHeader(http.StatusNoContent)
@@ -3359,8 +3358,9 @@ func (h *Handler) requireAuth(next http.Handler) http.Handler {
 			return
 		}
 
-		// Add user to context
+		// Add user to context using both our local key and the shared pkg key
 		ctx := context.WithValue(r.Context(), ctxUserKey, user)
+		ctx = context.WithValue(ctx, contextkeys.UserKey, user)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
@@ -3413,7 +3413,11 @@ func (h *Handler) authenticateRequest(r *http.Request) (*models.User, error) {
 
 // getUserFromContext gets user from request context
 func getUserFromContext(ctx context.Context) *models.User {
-	// Prefer typed key
+	// Prefer exported typed key used across packages
+	if user, ok := ctx.Value(contextkeys.UserKey).(*models.User); ok {
+		return user
+	}
+	// Accept this package's typed key
 	if user, ok := ctx.Value(ctxUserKey).(*models.User); ok {
 		return user
 	}
@@ -3496,7 +3500,7 @@ func (h *Handler) handleAudit(w http.ResponseWriter, r *http.Request) {
 	recs, err := h.db.ListAuditsFiltered(r.Context(), filter)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 		return
 	}
 	// Hide bodies for non-admins
@@ -3506,7 +3510,7 @@ func (h *Handler) handleAudit(w http.ResponseWriter, r *http.Request) {
 			recs[i].ResponseBody = ""
 		}
 	}
-	json.NewEncoder(w).Encode(recs)
+	_ = json.NewEncoder(w).Encode(recs)
 }
 
 // GET /api/audit/{id}
@@ -3525,7 +3529,7 @@ func (h *Handler) handleAuditRestful(w http.ResponseWriter, r *http.Request) {
 	rec, err := h.db.GetAudit(r.Context(), id)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 		return
 	}
 	if rec == nil {
@@ -3537,7 +3541,7 @@ func (h *Handler) handleAuditRestful(w http.ResponseWriter, r *http.Request) {
 		rec.RequestBody = ""
 		rec.ResponseBody = ""
 	}
-	json.NewEncoder(w).Encode(rec)
+	_ = json.NewEncoder(w).Encode(rec)
 }
 
 // Profiles UI (010) — read-only pages
@@ -3884,7 +3888,7 @@ func (h *Handler) handleAuditExport(w http.ResponseWriter, r *http.Request) {
 	recs, err := h.db.ListAuditsFiltered(r.Context(), filter)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 		return
 	}
 	w.Header().Set("Content-Type", "application/x-ndjson")

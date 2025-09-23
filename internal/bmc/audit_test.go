@@ -26,6 +26,7 @@ import (
 	"testing"
 
 	"shoal/internal/database"
+	"shoal/pkg/contextkeys"
 	"shoal/pkg/models"
 )
 
@@ -36,7 +37,7 @@ func TestProxyRequestCreatesAudit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("db new: %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	ctx := context.Background()
 	if err := db.Migrate(ctx); err != nil {
@@ -58,7 +59,7 @@ func TestProxyRequestCreatesAudit(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		// Return a small json body
-		json.NewEncoder(w).Encode(map[string]any{"ok": true})
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
 	}))
 	defer server.Close()
 
@@ -78,7 +79,7 @@ func TestProxyRequestCreatesAudit(t *testing.T) {
 
 	// Put user into context to test attribution
 	user := &models.User{ID: "u1", Username: "admin"}
-	ctx = context.WithValue(req.Context(), "user", user)
+	ctx = context.WithValue(req.Context(), contextkeys.UserKey, user)
 	req = req.WithContext(ctx)
 
 	// Execute proxy
