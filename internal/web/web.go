@@ -44,6 +44,8 @@ type Handler struct {
 	templates *template.Template
 }
 
+const bootOrderAttr = "Boot.BootOrder"
+
 // New creates a new web handler
 func New(db *database.DB) http.Handler {
 	h := &Handler{
@@ -1466,7 +1468,8 @@ function initSettingsTab(bmcName) {
 				const rowId = 'setting-row-' + d.id;
 				const editId = 'edit-' + d.id;
 				const valueId = 'value-' + d.id;
-				const actionButtons = '<span class="text-muted">Read-only</span>';
+				const deviceRO = (d.read_only === true);
+				const actionButtons = '<span class="text-muted">' + (deviceRO ? 'Read-only (device)' : 'Read-only') + '</span>';
 				const editControls = '';
 				
 				return '<tr id="' + rowId + '">' +
@@ -2199,9 +2202,9 @@ func (h *Handler) handleUpdateSetting(w http.ResponseWriter, r *http.Request, bm
 		_ = json.NewEncoder(w).Encode(map[string]string{"error": "setting descriptor not found"})
 		return
 	}
-	if strings.ToLower(desc.Attribute) != "boot.bootorder" {
+	if !strings.EqualFold(desc.Attribute, bootOrderAttr) {
 		w.WriteHeader(http.StatusForbidden)
-		_ = json.NewEncoder(w).Encode(map[string]string{"error": "settings are read-only; only Boot Order can be updated"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "Only Boot.BootOrder settings can be updated; all other settings are read-only"})
 		return
 	}
 
