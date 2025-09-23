@@ -1462,24 +1462,12 @@ function initSettingsTab(bmcName) {
 				const cur = (d.current_value == null) ? '' : JSON.stringify(d.current_value);
 				const oem = d.oem ? (d.oem_vendor || 'OEM') : '';
 				const apply = (d.apply_times && d.apply_times.length) ? d.apply_times.join(',') : '';
-				const isReadOnly = d.read_only || false;
+				const isReadOnly = true; // Design 015: Settings are read-only in UI
 				const rowId = 'setting-row-' + d.id;
 				const editId = 'edit-' + d.id;
 				const valueId = 'value-' + d.id;
-				
-				// Create action buttons
-				let actionButtons = '';
-				if (!isReadOnly) {
-					actionButtons = '<button class="btn btn-sm setting-edit-btn" data-id="' + d.id + '" data-row="' + rowId + '">Edit</button>';
-				} else {
-					actionButtons = '<span class="text-muted">Read-only</span>';
-				}
-				
-				// Create edit controls that will be hidden initially
-				let editControls = '';
-				if (!isReadOnly) {
-					editControls = createEditControl(d, editId, valueId);
-				}
+				const actionButtons = '<span class="text-muted">Read-only</span>';
+				const editControls = '';
 				
 				return '<tr id="' + rowId + '">' +
 					'<td>' + (d.resource_path || '') + '</td>' +
@@ -1494,15 +1482,7 @@ function initSettingsTab(bmcName) {
 					'<td>' + actionButtons + '</td>' +
 					'</tr>';
 			}).join('');
-			
-			// Add event listeners for edit buttons
-			document.querySelectorAll('.setting-edit-btn').forEach(btn => {
-				btn.addEventListener('click', function() {
-					const id = this.dataset.id;
-					const rowId = this.dataset.row;
-					startEditingSetting(id, rowId);
-				});
-			});
+
 		} catch (e) {
 			tbody.innerHTML = '<tr><td colspan="7">Error loading settings</td></tr>';
 		}
@@ -1681,6 +1661,16 @@ function initSettingsTab(bmcName) {
 		const list = document.getElementById('boot-order-list');
 		const allowDiv = document.getElementById('boot-order-allow');
 		const btnReset = document.getElementById('boot-order-reset');
+		// Create Apply button
+		let btnApply = document.getElementById('boot-order-apply');
+		if (!btnApply) {
+			btnApply = document.createElement('button');
+			btnApply.id = 'boot-order-apply';
+			btnApply.className = 'btn btn-primary';
+			btnApply.textContent = 'Apply Boot Order';
+			btnApply.style.marginLeft = '8px';
+			btnReset && btnReset.parentElement && btnReset.parentElement.appendChild(btnApply);
+		}
 		// Add a subtle tip once
 		if (status && !status.dataset.tip) {
 			status.dataset.tip = '1';
@@ -1814,6 +1804,28 @@ function initSettingsTab(bmcName) {
 				setStatus('Failed to load Boot Order');
 			}
 		})();
+
+		// Apply handler: PATCH Boot.BootOrder via settings endpoint
+		btnApply && btnApply.addEventListener('click', async () => {
+			if (!descriptor || !descriptor.id) { setStatus('Descriptor not loaded'); return; }
+			const values = currentValues();
+			btnApply.disabled = true; const prev = btnApply.textContent; btnApply.textContent = 'Applying…';
+			try {
+				const resp = await fetch('/api/bmcs/' + encodeURIComponent(bmcName) + '/settings/' + encodeURIComponent(descriptor.id), {
+					method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value: values })
+				});
+				if (resp.ok) {
+					setStatus('Boot Order applied successfully');
+				} else {
+					const err = await resp.json().catch(() => ({}));
+					setStatus('Failed to apply Boot Order: ' + (err.error || resp.statusText));
+				}
+			} catch(e) {
+				setStatus('Network error applying Boot Order');
+			} finally {
+				btnApply.disabled = false; btnApply.textContent = prev;
+			}
+		});
 	}
 
     // Profiles UI removed
@@ -2179,6 +2191,19 @@ func (h *Handler) handleUpdateSetting(w http.ResponseWriter, r *http.Request, bm
 
 	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancel()
+
+	// Design 015: Only allow Boot.BootOrder to be updated; other settings are read-only
+	desc, err := h.db.GetSettingDescriptor(ctx, bmcName, descriptorID)
+	if err != nil || desc == nil {
+		w.WriteHeader(http.StatusNotFound)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "setting descriptor not found"})
+		return
+	}
+	if strings.ToLower(desc.Attribute) != "boot.bootorder" {
+		w.WriteHeader(http.StatusForbidden)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "settings are read-only; only Boot Order can be updated"})
+		return
+	}
 
 	// Update the setting via the BMC service
 	if err := h.bmcSvc.UpdateSetting(ctx, bmcName, descriptorID, updateReq.Value); err != nil {
