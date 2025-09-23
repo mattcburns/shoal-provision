@@ -675,6 +675,56 @@ func (s *Service) DiscoverSettings(ctx context.Context, bmcName string, resource
 		}
 	}
 
+	// 013: Probe ComputerSystem for Boot Order (persistent Boot.BootOrder)
+	if systemID != "" {
+		sysPath := fmt.Sprintf("/redfish/v1/Systems/%s", systemID)
+		if resourceFilter == "" || strings.Contains(sysPath, resourceFilter) || strings.Contains(strings.ToLower(resourceFilter), "boot") {
+			if sysData, err := s.fetchRedfishResource(ctx, bmc, sysPath); err == nil && sysData != nil {
+				// Current BootOrder lives under Boot.BootOrder
+				var current interface{}
+				if boot, ok := sysData["Boot"].(map[string]interface{}); ok {
+					if bo, ok := boot["BootOrder"].([]interface{}); ok {
+						current = bo
+					}
+				}
+				// Allowable values may be exposed as BootOrder@Redfish.AllowableValues on the ComputerSystem
+				var enums []string
+				if avRaw, ok := sysData["BootOrder@Redfish.AllowableValues"]; ok {
+					if av, ok := avRaw.([]interface{}); ok {
+						for _, v := range av {
+							if s, ok := v.(string); ok {
+								enums = append(enums, s)
+							} else {
+								enums = append(enums, fmt.Sprint(v))
+							}
+						}
+					}
+				}
+				// If we have either current or allowable values, emit a descriptor
+				if current != nil || len(enums) > 0 {
+					ts := time.Now().UTC().Format(time.RFC3339)
+					d := models.SettingDescriptor{
+						ID:            hashID(bmcName, sysPath, "Boot.BootOrder"),
+						BMCName:       bmcName,
+						ResourcePath:  sysPath,
+						Attribute:     "Boot.BootOrder",
+						DisplayName:   "Boot Order",
+						Description:   "Sets the persistent boot device order",
+						Type:          "array",
+						EnumValues:    enums,
+						ReadOnly:      false,
+						OEM:           false,
+						ApplyTimes:    []string{"OnReset"},
+						ActionTarget:  sysPath,
+						CurrentValue:  current,
+						SourceTimeISO: ts,
+					}
+					descriptors = append(descriptors, d)
+				}
+			}
+		}
+	}
+
 	// Probe Managers -> ManagerNetworkProtocol (typical writable settings like NTP, HTTP/HTTPS)
 	managerID, _ := s.GetFirstManagerID(ctx, bmcName)
 	if managerID != "" && (resourceFilter == "" || strings.Contains("/redfish/v1/Managers/"+managerID+"/NetworkProtocol", resourceFilter)) {
