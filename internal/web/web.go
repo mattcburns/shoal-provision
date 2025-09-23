@@ -1766,7 +1766,6 @@ function initSettingsTab(bmcName) {
 		div.textContent = str;
 		return div.innerHTML;
 	}
-	}
 
 	// Boot Order widget
 	function loadBootOrderWidget() {

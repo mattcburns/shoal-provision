@@ -1910,9 +1910,9 @@ func (s *Service) UpdateSetting(ctx context.Context, bmcName, descriptorID strin
 		return fmt.Errorf("BMC returned error %d: %s", resp.StatusCode, string(respBody))
 	}
 
-	slog.Info("Successfully updated BMC setting", 
-		"bmc", bmcName, 
-		"setting", descriptor.Attribute, 
+	slog.Info("Successfully updated BMC setting",
+		"bmc", bmcName,
+		"setting", descriptor.Attribute,
 		"resource", descriptor.ResourcePath,
 		"new_value", newValue)
 
