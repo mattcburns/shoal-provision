@@ -790,6 +790,36 @@ func TestHandleBMCDetails(t *testing.T) {
 	})
 }
 
+func TestBMCDetails_SnapshotUI(t *testing.T) {
+	ts := createTestSetup(t)
+	defer ts.DB.Close()
+
+	ctx := context.Background()
+
+	// Seed a BMC so details page renders for that name
+	b := &models.BMC{Name: "snap-bmc", Address: "10.0.0.5", Username: "u", Password: "p", Enabled: true}
+	if err := ts.DB.CreateBMC(ctx, b); err != nil {
+		t.Fatalf("create bmc: %v", err)
+	}
+
+	req := httptest.NewRequest("GET", "/bmcs/details?name=snap-bmc", nil)
+	ts.addAuth(req)
+	w := httptest.NewRecorder()
+	ts.Handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	body := w.Body.String()
+	// Check snapshot button and modal elements
+	if !strings.Contains(body, "Snapshot Current Settings") {
+		t.Errorf("expected Snapshot button text present")
+	}
+	if !strings.Contains(body, "id=\"snap-form\"") || !strings.Contains(body, "id=\"snap-modal\"") {
+		t.Errorf("expected snapshot modal elements present")
+	}
+}
+
 func TestHandleBMCDetailsAPI(t *testing.T) {
 	ts := createTestSetup(t)
 	defer ts.DB.Close()
