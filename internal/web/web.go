@@ -947,6 +947,27 @@ func (h *Handler) handleBMCDetails(w http.ResponseWriter, r *http.Request) {
 
 	<div id="tab-settings-content" style="display:none;">
 		<div class="details-section">
+			<h3>Boot Order</h3>
+			<div id="boot-order-section">
+				<div id="boot-order-status" style="margin-bottom:8px; color:#333;"></div>
+				<div id="boot-order-controls" style="display:none; gap:12px; align-items:flex-start; flex-wrap:wrap;">
+					<div style="flex:1 1 280px;">
+						<label>Current Order</label>
+						<ul id="boot-order-list" style="list-style:none; padding:0; margin:0; max-width:420px;"></ul>
+					</div>
+					<div style="flex:1 1 280px;">
+						<label>Allowable Values</label>
+						<div id="boot-order-allow" style="font-size:12px; color:#555; max-width:420px;"></div>
+					</div>
+				</div>
+				<div style="margin-top:10px; display:flex; gap:8px;">
+					<button id="boot-order-create" class="btn">Create Profile Version from Order</button>
+					<button id="boot-order-reset" class="btn">Reset to Allowable Order</button>
+				</div>
+			</div>
+		</div>
+
+		<div class="details-section">
 			<h3>Settings</h3>
 			<form id="settings-filters" style="display:flex; gap:8px; align-items:flex-end; flex-wrap:wrap;">
 				<div>
@@ -1471,6 +1492,7 @@ function initSettingsTab(bmcName) {
 		changes.style.display = 'none';
 		fetchSettings();
 		initProfilesUI();
+		loadBootOrderWidget();
 	}
 	function showChanges() {
 		tabChangesBtn.classList.add('btn-primary');
@@ -1544,6 +1566,117 @@ function initSettingsTab(bmcName) {
 		} catch (e) {
 			tbody.innerHTML = '<tr><td colspan="6">Error loading settings</td></tr>';
 		}
+	}
+
+	// Boot Order widget
+	function loadBootOrderWidget() {
+		const status = document.getElementById('boot-order-status');
+		const controls = document.getElementById('boot-order-controls');
+		const list = document.getElementById('boot-order-list');
+		const allowDiv = document.getElementById('boot-order-allow');
+		const btnCreate = document.getElementById('boot-order-create');
+		const btnReset = document.getElementById('boot-order-reset');
+
+		if (!status || status.dataset.init === '1') return;
+		status.dataset.init = '1';
+
+		let descriptor = null;
+		let allowable = [];
+
+		function setStatus(msg){ status.textContent = msg || ''; }
+		function renderList(items){
+			list.innerHTML = '';
+			(items || []).forEach((val, idx) => {
+				const li = document.createElement('li');
+				li.style.display = 'flex';
+				li.style.alignItems = 'center';
+				li.style.gap = '8px';
+				li.style.padding = '6px 4px';
+				li.style.border = '1px solid #ddd';
+				li.style.borderRadius = '4px';
+				li.style.margin = '4px 0';
+				const name = document.createElement('span');
+				name.textContent = String(val);
+				name.style.flex = '1 1 auto';
+				const up = document.createElement('button'); up.type = 'button'; up.className='btn'; up.textContent='↑';
+				const down = document.createElement('button'); down.type = 'button'; down.className='btn'; down.textContent='↓';
+				up.addEventListener('click', () => moveItem(idx, -1));
+				down.addEventListener('click', () => moveItem(idx, +1));
+				li.appendChild(up); li.appendChild(down); li.appendChild(name);
+				list.appendChild(li);
+			});
+		}
+		function currentValues(){
+			return Array.from(list.querySelectorAll('li span')).map(s => s.textContent);
+		}
+		function moveItem(index, delta){
+			const items = currentValues();
+			const ni = index + delta;
+			if (ni < 0 || ni >= items.length) return;
+			const tmp = items[index]; items[index] = items[ni]; items[ni] = tmp;
+			renderList(items);
+		}
+		function renderAllow(){
+			if (!allowable || !allowable.length) { allowDiv.textContent = 'No allowable values reported'; return; }
+			allowDiv.textContent = allowable.join(', ');
+		}
+
+		btnReset && btnReset.addEventListener('click', () => {
+			if (allowable && allowable.length) renderList(allowable);
+		});
+
+		btnCreate && btnCreate.addEventListener('click', async () => {
+			const profSelect = document.getElementById('prof-select');
+			if (!profSelect || !profSelect.value) { setStatus('Select a profile above first'); return; }
+			if (!descriptor) { setStatus('Boot Order descriptor not available'); return; }
+			const order = currentValues();
+			if (!order.length) { setStatus('Order is empty'); return; }
+			setStatus('Creating version…');
+			try {
+				const payload = { notes: 'Boot order change', entries: [ { resource_path: descriptor.resource_path || descriptor.action_target, attribute: descriptor.attribute || 'Boot.BootOrder', desired_value: order, apply_time_preference: (descriptor.apply_times && descriptor.apply_times[0]) || 'OnReset' } ] };
+				const res = await fetch('/api/profiles/' + encodeURIComponent(profSelect.value) + '/versions', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+				if (!res.ok) { setStatus('Failed to create version (' + res.status + ')'); return; }
+				const v = await res.json();
+				setStatus('Created version ' + (v.version || v.Version) + ' in selected profile. You can now Preview or Apply.');
+				// Refresh versions drop-down
+				const evt = new Event('change');
+				profSelect.dispatchEvent(evt);
+			} catch(e) {
+				setStatus('Error creating version');
+			}
+		});
+
+		(async function fetchDescriptor(){
+			setStatus('Loading Boot Order…');
+			controls.style.display = 'none';
+			try {
+				const res = await fetch('/api/bmcs/' + encodeURIComponent(bmcName) + '/settings?search=' + encodeURIComponent('Boot.BootOrder'));
+				if (!res.ok) { setStatus('Boot Order not available'); return; }
+				const data = await res.json();
+				let d = null;
+				const list = data.descriptors || [];
+				for (let i=0; i<list.length; i++) {
+					const it = list[i];
+					if ((it.attribute||'').toLowerCase() === 'boot.bootorder') { d = it; break; }
+				}
+				if (!d && list.length) d = list.find(x => (x.display_name||'').toLowerCase().includes('boot order')) || null;
+				if (!d) { setStatus('Boot Order not found'); return; }
+				descriptor = d;
+				allowable = Array.isArray(d.enum_values) ? d.enum_values.slice() : [];
+				let cur = [];
+				if (Array.isArray(d.current_value)) {
+					cur = d.current_value.map(String);
+				} else if (allowable.length) {
+					cur = allowable.slice();
+				}
+				renderAllow();
+				renderList(cur);
+				controls.style.display = 'flex';
+				setStatus('');
+			} catch(e) {
+				setStatus('Failed to load Boot Order');
+			}
+		})();
 	}
 
 	// Configuration Profiles UI wiring
@@ -2407,7 +2540,6 @@ func (h *Handler) handleProfilesImport(w http.ResponseWriter, r *http.Request) {
 	// Try single first
 	if err := dec.Decode(&single); err != nil {
 		// Reset by re-decoding into multi using new decoder
-		r.Body.Close()
 		http.Error(w, "invalid payload", http.StatusBadRequest)
 		return
 	}

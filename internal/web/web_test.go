@@ -1508,6 +1508,134 @@ func TestProfilesPreviewAPI(t *testing.T) {
 	}
 }
 
+func TestBootOrderPreviewAndApply(t *testing.T) {
+	ts := createTestSetup(t)
+	defer ts.DB.Close()
+
+	// Mock BMC exposing ComputerSystem with Boot.BootOrder and allowable values
+	var lastPatchPath string
+	var lastPatchBody string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		username, password, ok := r.BasicAuth()
+		if !ok || username != "admin" || password != "password" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		switch r.Method {
+		case http.MethodGet:
+			w.Header().Set("Content-Type", "application/json")
+			switch r.URL.Path {
+			case "/redfish/v1/Systems":
+				w.Write([]byte(`{"Members":[{"@odata.id":"/redfish/v1/Systems/S1"}]}`))
+			case "/redfish/v1/Systems/S1":
+				// Current BootOrder and Allowable values
+				w.Write([]byte(`{"Boot":{"BootOrder":["Pxe","Hdd","Usb"]},"BootOrder@Redfish.AllowableValues":["Pxe","Hdd","Usb","Cd"]}`))
+			case "/redfish/v1/Managers":
+				w.Write([]byte(`{"Members":[{"@odata.id":"/redfish/v1/Managers/M1"}]}`))
+			case "/redfish/v1/Managers/M1/NetworkProtocol":
+				// minimal to satisfy discovery code paths
+				w.Write([]byte(`{"@Redfish.Settings":{"SettingsObject":{"@odata.id":"/redfish/v1/Managers/M1/NetworkProtocol/Settings"}},"HTTPS":{"Port":443}}`))
+			default:
+				http.NotFound(w, r)
+			}
+		case http.MethodPatch:
+			// Capture BootOrder patch
+			b, _ := io.ReadAll(r.Body)
+			lastPatchPath = r.URL.Path
+			lastPatchBody = string(b)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"result":"ok"}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	ctx := context.Background()
+	// Seed BMC with credentials matching server
+	if err := ts.DB.CreateBMC(ctx, &models.BMC{Name: "b1", Address: server.URL, Username: "admin", Password: "password", Enabled: true}); err != nil {
+		t.Fatalf("create bmc: %v", err)
+	}
+
+	h := New(ts.DB)
+
+	// Discover settings to persist BootOrder descriptor
+	req := httptest.NewRequest(http.MethodGet, "/api/bmcs/b1/settings", nil)
+	ts.addAuth(req)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("settings expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// Create a profile with desired BootOrder different from current
+	p := models.Profile{Name: "boot-prof"}
+	body, _ := json.Marshal(p)
+	req = httptest.NewRequest(http.MethodPost, "/api/profiles", bytes.NewReader(body))
+	ts.addAuth(req)
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create profile: %d %s", rec.Code, rec.Body.String())
+	}
+	var created models.Profile
+	_ = json.Unmarshal(rec.Body.Bytes(), &created)
+
+	// Build a version setting Boot.BootOrder to [Usb,Hdd,Pxe]
+	v := models.ProfileVersion{Notes: "set order", Entries: []models.ProfileEntry{{
+		ResourcePath: "/redfish/v1/Systems/S1",
+		Attribute:    "Boot.BootOrder",
+		DesiredValue: []string{"Usb", "Hdd", "Pxe"},
+		// Apply time preference aligns with descriptor default (OnReset)
+		ApplyTimePreference: "OnReset",
+	}}}
+	body, _ = json.Marshal(v)
+	req = httptest.NewRequest(http.MethodPost, "/api/profiles/"+created.ID+"/versions", bytes.NewReader(body))
+	ts.addAuth(req)
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create version: %d %s", rec.Code, rec.Body.String())
+	}
+
+	// Preview should show a change for Boot.BootOrder
+	req = httptest.NewRequest(http.MethodGet, "/api/profiles/"+created.ID+"/preview?bmc=b1", nil)
+	ts.addAuth(req)
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("preview expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var pv struct {
+		Changes []map[string]any
+		Summary struct{ Changes int }
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &pv); err != nil {
+		t.Fatalf("decode preview: %v", err)
+	}
+	if pv.Summary.Changes == 0 {
+		t.Fatalf("expected at least one change for BootOrder")
+	}
+
+	// Apply (execute, not dry-run). Should PATCH Systems/S1 with nested body {"Boot":{"BootOrder":[...]}}
+	applyReq := map[string]any{"bmc": "b1", "dryRun": false}
+	body, _ = json.Marshal(applyReq)
+	req = httptest.NewRequest(http.MethodPost, "/api/profiles/"+created.ID+"/apply", bytes.NewReader(body))
+	ts.addAuth(req)
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("apply expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if lastPatchPath != "/redfish/v1/Systems/S1" {
+		t.Fatalf("unexpected patch path: %s", lastPatchPath)
+	}
+	if !strings.Contains(lastPatchBody, "\"BootOrder\"") || !strings.Contains(lastPatchBody, "\"Usb\"") {
+		t.Fatalf("patch body missing BootOrder array: %s", lastPatchBody)
+	}
+}
+
 func TestProfilesApplyDryRunAPI(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "test.db")
