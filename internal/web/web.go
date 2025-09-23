@@ -953,7 +953,7 @@ func (h *Handler) handleBMCDetails(w http.ResponseWriter, r *http.Request) {
 				<div id="boot-order-controls" style="display:none; gap:12px; align-items:flex-start; flex-wrap:wrap;">
 					<div style="flex:1 1 280px;">
 						<label>Current Order</label>
-						<ul id="boot-order-list" style="list-style:none; padding:0; margin:0; max-width:420px;"></ul>
+						<ul id="boot-order-list" aria-label="Boot order list" role="listbox" style="list-style:none; padding:0; margin:0; max-width:420px;"></ul>
 					</div>
 					<div style="flex:1 1 280px;">
 						<label>Allowable Values</label>
@@ -1576,6 +1576,15 @@ function initSettingsTab(bmcName) {
 		const allowDiv = document.getElementById('boot-order-allow');
 		const btnCreate = document.getElementById('boot-order-create');
 		const btnReset = document.getElementById('boot-order-reset');
+		// Add a subtle tip once
+		if (status && !status.dataset.tip) {
+			status.dataset.tip = '1';
+			const hint = document.createElement('div');
+			hint.textContent = 'Tip: drag items or use ↑/↓ to reorder';
+			hint.style.fontSize = '12px';
+			hint.style.color = '#666';
+			status.parentElement && status.parentElement.insertBefore(hint, status.nextSibling);
+		}
 
 		if (!status || status.dataset.init === '1') return;
 		status.dataset.init = '1';
@@ -1584,6 +1593,7 @@ function initSettingsTab(bmcName) {
 		let allowable = [];
 
 		function setStatus(msg){ status.textContent = msg || ''; }
+		let dragFromIndex = null;
 		function renderList(items){
 			list.innerHTML = '';
 			(items || []).forEach((val, idx) => {
@@ -1595,14 +1605,54 @@ function initSettingsTab(bmcName) {
 				li.style.border = '1px solid #ddd';
 				li.style.borderRadius = '4px';
 				li.style.margin = '4px 0';
+				li.draggable = true;
+				li.setAttribute('role', 'option');
+				li.setAttribute('aria-grabbed', 'false');
 				const name = document.createElement('span');
 				name.textContent = String(val);
 				name.style.flex = '1 1 auto';
+				const handle = document.createElement('span');
+				handle.textContent = '⋮⋮';
+				handle.title = 'Drag to reorder';
+				handle.style.cursor = 'move';
+				handle.style.userSelect = 'none';
 				const up = document.createElement('button'); up.type = 'button'; up.className='btn'; up.textContent='↑';
 				const down = document.createElement('button'); down.type = 'button'; down.className='btn'; down.textContent='↓';
 				up.addEventListener('click', () => moveItem(idx, -1));
 				down.addEventListener('click', () => moveItem(idx, +1));
-				li.appendChild(up); li.appendChild(down); li.appendChild(name);
+				li.addEventListener('dragstart', (e) => {
+					li.classList.add('dragging');
+					li.setAttribute('aria-grabbed', 'true');
+					dragFromIndex = idx;
+					if (e.dataTransfer) {
+						e.dataTransfer.effectAllowed = 'move';
+						e.dataTransfer.setData('text/plain', String(idx));
+					}
+				});
+				li.addEventListener('dragend', () => {
+					li.classList.remove('dragging');
+					li.setAttribute('aria-grabbed', 'false');
+					dragFromIndex = null;
+				});
+				li.addEventListener('dragover', (e) => {
+					e.preventDefault();
+					if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+					li.style.background = '#f5f5f5';
+				});
+				li.addEventListener('dragleave', () => { li.style.background = ''; });
+				li.addEventListener('drop', (e) => {
+					e.preventDefault();
+					li.style.background = '';
+					let from = dragFromIndex;
+					try { const dt = e.dataTransfer && e.dataTransfer.getData('text/plain'); if (dt) from = parseInt(dt, 10); } catch(_){ /* ignore */ }
+					const to = idx;
+					if (from == null || from === to) return;
+					const cur = currentValues();
+					const moved = cur.splice(from, 1)[0];
+					cur.splice(to, 0, moved);
+					renderList(cur);
+				});
+				li.appendChild(handle); li.appendChild(up); li.appendChild(down); li.appendChild(name);
 				list.appendChild(li);
 			});
 		}
