@@ -1757,3 +1757,92 @@ func TestDiscoverSettings_RefreshBypassesCache(t *testing.T) {
 		t.Fatalf("expected refreshed value 'Disabled', got: %+v", d2.CurrentValue)
 	}
 }
+
+func TestDiscoverSettings013_BootOrder(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+	db, err := database.New(dbPath)
+	if err != nil {
+		t.Fatalf("db: %v", err)
+	}
+	defer db.Close()
+	if err := db.Migrate(context.Background()); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	// Mock BMC with System exposing Boot.BootOrder and allowable values
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		username, password, ok := r.BasicAuth()
+		if !ok || username != "u" || password != "p" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/redfish/v1/Systems":
+			json.NewEncoder(w).Encode(map[string]any{"Members": []map[string]string{{"@odata.id": "/redfish/v1/Systems/Sys1"}}})
+		case "/redfish/v1/Managers":
+			json.NewEncoder(w).Encode(map[string]any{"Members": []map[string]string{{"@odata.id": "/redfish/v1/Managers/M1"}}})
+		case "/redfish/v1/Systems/Sys1":
+			json.NewEncoder(w).Encode(map[string]any{
+				"Boot": map[string]any{
+					"BootOrder": []any{"Pxe", "Hdd", "DVD"},
+				},
+				"BootOrder@Redfish.AllowableValues": []any{"Pxe", "Hdd", "DVD", "USB"},
+			})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	b := &models.BMC{Name: "bmc013", Address: server.URL, Username: "u", Password: "p", Enabled: true}
+	if err := db.CreateBMC(context.Background(), b); err != nil {
+		t.Fatalf("create bmc: %v", err)
+	}
+
+	svc := New(db)
+	// Full discovery
+	descs, err := svc.DiscoverSettings(context.Background(), "bmc013", "")
+	if err != nil {
+		t.Fatalf("discover: %v", err)
+	}
+	var boot *models.SettingDescriptor
+	for i := range descs {
+		if descs[i].Attribute == "Boot.BootOrder" {
+			boot = &descs[i]
+			break
+		}
+	}
+	if boot == nil {
+		t.Fatalf("missing Boot.BootOrder descriptor")
+	}
+	if boot.Type != "array" {
+		t.Fatalf("expected array type, got %q", boot.Type)
+	}
+	if boot.ActionTarget == "" || !strings.Contains(boot.ActionTarget, "/redfish/v1/Systems/") {
+		t.Fatalf("unexpected action target: %q", boot.ActionTarget)
+	}
+	if len(boot.ApplyTimes) == 0 || boot.ApplyTimes[0] != "OnReset" {
+		t.Fatalf("expected OnReset apply time, got %+v", boot.ApplyTimes)
+	}
+	if len(boot.EnumValues) < 3 {
+		t.Fatalf("expected allowable values, got %+v", boot.EnumValues)
+	}
+
+	// Filtered discovery by keyword 'Boot' should also include it
+	descs2, err := svc.DiscoverSettings(context.Background(), "bmc013", "Boot")
+	if err != nil {
+		t.Fatalf("discover2: %v", err)
+	}
+	var found bool
+	for i := range descs2 {
+		if descs2[i].Attribute == "Boot.BootOrder" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("Boot filter did not include Boot.BootOrder")
+	}
+}
