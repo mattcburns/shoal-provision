@@ -103,6 +103,10 @@ func New(db *database.DB) http.Handler {
 	mux.Handle("/api/audit/export", h.requireAuth(http.HandlerFunc(h.handleAuditExport)))
 	mux.Handle("/api/audit/", h.requireAuth(http.HandlerFunc(h.handleAuditRestful)))
 
+	// Profiles UI (010) — read-only pages
+	mux.Handle("/profiles", h.requireAuth(http.HandlerFunc(h.handleProfilesPage)))
+	mux.Handle("/profiles/", h.requireAuth(http.HandlerFunc(h.handleProfilesUIRestful)))
+
 	return mux
 }
 
@@ -151,6 +155,7 @@ func (h *Handler) loadTemplates() {
             <a href="/">Dashboard</a>
             <a href="/bmcs">Manage BMCs</a>
             {{if .User}}
+				<a href="/profiles">Profiles</a>
                 {{if eq .User.Role "admin"}}
                 <a href="/users">Manage Users</a>
 				<a href="/audit">Audit Logs</a>
@@ -183,6 +188,11 @@ type PageData struct {
 	BMC      *models.BMC
 	Users    []models.User
 	EditUser *models.User
+	// Profiles UI (010)
+	Profiles []models.Profile
+	Profile  *models.Profile
+	Versions []models.ProfileVersion
+	Version  *models.ProfileVersion
 }
 
 // handleHome displays the dashboard
@@ -3225,6 +3235,195 @@ func (h *Handler) handleAuditRestful(w http.ResponseWriter, r *http.Request) {
 		rec.ResponseBody = ""
 	}
 	json.NewEncoder(w).Encode(rec)
+}
+
+// Profiles UI (010) — read-only pages
+// GET /profiles — list profiles
+func (h *Handler) handleProfilesPage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if r.URL.Path != "/profiles" {
+		http.NotFound(w, r)
+		return
+	}
+	ctx := r.Context()
+	profs, err := h.db.GetProfiles(ctx)
+	if err != nil {
+		slog.Error("Failed to load profiles", "error", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+	data := PageData{Title: "Profiles", Profiles: profs}
+	h.addUserToPageData(r, &data)
+
+	page := `{{define "content"}}
+<h2>Configuration Profiles</h2>
+<table class="table">
+	<thead><tr><th>Name</th><th>Description</th><th>Created By</th><th>Updated</th><th></th></tr></thead>
+	<tbody>
+		{{range .Profiles}}
+			<tr>
+				<td>{{.Name}}</td>
+				<td>{{.Description}}</td>
+				<td>{{.CreatedBy}}</td>
+				<td>{{.UpdatedAt.Format "2006-01-02 15:04:05"}}</td>
+				<td><a class="btn" href="/profiles/{{.ID}}">View</a></td>
+			</tr>
+		{{else}}
+			<tr><td colspan="5">No profiles found.</td></tr>
+		{{end}}
+	</tbody>
+</table>
+{{end}}`
+
+	tmpl := template.Must(h.templates.Clone())
+	template.Must(tmpl.Parse(page))
+	if err := tmpl.ExecuteTemplate(w, "base", data); err != nil {
+		slog.Error("Failed to execute template", "error", err)
+		http.Error(w, "Template Error", http.StatusInternalServerError)
+	}
+}
+
+// GET /profiles/{id} and /profiles/{id}/versions/{version}
+func (h *Handler) handleProfilesUIRestful(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	if len(parts) < 2 || parts[0] != "profiles" {
+		http.NotFound(w, r)
+		return
+	}
+	pid := parts[1]
+	// /profiles/{id}/versions/{version}
+	if len(parts) == 4 && parts[2] == "versions" {
+		ver, err := strconv.Atoi(parts[3])
+		if err != nil || ver <= 0 {
+			http.NotFound(w, r)
+			return
+		}
+		h.renderProfileVersionPage(w, r, pid, ver)
+		return
+	}
+	// /profiles/{id}
+	if len(parts) == 2 {
+		h.renderProfileDetailPage(w, r, pid)
+		return
+	}
+	http.NotFound(w, r)
+}
+
+func (h *Handler) renderProfileDetailPage(w http.ResponseWriter, r *http.Request, profileID string) {
+	ctx := r.Context()
+	p, err := h.db.GetProfile(ctx, profileID)
+	if err != nil {
+		slog.Error("GetProfile failed", "error", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+	if p == nil {
+		http.NotFound(w, r)
+		return
+	}
+	vers, err := h.db.GetProfileVersions(ctx, profileID)
+	if err != nil {
+		slog.Error("GetProfileVersions failed", "error", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+	data := PageData{Title: "Profile Details", Profile: p, Versions: vers}
+	h.addUserToPageData(r, &data)
+
+	page := `{{define "content"}}
+<a href="/profiles" class="btn">← Back to Profiles</a>
+<h2>Profile: {{.Profile.Name}}</h2>
+<p>{{.Profile.Description}}</p>
+<div><strong>Created By:</strong> {{.Profile.CreatedBy}} &nbsp; <strong>Updated:</strong> {{.Profile.UpdatedAt.Format "2006-01-02 15:04:05"}}</div>
+
+<h3>Versions</h3>
+<table class="table">
+	<thead><tr><th>Version</th><th>Created</th><th>Notes</th><th></th></tr></thead>
+	<tbody>
+		{{range .Versions}}
+			<tr>
+				<td>{{.Version}}</td>
+				<td>{{.CreatedAt.Format "2006-01-02 15:04:05"}}</td>
+				<td>{{.Notes}}</td>
+				<td><a class="btn" href="/profiles/{{$.Profile.ID}}/versions/{{.Version}}">View</a></td>
+			</tr>
+		{{else}}
+			<tr><td colspan="4">No versions yet.</td></tr>
+		{{end}}
+	</tbody>
+</table>
+{{end}}`
+
+	tmpl := template.Must(h.templates.Clone())
+	template.Must(tmpl.Parse(page))
+	if err := tmpl.ExecuteTemplate(w, "base", data); err != nil {
+		slog.Error("Failed to execute template", "error", err)
+		http.Error(w, "Template Error", http.StatusInternalServerError)
+	}
+}
+
+func (h *Handler) renderProfileVersionPage(w http.ResponseWriter, r *http.Request, profileID string, version int) {
+	ctx := r.Context()
+	p, err := h.db.GetProfile(ctx, profileID)
+	if err != nil {
+		slog.Error("GetProfile failed", "error", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+	if p == nil {
+		http.NotFound(w, r)
+		return
+	}
+	v, err := h.db.GetProfileVersion(ctx, profileID, version)
+	if err != nil {
+		slog.Error("GetProfileVersion failed", "error", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+	if v == nil {
+		http.NotFound(w, r)
+		return
+	}
+	data := PageData{Title: fmt.Sprintf("Profile %s v%d", p.Name, v.Version), Profile: p, Version: v}
+	h.addUserToPageData(r, &data)
+
+	page := `{{define "content"}}
+<a href="/profiles/{{.Profile.ID}}" class="btn">← Back to Profile</a>
+<h2>Profile: {{.Profile.Name}} — Version {{.Version.Version}}</h2>
+<div><strong>Created:</strong> {{.Version.CreatedAt.Format "2006-01-02 15:04:05"}} &nbsp; <strong>Notes:</strong> {{.Version.Notes}}</div>
+
+<h3>Entries</h3>
+<table class="table">
+	<thead><tr><th>Resource Path</th><th>Attribute</th><th>Desired Value</th><th>Apply Time</th><th>OEM Vendor</th></tr></thead>
+	<tbody>
+		{{range .Version.Entries}}
+			<tr>
+				<td>{{.ResourcePath}}</td>
+				<td>{{.Attribute}}</td>
+				<td>{{printf "%v" .DesiredValue}}</td>
+				<td>{{.ApplyTimePreference}}</td>
+				<td>{{.OEMVendor}}</td>
+			</tr>
+		{{else}}
+			<tr><td colspan="5">No entries.</td></tr>
+		{{end}}
+	</tbody>
+</table>
+{{end}}`
+
+	tmpl := template.Must(h.templates.Clone())
+	template.Must(tmpl.Parse(page))
+	if err := tmpl.ExecuteTemplate(w, "base", data); err != nil {
+		slog.Error("Failed to execute template", "error", err)
+		http.Error(w, "Template Error", http.StatusInternalServerError)
+	}
 }
 
 // POST /api/audit/export  (or GET) — returns JSONL stream using same filters
