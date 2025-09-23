@@ -1830,7 +1830,6 @@ function initSettingsTab(bmcName) {
 			}
 		});
 	}
-
     // Profiles UI removed
 }
 </script>
