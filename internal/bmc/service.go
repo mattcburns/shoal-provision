@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"shoal/internal/database"
+	"shoal/pkg/contextkeys"
 	"shoal/pkg/models"
 )
 
@@ -61,7 +62,7 @@ func New(db *database.DB) *Service {
 		Timeout: 30 * time.Second,
 		Transport: &http.Transport{
 			TLSClientConfig: &tls.Config{
-				InsecureSkipVerify: true, // BMCs often use self-signed certificates
+				InsecureSkipVerify: true, // #nosec G402 BMCs often use self-signed certs in controlled networks
 			},
 		},
 	}
@@ -134,7 +135,7 @@ func (s *Service) ProxyRequest(ctx context.Context, bmcName, path string, r *htt
 	if resp.Body != nil {
 		rb, _ := io.ReadAll(resp.Body)
 		respBody = rb
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		resp.Body = io.NopCloser(bytes.NewReader(rb))
 	}
 	duration := time.Since(start)
@@ -189,7 +190,7 @@ func (s *Service) GetFirstManagerID(ctx context.Context, bmcName string) (string
 	if err != nil {
 		return "", fmt.Errorf("failed to get managers: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("failed to get managers collection: status %d", resp.StatusCode)
@@ -270,7 +271,7 @@ func (s *Service) GetFirstSystemID(ctx context.Context, bmcName string) (string,
 	if err != nil {
 		return "", fmt.Errorf("failed to get systems: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("failed to get systems collection: status %d", resp.StatusCode)
@@ -343,7 +344,7 @@ func (s *Service) PowerControl(ctx context.Context, bmcName string, action model
 	if err != nil {
 		return fmt.Errorf("failed to get systems: %w", err)
 	}
-	defer systemsResp.Body.Close()
+	defer func() { _ = systemsResp.Body.Close() }()
 
 	if systemsResp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(systemsResp.Body)
@@ -411,7 +412,7 @@ func (s *Service) PowerControl(ctx context.Context, bmcName string, action model
 	if err != nil {
 		return fmt.Errorf("failed to execute power control request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(resp.Body)
@@ -450,7 +451,7 @@ func (s *Service) TestConnection(ctx context.Context, bmc *models.BMC) error {
 	if err != nil {
 		return fmt.Errorf("failed to connect to BMC: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode == http.StatusUnauthorized {
 		return fmt.Errorf("authentication failed")
@@ -487,7 +488,7 @@ func (s *Service) TestUnauthenticatedConnection(ctx context.Context, address str
 	if err != nil {
 		return fmt.Errorf("failed to connect to BMC: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// Accept both successful responses and 401 Unauthorized as "good" responses
 	// 401 means the BMC is there and responding with Redfish, just needs auth
@@ -587,7 +588,7 @@ func (s *Service) createProxyRequest(r *http.Request, targetURL string, bmc *mod
 func (s *Service) recordAudit(ctx context.Context, bmcName string, r *http.Request, path string, status int, durationMS int64, reqBody, respBody []byte, execErr error) {
 	// Obtain user info from context if available
 	var userID, userName string
-	if v := ctx.Value("user"); v != nil {
+	if v := ctx.Value(contextkeys.UserKey); v != nil {
 		if u, ok := v.(*models.User); ok {
 			userID = u.ID
 			userName = u.Username
@@ -1136,9 +1137,7 @@ func (s *Service) resolveAttributeRegistry(ctx context.Context, bmc *models.BMC,
 		regID = ar
 	}
 	// If not present, try Actions or OEM-specific locations (best-effort)
-	if regID == "" {
-		// Some vendors include registry links in Oem sections; out of scope unless tests provide
-	}
+	// Some vendors include registry links in Oem sections; out of scope unless tests provide
 	if regID == "" {
 		return nil
 	}
@@ -1234,7 +1233,7 @@ func parseRegistryAttributes(reg map[string]interface{}) map[string]map[string]i
 			attrs = aa
 		}
 	}
-	if attrs == nil || len(attrs) == 0 {
+	if len(attrs) == 0 {
 		return nil
 	}
 	out := make(map[string]map[string]interface{}, len(attrs))
@@ -1295,6 +1294,12 @@ func isRefresh(ctx context.Context) bool {
 	if ctx == nil {
 		return false
 	}
+	if v := ctx.Value(contextkeys.RefreshKey); v != nil {
+		if b, ok := v.(bool); ok && b {
+			return true
+		}
+	}
+	// Legacy fallback for pre-migration contexts
 	if v := ctx.Value("refresh"); v != nil {
 		if b, ok := v.(bool); ok && b {
 			return true
@@ -1325,7 +1330,7 @@ func (s *Service) FetchAggregatedData(ctx context.Context, bmc *models.BMC) ([]m
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to fetch managers: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode == http.StatusOK {
 		var collection map[string]interface{}
@@ -1364,7 +1369,7 @@ func (s *Service) FetchAggregatedData(ctx context.Context, bmc *models.BMC) ([]m
 	if err != nil {
 		return managers, nil, fmt.Errorf("failed to fetch systems: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode == http.StatusOK {
 		var collection map[string]interface{}
@@ -1407,7 +1412,7 @@ func (s *Service) fetchRedfishResource(ctx context.Context, bmc *models.BMC, pat
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch resource: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("failed to fetch resource: status %d", resp.StatusCode)

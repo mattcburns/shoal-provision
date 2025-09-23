@@ -94,7 +94,7 @@ func (ts *TestServer) Close() {
 		ts.Server.Close()
 	}
 	if ts.DB != nil {
-		ts.DB.Close()
+		_ = ts.DB.Close()
 	}
 }
 
@@ -134,7 +134,7 @@ func TestRedfishServiceRoot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to get service root: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("Expected status 200, got %d", resp.StatusCode)
@@ -179,12 +179,12 @@ func TestRedfishSessionAuthentication(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create session: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusCreated {
 		body, _ := io.ReadAll(resp.Body)
 		t.Errorf("Expected status 201, got %d. Response: %s", resp.StatusCode, string(body))
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		resp.Body = io.NopCloser(bytes.NewReader(body))
 	}
 
@@ -218,7 +218,7 @@ func TestRedfishSessionAuthentication(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to use session token: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("Expected status 200 with session token, got %d", resp.StatusCode)
@@ -238,7 +238,7 @@ func TestRedfishBasicAuthentication(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to use basic auth: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("Expected status 200 with basic auth, got %d", resp.StatusCode)
@@ -264,7 +264,7 @@ func TestRedfishUnauthorizedAccess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to test unauthorized access: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Errorf("Expected status 401, got %d", resp.StatusCode)
@@ -320,7 +320,7 @@ func TestBMCManagementWorkflow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to get managers: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("Expected status 200, got %d", resp.StatusCode)
@@ -355,7 +355,7 @@ func TestBMCManagementWorkflow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to get systems: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("Expected status 200, got %d", resp.StatusCode)
@@ -391,7 +391,7 @@ func TestWebInterface(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to get home page: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("Expected status 200, got %d", resp.StatusCode)
@@ -406,7 +406,7 @@ func TestWebInterface(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to get BMCs page: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("Expected status 200, got %d", resp.StatusCode)
@@ -417,7 +417,7 @@ func TestWebInterface(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to get add BMC page: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("Expected status 200, got %d", resp.StatusCode)
@@ -439,7 +439,7 @@ func TestConcurrentRequests(t *testing.T) {
 				results <- err
 				return
 			}
-			resp.Body.Close()
+			_ = resp.Body.Close()
 
 			if resp.StatusCode != http.StatusOK {
 				results <- fmt.Errorf("expected status 200, got %d", resp.StatusCode)
@@ -474,7 +474,7 @@ func BenchmarkRedfishServiceRoot(b *testing.B) {
 		if err != nil {
 			b.Fatalf("Request failed: %v", err)
 		}
-		resp.Body.Close()
+		_ = resp.Body.Close()
 
 		if resp.StatusCode != http.StatusOK {
 			b.Fatalf("Expected status 200, got %d", resp.StatusCode)
@@ -497,7 +497,7 @@ func BenchmarkRedfishAuthentication(b *testing.B) {
 		if err != nil {
 			b.Fatalf("Request failed: %v", err)
 		}
-		resp.Body.Close()
+		_ = resp.Body.Close()
 
 		if resp.StatusCode != http.StatusOK {
 			b.Fatalf("Expected status 200, got %d", resp.StatusCode)

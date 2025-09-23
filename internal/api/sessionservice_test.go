@@ -80,7 +80,7 @@ func setupTestAPI(t *testing.T) (http.Handler, *database.DB) {
 
 func TestSessionServiceEndpoints(t *testing.T) {
 	handler, db := setupTestAPI(t)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	// 1) Ensure SessionService root requires auth
 	req := httptest.NewRequest(http.MethodGet, "/redfish/v1/SessionService", nil)

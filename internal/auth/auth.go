@@ -27,6 +27,7 @@ import (
 
 	"shoal/internal/database"
 	"shoal/pkg/auth"
+	"shoal/pkg/contextkeys"
 	"shoal/pkg/models"
 )
 
@@ -145,18 +146,21 @@ func (a *Authenticator) RequireAuth(next http.Handler) http.Handler {
 			w.Header().Set("Content-Type", "application/json")
 			w.Header().Set("WWW-Authenticate", "Basic realm=\"Redfish\"")
 			w.WriteHeader(http.StatusUnauthorized)
-			w.Write([]byte(`{"error": {"code": "Base.1.0.Unauthorized", "message": "Authentication required"}}`))
+			_, _ = w.Write([]byte(`{"error": {"code": "Base.1.0.Unauthorized", "message": "Authentication required"}}`))
 			return
 		}
 
-		// Add user to request context
-		ctx := context.WithValue(r.Context(), "user", user)
+		// Add user to request context (typed key)
+		ctx := context.WithValue(r.Context(), contextkeys.UserKey, user)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 
 // GetUserFromContext extracts the authenticated user from request context
 func GetUserFromContext(ctx context.Context) (*models.User, bool) {
+	if user, ok := ctx.Value(contextkeys.UserKey).(*models.User); ok {
+		return user, true
+	}
 	user, ok := ctx.Value("user").(*models.User)
 	return user, ok
 }

@@ -35,7 +35,7 @@ func TestNew(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create database: %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	// Verify database file exists
 	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
@@ -51,7 +51,7 @@ func TestMigrate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create database: %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	ctx := context.Background()
 	err = db.Migrate(ctx)
@@ -74,7 +74,7 @@ func TestSettingsPersistence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create database: %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	ctx := context.Background()
 	if err := db.Migrate(ctx); err != nil {
@@ -130,7 +130,7 @@ func TestProfilesPersistence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create database: %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	ctx := context.Background()
 	if err := db.Migrate(ctx); err != nil {
@@ -239,7 +239,7 @@ func TestBMCOperations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create database: %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	ctx := context.Background()
 	if err := db.Migrate(ctx); err != nil {
@@ -364,7 +364,7 @@ func TestSessionOperations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create database: %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	ctx := context.Background()
 	if err := db.Migrate(ctx); err != nil {
@@ -428,7 +428,7 @@ func TestCleanupExpiredSessions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create database: %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	ctx := context.Background()
 	if err := db.Migrate(ctx); err != nil {
@@ -506,7 +506,7 @@ func BenchmarkCreateBMC(b *testing.B) {
 	if err != nil {
 		b.Fatalf("Failed to create database: %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	ctx := context.Background()
 	if err := db.Migrate(ctx); err != nil {
@@ -531,6 +531,6 @@ func BenchmarkCreateBMC(b *testing.B) {
 		}
 
 		// Clean up for next iteration
-		db.DeleteBMC(ctx, bmc.ID)
+		_ = db.DeleteBMC(ctx, bmc.ID)
 	}
 }

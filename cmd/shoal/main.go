@@ -68,7 +68,7 @@ func main() {
 		slog.Error("Failed to initialize database", "error", err)
 		os.Exit(1)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	// Run database migrations
 	if err := db.Migrate(ctx); err != nil {

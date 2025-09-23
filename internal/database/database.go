@@ -225,7 +225,7 @@ func (db *DB) Migrate(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	for _, migration := range migrations {
 		if _, err := tx.ExecContext(ctx, migration); err != nil {
@@ -256,7 +256,7 @@ func (db *DB) UpsertSettingDescriptors(ctx context.Context, bmcName string, desc
 	if err != nil {
 		return fmt.Errorf("failed to begin tx: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	descStmt, err := tx.PrepareContext(ctx, `
 		INSERT INTO settings_descriptors (
@@ -288,8 +288,7 @@ func (db *DB) UpsertSettingDescriptors(ctx context.Context, bmcName string, desc
 	if err != nil {
 		return fmt.Errorf("prepare descriptor stmt failed: %w", err)
 	}
-	defer descStmt.Close()
-
+	defer func() { _ = descStmt.Close() }()
 	valStmt, err := tx.PrepareContext(ctx, `
 		INSERT INTO settings_values (descriptor_id, current_value, source_timestamp, updated_at)
 		VALUES (?, ?, ?, CURRENT_TIMESTAMP)
@@ -301,7 +300,7 @@ func (db *DB) UpsertSettingDescriptors(ctx context.Context, bmcName string, desc
 	if err != nil {
 		return fmt.Errorf("prepare values stmt failed: %w", err)
 	}
-	defer valStmt.Close()
+	defer func() { _ = valStmt.Close() }()
 
 	for _, d := range descs {
 		// Marshal arrays and current value to JSON strings for storage
@@ -378,7 +377,7 @@ func (db *DB) GetSettingsDescriptors(ctx context.Context, bmcName, resourceFilte
 	if err != nil {
 		return nil, fmt.Errorf("failed to query settings descriptors: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var result []models.SettingDescriptor
 	for rows.Next() {
@@ -540,7 +539,7 @@ func (db *DB) GetBMCs(ctx context.Context) ([]models.BMC, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to query BMCs: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var bmcs []models.BMC
 	for rows.Next() {
@@ -789,7 +788,7 @@ func (db *DB) GetSessions(ctx context.Context) ([]models.Session, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to query sessions: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var sessions []models.Session
 	for rows.Next() {
@@ -828,7 +827,7 @@ func (db *DB) GetUsers(ctx context.Context) ([]models.User, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to query users: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var users []models.User
 	for rows.Next() {
@@ -944,7 +943,7 @@ func (db *DB) GetConnectionMethods(ctx context.Context) ([]models.ConnectionMeth
 	if err != nil {
 		return nil, fmt.Errorf("failed to query connection methods: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var methods []models.ConnectionMethod
 	for rows.Next() {
@@ -1094,7 +1093,7 @@ func (db *DB) GetProfiles(ctx context.Context) ([]models.Profile, error) {
 	if err != nil {
 		return nil, fmt.Errorf("list profiles: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []models.Profile
 	for rows.Next() {
 		var p models.Profile
@@ -1137,7 +1136,7 @@ func (db *DB) CreateProfileVersion(ctx context.Context, v *models.ProfileVersion
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	_, err = tx.ExecContext(ctx, `INSERT INTO profile_versions (id, profile_id, version, notes) VALUES (?, ?, ?, ?)`, v.ID, v.ProfileID, v.Version, v.Notes)
 	if err != nil {
@@ -1149,7 +1148,7 @@ func (db *DB) CreateProfileVersion(ctx context.Context, v *models.ProfileVersion
 		if err != nil {
 			return fmt.Errorf("prepare entries: %w", err)
 		}
-		defer stmt.Close()
+		defer func() { _ = stmt.Close() }()
 		for i := range v.Entries {
 			e := &v.Entries[i]
 			if e.ID == "" {
@@ -1181,7 +1180,7 @@ func (db *DB) GetProfileVersions(ctx context.Context, profileID string) ([]model
 	if err != nil {
 		return nil, fmt.Errorf("list versions: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []models.ProfileVersion
 	for rows.Next() {
 		var v models.ProfileVersion
@@ -1207,7 +1206,7 @@ func (db *DB) GetProfileVersion(ctx context.Context, profileID string, version i
 	if err != nil {
 		return nil, fmt.Errorf("list entries: %w", err)
 	}
-	defer erows.Close()
+	defer func() { _ = erows.Close() }()
 	for erows.Next() {
 		var e models.ProfileEntry
 		var dv string
@@ -1232,7 +1231,7 @@ func (db *DB) DeleteProfileVersion(ctx context.Context, profileID string, versio
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	// Lookup version id
 	var vid string
@@ -1278,7 +1277,7 @@ func (db *DB) GetProfileAssignments(ctx context.Context, profileID string) ([]mo
 	if err != nil {
 		return nil, fmt.Errorf("list assignments: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []models.ProfileAssignment
 	for rows.Next() {
 		var a models.ProfileAssignment
@@ -1353,7 +1352,7 @@ func (db *DB) ListAudits(ctx context.Context, bmcName string, limit int) ([]mode
 	if err != nil {
 		return nil, fmt.Errorf("list audits: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []models.AuditRecord
 	for rows.Next() {
 		var a models.AuditRecord
@@ -1451,7 +1450,7 @@ func (db *DB) ListAuditsFiltered(ctx context.Context, f AuditFilter) ([]models.A
 	if err != nil {
 		return nil, fmt.Errorf("list audits filtered: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []models.AuditRecord
 	for rows.Next() {
 		var a models.AuditRecord

@@ -34,7 +34,7 @@ func TestAddConnectionMethod(t *testing.T) {
 		switch r.URL.Path {
 		case "/redfish/v1/":
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"@odata.id":   "/redfish/v1/",
 				"@odata.type": "#ServiceRoot.v1_5_0.ServiceRoot",
 				"Id":          "RootService",
@@ -42,7 +42,7 @@ func TestAddConnectionMethod(t *testing.T) {
 			})
 		case "/redfish/v1/Managers":
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"@odata.id":   "/redfish/v1/Managers",
 				"@odata.type": "#ManagerCollection.ManagerCollection",
 				"Members": []map[string]string{
@@ -51,7 +51,7 @@ func TestAddConnectionMethod(t *testing.T) {
 			})
 		case "/redfish/v1/Managers/BMC":
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"@odata.id":   "/redfish/v1/Managers/BMC",
 				"@odata.type": "#Manager.v1_5_0.Manager",
 				"Id":          "BMC",
@@ -59,7 +59,7 @@ func TestAddConnectionMethod(t *testing.T) {
 			})
 		case "/redfish/v1/Systems":
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"@odata.id":   "/redfish/v1/Systems",
 				"@odata.type": "#ComputerSystemCollection.ComputerSystemCollection",
 				"Members": []map[string]string{
@@ -68,7 +68,7 @@ func TestAddConnectionMethod(t *testing.T) {
 			})
 		case "/redfish/v1/Systems/System.1":
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"@odata.id":   "/redfish/v1/Systems/System.1",
 				"@odata.type": "#ComputerSystem.v1_5_0.ComputerSystem",
 				"Id":          "System.1",
@@ -85,14 +85,14 @@ func TestAddConnectionMethod(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.Remove(tempFile.Name())
-	tempFile.Close()
+	defer func() { _ = os.Remove(tempFile.Name()) }()
+	_ = tempFile.Close()
 
 	db, err := database.New(tempFile.Name())
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	ctx := context.Background()
 	if err := db.Migrate(ctx); err != nil {
@@ -188,7 +188,7 @@ func TestFetchAggregatedData(t *testing.T) {
 		switch r.URL.Path {
 		case "/redfish/v1/Managers":
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"@odata.id": "/redfish/v1/Managers",
 				"Members": []map[string]string{
 					{"@odata.id": "/redfish/v1/Managers/BMC1"},
@@ -197,7 +197,7 @@ func TestFetchAggregatedData(t *testing.T) {
 			})
 		case "/redfish/v1/Managers/BMC1":
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"@odata.id":   "/redfish/v1/Managers/BMC1",
 				"@odata.type": "#Manager.v1_5_0.Manager",
 				"Id":          "BMC1",
@@ -206,7 +206,7 @@ func TestFetchAggregatedData(t *testing.T) {
 			})
 		case "/redfish/v1/Managers/BMC2":
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"@odata.id":   "/redfish/v1/Managers/BMC2",
 				"@odata.type": "#Manager.v1_5_0.Manager",
 				"Id":          "BMC2",
@@ -215,7 +215,7 @@ func TestFetchAggregatedData(t *testing.T) {
 			})
 		case "/redfish/v1/Systems":
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"@odata.id": "/redfish/v1/Systems",
 				"Members": []map[string]string{
 					{"@odata.id": "/redfish/v1/Systems/System1"},
@@ -224,7 +224,7 @@ func TestFetchAggregatedData(t *testing.T) {
 			})
 		case "/redfish/v1/Systems/System1":
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"@odata.id":    "/redfish/v1/Systems/System1",
 				"@odata.type":  "#ComputerSystem.v1_5_0.ComputerSystem",
 				"Id":           "System1",
@@ -234,7 +234,7 @@ func TestFetchAggregatedData(t *testing.T) {
 			})
 		case "/redfish/v1/Systems/System2":
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"@odata.id":    "/redfish/v1/Systems/System2",
 				"@odata.type":  "#ComputerSystem.v1_5_0.ComputerSystem",
 				"Id":           "System2",
@@ -253,14 +253,14 @@ func TestFetchAggregatedData(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.Remove(tempFile.Name())
-	tempFile.Close()
+	defer func() { _ = os.Remove(tempFile.Name()) }()
+	_ = tempFile.Close()
 
 	db, err := database.New(tempFile.Name())
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	// Create BMC service
 	service := New(db)
@@ -317,14 +317,14 @@ func TestConnectionMethodCRUD(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.Remove(tempFile.Name())
-	tempFile.Close()
+	defer func() { _ = os.Remove(tempFile.Name()) }()
+	_ = tempFile.Close()
 
 	db, err := database.New(tempFile.Name())
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	ctx := context.Background()
 	if err := db.Migrate(ctx); err != nil {
