@@ -1901,7 +1901,7 @@ func (s *Service) UpdateSetting(ctx context.Context, bmcName, descriptorID strin
 	if err != nil {
 		return fmt.Errorf("failed to send request to BMC: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// Read response body for error details
 	respBody, _ := io.ReadAll(resp.Body)
