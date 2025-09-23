@@ -1837,3 +1837,148 @@ func (s *Service) GetConnectionMethods(ctx context.Context) ([]models.Connection
 func (s *Service) GetConnectionMethod(ctx context.Context, id string) (*models.ConnectionMethod, error) {
 	return s.db.GetConnectionMethod(ctx, id)
 }
+
+// UpdateSetting updates a single BMC setting value
+func (s *Service) UpdateSetting(ctx context.Context, bmcName, descriptorID string, newValue interface{}) error {
+	// Get BMC details
+	bmc, err := s.db.GetBMCByName(ctx, bmcName)
+	if err != nil {
+		return fmt.Errorf("failed to get BMC: %w", err)
+	}
+	if !bmc.Enabled {
+		return fmt.Errorf("BMC %s is disabled", bmcName)
+	}
+
+	// Get the setting descriptor to understand the setting structure
+	descriptor, err := s.db.GetSettingDescriptor(ctx, bmcName, descriptorID)
+	if err != nil {
+		return fmt.Errorf("failed to get setting descriptor: %w", err)
+	}
+	if descriptor == nil {
+		return fmt.Errorf("setting descriptor %s not found for BMC %s", descriptorID, bmcName)
+	}
+
+	if descriptor.ReadOnly {
+		return fmt.Errorf("setting %s is read-only", descriptor.Attribute)
+	}
+
+	// Validate the new value based on the descriptor constraints
+	if err := s.validateSettingValue(descriptor, newValue); err != nil {
+		return fmt.Errorf("invalid value: %w", err)
+	}
+
+	// Build the request payload for the BMC
+	payload := map[string]interface{}{
+		descriptor.Attribute: newValue,
+	}
+
+	// Determine the target URL - use action target if available, otherwise the resource path
+	targetURL := descriptor.ResourcePath
+	if descriptor.ActionTarget != "" {
+		targetURL = descriptor.ActionTarget
+	}
+
+	// Send PATCH request to the BMC
+	reqBody, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	bmcURL, err := s.buildBMCURL(bmc, targetURL)
+	if err != nil {
+		return fmt.Errorf("failed to build BMC URL: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, bmcURL, bytes.NewReader(reqBody))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.SetBasicAuth(bmc.Username, bmc.Password)
+
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to send request to BMC: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// Read response body for error details
+	respBody, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("BMC returned error %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	slog.Info("Successfully updated BMC setting",
+		"bmc", bmcName,
+		"setting", descriptor.Attribute,
+		"resource", descriptor.ResourcePath,
+		"new_value", newValue)
+
+	return nil
+}
+
+// validateSettingValue validates a new value against the setting descriptor constraints
+func (s *Service) validateSettingValue(descriptor *models.SettingDescriptor, value interface{}) error {
+	// Handle null/nil values
+	if value == nil {
+		return fmt.Errorf("value cannot be null")
+	}
+
+	// Check enum values
+	if len(descriptor.EnumValues) > 0 {
+		valueStr := fmt.Sprintf("%v", value)
+		for _, enum := range descriptor.EnumValues {
+			if enum == valueStr {
+				return nil // Valid enum value
+			}
+		}
+		return fmt.Errorf("value must be one of: %v", descriptor.EnumValues)
+	}
+
+	// Check numeric constraints
+	if descriptor.Type == "number" || descriptor.Type == "integer" {
+		var numValue float64
+		switch v := value.(type) {
+		case float64:
+			numValue = v
+		case float32:
+			numValue = float64(v)
+		case int:
+			numValue = float64(v)
+		case int64:
+			numValue = float64(v)
+		case int32:
+			numValue = float64(v)
+		default:
+			return fmt.Errorf("invalid numeric value: %v", value)
+		}
+
+		if descriptor.Min != nil && numValue < *descriptor.Min {
+			return fmt.Errorf("value %v is below minimum %v", numValue, *descriptor.Min)
+		}
+		if descriptor.Max != nil && numValue > *descriptor.Max {
+			return fmt.Errorf("value %v is above maximum %v", numValue, *descriptor.Max)
+		}
+	}
+
+	// Check boolean values
+	if descriptor.Type == "boolean" {
+		switch value.(type) {
+		case bool:
+			return nil
+		default:
+			return fmt.Errorf("value must be boolean, got %T", value)
+		}
+	}
+
+	// For string types, basic validation
+	if descriptor.Type == "string" {
+		if _, ok := value.(string); !ok {
+			return fmt.Errorf("value must be string, got %T", value)
+		}
+	}
+
+	return nil
+}

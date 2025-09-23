@@ -19,6 +19,7 @@ package bmc
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -1846,4 +1847,147 @@ func TestDiscoverSettings013_BootOrder(t *testing.T) {
 	if !found {
 		t.Fatalf("Boot filter did not include Boot.BootOrder")
 	}
+}
+
+func TestUpdateSetting(t *testing.T) {
+	// Create test database
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+	db, err := database.New(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to create database: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	ctx := context.Background()
+	if err := db.Migrate(ctx); err != nil {
+		t.Fatalf("Failed to migrate database: %v", err)
+	}
+
+	// Set up mock server
+	updateRequestReceived := false
+	var updatePayload map[string]interface{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/redfish/v1/Managers/Mgr1/NetworkProtocol":
+			if r.Method == http.MethodPatch {
+				updateRequestReceived = true
+				body, _ := io.ReadAll(r.Body)
+				_ = json.Unmarshal(body, &updatePayload)
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+			// GET request for discovery
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"NTP": map[string]any{"ProtocolEnabled": true},
+			})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	// Create BMC
+	bmc := &models.BMC{
+		Name:     "test-bmc",
+		Address:  server.URL,
+		Username: "admin",
+		Password: "password",
+		Enabled:  true,
+	}
+	if err := db.CreateBMC(ctx, bmc); err != nil {
+		t.Fatalf("Failed to create BMC: %v", err)
+	}
+
+	// Create a setting descriptor
+	descriptor := &models.SettingDescriptor{
+		ID:           "ntp-enabled",
+		BMCName:      "test-bmc",
+		ResourcePath: "/redfish/v1/Managers/Mgr1/NetworkProtocol",
+		Attribute:    "NTP.ProtocolEnabled",
+		Type:         "boolean",
+		ReadOnly:     false,
+		CurrentValue: true,
+	}
+	if err := db.UpsertSettingDescriptors(ctx, "test-bmc", []models.SettingDescriptor{*descriptor}); err != nil {
+		t.Fatalf("Failed to save setting descriptor: %v", err)
+	}
+
+	svc := New(db)
+
+	t.Run("successful update", func(t *testing.T) {
+		updateRequestReceived = false
+		updatePayload = nil
+
+		err := svc.UpdateSetting(ctx, "test-bmc", "ntp-enabled", false)
+		if err != nil {
+			t.Fatalf("UpdateSetting failed: %v", err)
+		}
+
+		if !updateRequestReceived {
+			t.Fatal("Expected PATCH request to be sent to BMC")
+		}
+
+		if updatePayload == nil {
+			t.Fatal("Expected update payload to be captured")
+		}
+
+		// Check that the correct payload was sent
+		if ntpValue, ok := updatePayload["NTP.ProtocolEnabled"]; !ok || ntpValue != false {
+			t.Fatalf("Expected NTP.ProtocolEnabled=false in payload, got %+v", updatePayload)
+		}
+	})
+
+	t.Run("read-only setting", func(t *testing.T) {
+		// Create a read-only descriptor
+		readOnlyDesc := &models.SettingDescriptor{
+			ID:           "readonly-setting",
+			BMCName:      "test-bmc",
+			ResourcePath: "/redfish/v1/Managers/Mgr1/Status",
+			Attribute:    "State",
+			Type:         "string",
+			ReadOnly:     true,
+			CurrentValue: "Enabled",
+		}
+		if err := db.UpsertSettingDescriptors(ctx, "test-bmc", []models.SettingDescriptor{*readOnlyDesc}); err != nil {
+			t.Fatalf("Failed to save read-only descriptor: %v", err)
+		}
+
+		err := svc.UpdateSetting(ctx, "test-bmc", "readonly-setting", "Disabled")
+		if err == nil {
+			t.Fatal("Expected error for read-only setting")
+		}
+		if !strings.Contains(err.Error(), "read-only") {
+			t.Fatalf("Expected read-only error, got: %v", err)
+		}
+	})
+
+	t.Run("disabled BMC", func(t *testing.T) {
+		// Disable the BMC
+		bmc.Enabled = false
+		if err := db.UpdateBMC(ctx, bmc); err != nil {
+			t.Fatalf("Failed to update BMC: %v", err)
+		}
+
+		err := svc.UpdateSetting(ctx, "test-bmc", "ntp-enabled", true)
+		if err == nil {
+			t.Fatal("Expected error for disabled BMC")
+		}
+		if !strings.Contains(err.Error(), "disabled") {
+			t.Fatalf("Expected disabled BMC error, got: %v", err)
+		}
+
+		// Re-enable for other tests
+		bmc.Enabled = true
+		if err := db.UpdateBMC(ctx, bmc); err != nil {
+			t.Fatalf("Failed to re-enable BMC: %v", err)
+		}
+	})
+
+	t.Run("nonexistent setting", func(t *testing.T) {
+		err := svc.UpdateSetting(ctx, "test-bmc", "nonexistent", "value")
+		if err == nil {
+			t.Fatal("Expected error for nonexistent setting")
+		}
+	})
 }
