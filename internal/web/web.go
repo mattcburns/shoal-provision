@@ -44,6 +44,8 @@ type Handler struct {
 	templates *template.Template
 }
 
+const bootOrderAttr = "Boot.BootOrder"
+
 // New creates a new web handler
 func New(db *database.DB) http.Handler {
 	h := &Handler{
@@ -1462,25 +1464,14 @@ function initSettingsTab(bmcName) {
 				const cur = (d.current_value == null) ? '' : JSON.stringify(d.current_value);
 				const oem = d.oem ? (d.oem_vendor || 'OEM') : '';
 				const apply = (d.apply_times && d.apply_times.length) ? d.apply_times.join(',') : '';
-				const isReadOnly = d.read_only || false;
+				const isReadOnly = true; // Design 015: Settings are read-only in UI
 				const rowId = 'setting-row-' + d.id;
 				const editId = 'edit-' + d.id;
 				const valueId = 'value-' + d.id;
-				
-				// Create action buttons
-				let actionButtons = '';
-				if (!isReadOnly) {
-					actionButtons = '<button class="btn btn-sm setting-edit-btn" data-id="' + d.id + '" data-row="' + rowId + '">Edit</button>';
-				} else {
-					actionButtons = '<span class="text-muted">Read-only</span>';
-				}
-				
-				// Create edit controls that will be hidden initially
-				let editControls = '';
-				if (!isReadOnly) {
-					editControls = createEditControl(d, editId, valueId);
-				}
-				
+				const deviceRO = (d.read_only === true);
+				const actionButtons = '<span class="text-muted">' + (deviceRO ? 'Read-only (device)' : 'Read-only') + '</span>';
+				const editControls = '';
+
 				return '<tr id="' + rowId + '">' +
 					'<td>' + (d.resource_path || '') + '</td>' +
 					'<td>' + (d.attribute || '') + '</td>' +
@@ -1494,25 +1485,17 @@ function initSettingsTab(bmcName) {
 					'<td>' + actionButtons + '</td>' +
 					'</tr>';
 			}).join('');
-			
-			// Add event listeners for edit buttons
-			document.querySelectorAll('.setting-edit-btn').forEach(btn => {
-				btn.addEventListener('click', function() {
-					const id = this.dataset.id;
-					const rowId = this.dataset.row;
-					startEditingSetting(id, rowId);
-				});
-			});
+
 		} catch (e) {
 			tbody.innerHTML = '<tr><td colspan="7">Error loading settings</td></tr>';
 		}
 	}
-	
+
 	// Helper function to create edit controls based on setting type
 	function createEditControl(descriptor, editId, valueId) {
 		const currentValue = descriptor.current_value;
 		let input = '';
-		
+
 		if (descriptor.enum_values && descriptor.enum_values.length > 0) {
 			// Dropdown for enum values
 			input = '<select id="' + valueId + '" class="form-control">';
@@ -1539,58 +1522,58 @@ function initSettingsTab(bmcName) {
 			// Text input for strings and other types
 			input = '<input type="text" id="' + valueId + '" class="form-control" value="' + escapeHtml(currentValue || '') + '" />';
 		}
-		
-		return input + 
+
+		return input +
 			'<div style="margin-top:4px;">' +
 				'<button class="btn btn-sm btn-primary setting-save-btn" data-id="' + descriptor.id + '" data-value-id="' + valueId + '">Save</button> ' +
 				'<button class="btn btn-sm setting-cancel-btn" data-id="' + descriptor.id + '">Cancel</button>' +
 			'</div>';
 	}
-	
+
 	// Function to start editing a setting
 	function startEditingSetting(id, rowId) {
 		// Hide current value and show edit controls
 		const currentSpan = document.getElementById('current-' + id);
 		const editDiv = document.getElementById('edit-' + id);
 		const editBtn = document.querySelector('[data-id="' + id + '"]');
-		
+
 		if (currentSpan) currentSpan.style.display = 'none';
 		if (editDiv) editDiv.style.display = 'block';
 		if (editBtn) editBtn.style.display = 'none';
-		
+
 		// Add event listeners for save/cancel buttons
 		const saveBtn = document.querySelector('.setting-save-btn[data-id="' + id + '"]');
 		const cancelBtn = document.querySelector('.setting-cancel-btn[data-id="' + id + '"]');
-		
+
 		if (saveBtn) {
 			saveBtn.addEventListener('click', function() {
 				saveSetting(id, this.dataset.valueId);
 			});
 		}
-		
+
 		if (cancelBtn) {
 			cancelBtn.addEventListener('click', function() {
 				cancelEditingSetting(id);
 			});
 		}
 	}
-	
+
 	// Function to cancel editing
 	function cancelEditingSetting(id) {
 		const currentSpan = document.getElementById('current-' + id);
 		const editDiv = document.getElementById('edit-' + id);
 		const editBtn = document.querySelector('.setting-edit-btn[data-id="' + id + '"]');
-		
+
 		if (currentSpan) currentSpan.style.display = 'inline';
 		if (editDiv) editDiv.style.display = 'none';
 		if (editBtn) editBtn.style.display = 'inline';
 	}
-	
+
 	// Function to save a setting
 	async function saveSetting(id, valueId) {
 		const input = document.getElementById(valueId);
 		if (!input) return;
-		
+
 		let newValue;
 		if (input.type === 'checkbox') {
 			newValue = input.checked;
@@ -1599,13 +1582,13 @@ function initSettingsTab(bmcName) {
 		} else {
 			newValue = input.value;
 		}
-		
+
 		// Show loading state
 		const saveBtn = document.querySelector('.setting-save-btn[data-id="' + id + '"]');
 		const originalText = saveBtn.textContent;
 		saveBtn.textContent = 'Saving...';
 		saveBtn.disabled = true;
-		
+
 		try {
 			const response = await fetch('/api/bmcs/' + encodeURIComponent(bmcName) + '/settings/' + encodeURIComponent(id), {
 				method: 'PATCH',
@@ -1614,17 +1597,17 @@ function initSettingsTab(bmcName) {
 				},
 				body: JSON.stringify({ value: newValue })
 			});
-			
+
 			if (response.ok) {
 				// Update the current value display
 				const currentSpan = document.getElementById('current-' + id);
 				if (currentSpan) {
 					currentSpan.textContent = JSON.stringify(newValue);
 				}
-				
+
 				// Cancel edit mode
 				cancelEditingSetting(id);
-				
+
 				// Show success message
 				showSettingMessage('Setting updated successfully', 'success');
 			} else {
@@ -1639,34 +1622,34 @@ function initSettingsTab(bmcName) {
 			saveBtn.disabled = false;
 		}
 	}
-	
+
 	// Function to show setting update messages
 	function showSettingMessage(message, type) {
 		const messageDiv = document.getElementById('setting-message') || createMessageDiv();
 		messageDiv.textContent = message;
 		messageDiv.className = 'alert alert-' + (type === 'success' ? 'success' : 'danger');
 		messageDiv.style.display = 'block';
-		
+
 		// Auto-hide after 3 seconds
 		setTimeout(() => {
 			messageDiv.style.display = 'none';
 		}, 3000);
 	}
-	
+
 	// Function to create message div if it doesn't exist
 	function createMessageDiv() {
 		const messageDiv = document.createElement('div');
 		messageDiv.id = 'setting-message';
 		messageDiv.style.display = 'none';
 		messageDiv.style.marginTop = '8px';
-		
+
 		// Insert after the summary div
 		const summary = document.getElementById('set-summary');
 		summary.parentNode.insertBefore(messageDiv, summary.nextSibling);
-		
+
 		return messageDiv;
 	}
-	
+
 	// Helper function to escape HTML
 	function escapeHtml(str) {
 		const div = document.createElement('div');
@@ -1681,6 +1664,16 @@ function initSettingsTab(bmcName) {
 		const list = document.getElementById('boot-order-list');
 		const allowDiv = document.getElementById('boot-order-allow');
 		const btnReset = document.getElementById('boot-order-reset');
+		// Create Apply button
+		let btnApply = document.getElementById('boot-order-apply');
+		if (!btnApply) {
+			btnApply = document.createElement('button');
+			btnApply.id = 'boot-order-apply';
+			btnApply.className = 'btn btn-primary';
+			btnApply.textContent = 'Apply Boot Order';
+			btnApply.style.marginLeft = '8px';
+			btnReset && btnReset.parentElement && btnReset.parentElement.appendChild(btnApply);
+		}
 		// Add a subtle tip once
 		if (status && !status.dataset.tip) {
 			status.dataset.tip = '1';
@@ -1814,8 +1807,29 @@ function initSettingsTab(bmcName) {
 				setStatus('Failed to load Boot Order');
 			}
 		})();
-	}
 
+		// Apply handler: PATCH Boot.BootOrder via settings endpoint
+		btnApply && btnApply.addEventListener('click', async () => {
+			if (!descriptor || !descriptor.id) { setStatus('Descriptor not loaded'); return; }
+			const values = currentValues();
+			btnApply.disabled = true; const prev = btnApply.textContent; btnApply.textContent = 'Applying…';
+			try {
+				const resp = await fetch('/api/bmcs/' + encodeURIComponent(bmcName) + '/settings/' + encodeURIComponent(descriptor.id), {
+					method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value: values })
+				});
+				if (resp.ok) {
+					setStatus('Boot Order applied successfully');
+				} else {
+					const err = await resp.json().catch(() => ({}));
+					setStatus('Failed to apply Boot Order: ' + (err.error || resp.statusText));
+				}
+			} catch(e) {
+				setStatus('Network error applying Boot Order');
+			} finally {
+				btnApply.disabled = false; btnApply.textContent = prev;
+			}
+		});
+	}
     // Profiles UI removed
 }
 </script>
@@ -2179,6 +2193,19 @@ func (h *Handler) handleUpdateSetting(w http.ResponseWriter, r *http.Request, bm
 
 	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancel()
+
+	// Design 015: Only allow Boot.BootOrder to be updated; other settings are read-only
+	desc, err := h.db.GetSettingDescriptor(ctx, bmcName, descriptorID)
+	if err != nil || desc == nil {
+		w.WriteHeader(http.StatusNotFound)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "setting descriptor not found"})
+		return
+	}
+	if !strings.EqualFold(desc.Attribute, bootOrderAttr) {
+		w.WriteHeader(http.StatusForbidden)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "Only Boot.BootOrder settings can be updated; all other settings are read-only"})
+		return
+	}
 
 	// Update the setting via the BMC service
 	if err := h.bmcSvc.UpdateSetting(ctx, bmcName, descriptorID, updateReq.Value); err != nil {
