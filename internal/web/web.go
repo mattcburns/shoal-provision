@@ -1471,7 +1471,7 @@ function initSettingsTab(bmcName) {
 				const deviceRO = (d.read_only === true);
 				const actionButtons = '<span class="text-muted">' + (deviceRO ? 'Read-only (device)' : 'Read-only') + '</span>';
 				const editControls = '';
-				
+
 				return '<tr id="' + rowId + '">' +
 					'<td>' + (d.resource_path || '') + '</td>' +
 					'<td>' + (d.attribute || '') + '</td>' +
@@ -1490,12 +1490,12 @@ function initSettingsTab(bmcName) {
 			tbody.innerHTML = '<tr><td colspan="7">Error loading settings</td></tr>';
 		}
 	}
-	
+
 	// Helper function to create edit controls based on setting type
 	function createEditControl(descriptor, editId, valueId) {
 		const currentValue = descriptor.current_value;
 		let input = '';
-		
+
 		if (descriptor.enum_values && descriptor.enum_values.length > 0) {
 			// Dropdown for enum values
 			input = '<select id="' + valueId + '" class="form-control">';
@@ -1522,58 +1522,58 @@ function initSettingsTab(bmcName) {
 			// Text input for strings and other types
 			input = '<input type="text" id="' + valueId + '" class="form-control" value="' + escapeHtml(currentValue || '') + '" />';
 		}
-		
-		return input + 
+
+		return input +
 			'<div style="margin-top:4px;">' +
 				'<button class="btn btn-sm btn-primary setting-save-btn" data-id="' + descriptor.id + '" data-value-id="' + valueId + '">Save</button> ' +
 				'<button class="btn btn-sm setting-cancel-btn" data-id="' + descriptor.id + '">Cancel</button>' +
 			'</div>';
 	}
-	
+
 	// Function to start editing a setting
 	function startEditingSetting(id, rowId) {
 		// Hide current value and show edit controls
 		const currentSpan = document.getElementById('current-' + id);
 		const editDiv = document.getElementById('edit-' + id);
 		const editBtn = document.querySelector('[data-id="' + id + '"]');
-		
+
 		if (currentSpan) currentSpan.style.display = 'none';
 		if (editDiv) editDiv.style.display = 'block';
 		if (editBtn) editBtn.style.display = 'none';
-		
+
 		// Add event listeners for save/cancel buttons
 		const saveBtn = document.querySelector('.setting-save-btn[data-id="' + id + '"]');
 		const cancelBtn = document.querySelector('.setting-cancel-btn[data-id="' + id + '"]');
-		
+
 		if (saveBtn) {
 			saveBtn.addEventListener('click', function() {
 				saveSetting(id, this.dataset.valueId);
 			});
 		}
-		
+
 		if (cancelBtn) {
 			cancelBtn.addEventListener('click', function() {
 				cancelEditingSetting(id);
 			});
 		}
 	}
-	
+
 	// Function to cancel editing
 	function cancelEditingSetting(id) {
 		const currentSpan = document.getElementById('current-' + id);
 		const editDiv = document.getElementById('edit-' + id);
 		const editBtn = document.querySelector('.setting-edit-btn[data-id="' + id + '"]');
-		
+
 		if (currentSpan) currentSpan.style.display = 'inline';
 		if (editDiv) editDiv.style.display = 'none';
 		if (editBtn) editBtn.style.display = 'inline';
 	}
-	
+
 	// Function to save a setting
 	async function saveSetting(id, valueId) {
 		const input = document.getElementById(valueId);
 		if (!input) return;
-		
+
 		let newValue;
 		if (input.type === 'checkbox') {
 			newValue = input.checked;
@@ -1582,13 +1582,13 @@ function initSettingsTab(bmcName) {
 		} else {
 			newValue = input.value;
 		}
-		
+
 		// Show loading state
 		const saveBtn = document.querySelector('.setting-save-btn[data-id="' + id + '"]');
 		const originalText = saveBtn.textContent;
 		saveBtn.textContent = 'Saving...';
 		saveBtn.disabled = true;
-		
+
 		try {
 			const response = await fetch('/api/bmcs/' + encodeURIComponent(bmcName) + '/settings/' + encodeURIComponent(id), {
 				method: 'PATCH',
@@ -1597,17 +1597,17 @@ function initSettingsTab(bmcName) {
 				},
 				body: JSON.stringify({ value: newValue })
 			});
-			
+
 			if (response.ok) {
 				// Update the current value display
 				const currentSpan = document.getElementById('current-' + id);
 				if (currentSpan) {
 					currentSpan.textContent = JSON.stringify(newValue);
 				}
-				
+
 				// Cancel edit mode
 				cancelEditingSetting(id);
-				
+
 				// Show success message
 				showSettingMessage('Setting updated successfully', 'success');
 			} else {
@@ -1622,34 +1622,34 @@ function initSettingsTab(bmcName) {
 			saveBtn.disabled = false;
 		}
 	}
-	
+
 	// Function to show setting update messages
 	function showSettingMessage(message, type) {
 		const messageDiv = document.getElementById('setting-message') || createMessageDiv();
 		messageDiv.textContent = message;
 		messageDiv.className = 'alert alert-' + (type === 'success' ? 'success' : 'danger');
 		messageDiv.style.display = 'block';
-		
+
 		// Auto-hide after 3 seconds
 		setTimeout(() => {
 			messageDiv.style.display = 'none';
 		}, 3000);
 	}
-	
+
 	// Function to create message div if it doesn't exist
 	function createMessageDiv() {
 		const messageDiv = document.createElement('div');
 		messageDiv.id = 'setting-message';
 		messageDiv.style.display = 'none';
 		messageDiv.style.marginTop = '8px';
-		
+
 		// Insert after the summary div
 		const summary = document.getElementById('set-summary');
 		summary.parentNode.insertBefore(messageDiv, summary.nextSibling);
-		
+
 		return messageDiv;
 	}
-	
+
 	// Helper function to escape HTML
 	function escapeHtml(str) {
 		const div = document.createElement('div');
