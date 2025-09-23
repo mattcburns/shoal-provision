@@ -1226,6 +1226,39 @@ func (db *DB) GetProfileVersion(ctx context.Context, profileID string, version i
 	return &v, nil
 }
 
+// DeleteProfileVersion deletes a specific version and its entries
+func (db *DB) DeleteProfileVersion(ctx context.Context, profileID string, version int) error {
+	tx, err := db.conn.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Lookup version id
+	var vid string
+	err = tx.QueryRowContext(ctx, `SELECT id FROM profile_versions WHERE profile_id = ? AND version = ?`, profileID, version).Scan(&vid)
+	if err == sql.ErrNoRows {
+		// Nothing to delete
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("get version id: %w", err)
+	}
+
+	// Delete entries then version
+	if _, err := tx.ExecContext(ctx, `DELETE FROM profile_entries WHERE profile_version_id = ?`, vid); err != nil {
+		return fmt.Errorf("delete entries: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM profile_versions WHERE id = ?`, vid); err != nil {
+		return fmt.Errorf("delete version: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit delete version: %w", err)
+	}
+	return nil
+}
+
 // CreateProfileAssignment adds an assignment
 func (db *DB) CreateProfileAssignment(ctx context.Context, a *models.ProfileAssignment) error {
 	if a.ID == "" {

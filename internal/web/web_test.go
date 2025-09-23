@@ -141,11 +141,19 @@ func TestProfilesUI_ReadOnlyPages(t *testing.T) {
 		if !strings.Contains(body, "Configuration Profiles") {
 			t.Errorf("expected header present")
 		}
+		// CRUD: New Profile button present
+		if !strings.Contains(body, "New Profile") {
+			t.Errorf("expected New Profile button present")
+		}
 		if !strings.Contains(body, prof.Name) {
 			t.Errorf("expected profile name in list")
 		}
 		if !strings.Contains(body, "/profiles/") {
 			t.Errorf("expected link to profile detail")
+		}
+		// CRUD: Delete button present on list row
+		if !strings.Contains(body, "Delete</button>") {
+			t.Errorf("expected Delete button in list")
 		}
 	})
 
@@ -163,6 +171,10 @@ func TestProfilesUI_ReadOnlyPages(t *testing.T) {
 		}
 		if !strings.Contains(body, "Versions") {
 			t.Errorf("expected versions section")
+		}
+		// CRUD: edit form controls
+		if !strings.Contains(body, "Save") || !strings.Contains(body, "Delete Profile") || !strings.Contains(body, "Create Version") {
+			t.Errorf("expected edit/delete/create controls on detail page")
 		}
 		if !strings.Contains(body, "/profiles/"+prof.ID+"/versions/1") || !strings.Contains(body, "/profiles/"+prof.ID+"/versions/2") {
 			t.Errorf("expected version links")
@@ -183,6 +195,10 @@ func TestProfilesUI_ReadOnlyPages(t *testing.T) {
 		}
 		if !strings.Contains(body, "AssetTag") || !strings.Contains(body, "ASSET-002") {
 			t.Errorf("expected entry details visible")
+		}
+		// CRUD: delete version button
+		if !strings.Contains(body, "Delete Version") {
+			t.Errorf("expected Delete Version button present")
 		}
 	})
 }
@@ -1296,6 +1312,23 @@ func TestProfilesAPI(t *testing.T) {
 	}
 	if vgot.Version != 1 {
 		t.Fatalf("wrong version")
+	}
+
+	// Delete version
+	req = httptest.NewRequest(http.MethodDelete, "/api/profiles/"+created.ID+"/versions/1", nil)
+	req.SetBasicAuth("admin", "admin")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("delete version expected 204, got %d: %s", rec.Code, rec.Body.String())
+	}
+	// Confirm gone
+	req = httptest.NewRequest(http.MethodGet, "/api/profiles/"+created.ID+"/versions/1", nil)
+	req.SetBasicAuth("admin", "admin")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 after deletion, got %d", rec.Code)
 	}
 
 	// Create assignment
