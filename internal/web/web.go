@@ -1610,6 +1610,7 @@ function initSettingsTab(bmcName) {
 				li.setAttribute('role', 'option');
 				li.setAttribute('aria-grabbed', 'false');
 				const name = document.createElement('span');
+				name.className = 'boot-option-name';
 				name.textContent = String(val);
 				name.style.flex = '1 1 auto';
 				const handle = document.createElement('span');
@@ -1658,7 +1659,7 @@ function initSettingsTab(bmcName) {
 			});
 		}
 		function currentValues(){
-			return Array.from(list.querySelectorAll('li span')).map(s => s.textContent);
+			return Array.from(list.querySelectorAll('li span.boot-option-name')).map(s => s.textContent);
 		}
 		function moveItem(index, delta){
 			const items = currentValues();
