@@ -986,7 +986,7 @@ func (h *Handler) handleBMCDetails(w http.ResponseWriter, r *http.Request) {
 				<div id="set-summary" style="margin-bottom:8px;"></div>
 				<table class="table" id="settings-table">
 					<thead>
-						<tr><th>Resource</th><th>Attribute</th><th>Current</th><th>Type</th><th>OEM</th><th>Apply</th><th>Actions</th></tr>
+						<tr><th>Resource</th><th>Attribute</th><th>Value</th></tr>
 					</thead>
 					<tbody></tbody>
 				</table>
@@ -1292,11 +1292,11 @@ function initSettingsTab(bmcName) {
 		if (page) params.set('page', String(page));
 		if (pageSize) params.set('page_size', String(pageSize));
 		const url = '/api/bmcs/' + encodeURIComponent(bmcName) + '/settings?' + params.toString();
-		tbody.innerHTML = '<tr><td colspan="6">Loading...</td></tr>';
+		tbody.innerHTML = '<tr><td colspan="3">Loading...</td></tr>';
 		try {
 			const res = await fetch(url);
-			if (!res.ok) {
-				tbody.innerHTML = '<tr><td colspan="6">Error ' + res.status + '</td></tr>';
+				if (!res.ok) {
+					tbody.innerHTML = '<tr><td colspan="3">Error ' + res.status + '</td></tr>';
 				return;
 			}
 			const data = await res.json();
@@ -1308,38 +1308,21 @@ function initSettingsTab(bmcName) {
 			pageInfo.textContent = 'Page ' + pageResp + (pageSizeResp ? (' of ~' + Math.ceil(total / pageSizeResp)) : '');
 			btnPrev.disabled = (pageResp <= 1);
 			btnNext.disabled = (pageSizeResp ? (pageResp * pageSizeResp >= total) : list.length === 0);
-			if (!Array.isArray(list) || list.length === 0) {
-				tbody.innerHTML = '<tr><td colspan="7">No settings found</td></tr>';
-				return;
-			}
-			tbody.innerHTML = list.map(function(d){
-				const cur = (d.current_value == null) ? '' : JSON.stringify(d.current_value);
-				const oem = d.oem ? (d.oem_vendor || 'OEM') : '';
-				const apply = (d.apply_times && d.apply_times.length) ? d.apply_times.join(',') : '';
-				const isReadOnly = true; // Design 015: Settings are read-only in UI
-				const rowId = 'setting-row-' + d.id;
-				const editId = 'edit-' + d.id;
-				const valueId = 'value-' + d.id;
-				const deviceRO = (d.read_only === true);
-				const actionButtons = '<span class="text-muted">' + (deviceRO ? 'Read-only (device)' : 'Read-only') + '</span>';
-				const editControls = '';
-
-				return '<tr id="' + rowId + '">' +
-					'<td>' + (d.resource_path || '') + '</td>' +
-					'<td>' + (d.attribute || '') + '</td>' +
-					'<td>' +
-						'<span class="setting-current-value" id="current-' + d.id + '">' + cur + '</span>' +
-						'<div class="setting-edit-controls" id="' + editId + '" style="display:none;">' + editControls + '</div>' +
-					'</td>' +
-					'<td>' + (d.type || '') + '</td>' +
-					'<td>' + oem + '</td>' +
-					'<td>' + apply + '</td>' +
-					'<td>' + actionButtons + '</td>' +
-					'</tr>';
-			}).join('');
+				if (!Array.isArray(list) || list.length === 0) {
+					tbody.innerHTML = '<tr><td colspan="3">No settings found</td></tr>';
+					return;
+				}
+				tbody.innerHTML = list.map(function(d){
+					const cur = (d.current_value == null) ? '' : JSON.stringify(d.current_value);
+					return '<tr>' +
+						'<td>' + (d.resource_path || '') + '</td>' +
+						'<td>' + (d.attribute || '') + '</td>' +
+						'<td><span class="setting-current-value" id="current-' + d.id + '">' + cur + '</span></td>' +
+						'</tr>';
+				}).join('');
 
 		} catch (e) {
-			tbody.innerHTML = '<tr><td colspan="7">Error loading settings</td></tr>';
+			tbody.innerHTML = '<tr><td colspan="3">Error loading settings</td></tr>';
 		}
 	}
 
