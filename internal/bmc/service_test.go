@@ -1990,4 +1990,115 @@ func TestUpdateSetting(t *testing.T) {
 			t.Fatal("Expected error for nonexistent setting")
 		}
 	})
+
+	t.Run("boot order nested payload", func(t *testing.T) {
+		// Set up mock server for Boot.BootOrder updates
+		bootUpdateRequestReceived := false
+		var bootUpdatePayload map[string]interface{}
+		bootServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/redfish/v1/Systems/Sys1":
+				if r.Method == http.MethodPatch {
+					bootUpdateRequestReceived = true
+					body, _ := io.ReadAll(r.Body)
+					_ = json.Unmarshal(body, &bootUpdatePayload)
+					w.WriteHeader(http.StatusOK)
+					return
+				}
+				// GET request for discovery
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"Boot": map[string]any{"BootOrder": []any{"Pxe", "Hdd"}},
+				})
+			default:
+				w.WriteHeader(http.StatusNotFound)
+			}
+		}))
+		defer bootServer.Close()
+
+		// Create a second BMC for boot testing
+		bootBMC := &models.BMC{
+			Name:     "boot-test-bmc",
+			Address:  bootServer.URL,
+			Username: "admin",
+			Password: "password",
+			Enabled:  true,
+		}
+		if err := db.CreateBMC(ctx, bootBMC); err != nil {
+			t.Fatalf("Failed to create boot BMC: %v", err)
+		}
+
+		// Create Boot.BootOrder setting descriptor
+		bootDescriptor := &models.SettingDescriptor{
+			ID:           "boot-order",
+			BMCName:      "boot-test-bmc",
+			ResourcePath: "/redfish/v1/Systems/Sys1",
+			Attribute:    "Boot.BootOrder",
+			Type:         "array",
+			ReadOnly:     false,
+			CurrentValue: []string{"Pxe", "Hdd"},
+		}
+		if err := db.UpsertSettingDescriptors(ctx, "boot-test-bmc", []models.SettingDescriptor{*bootDescriptor}); err != nil {
+			t.Fatalf("Failed to save boot descriptor: %v", err)
+		}
+
+		// Test updating Boot.BootOrder
+		bootUpdateRequestReceived = false
+		bootUpdatePayload = nil
+
+		newBootOrder := []string{"Hdd", "Pxe", "USB"}
+		err := svc.UpdateSetting(ctx, "boot-test-bmc", "boot-order", newBootOrder)
+		if err != nil {
+			t.Fatalf("UpdateSetting for Boot.BootOrder failed: %v", err)
+		}
+
+		if !bootUpdateRequestReceived {
+			t.Fatal("Expected PATCH request to be sent to BMC for Boot.BootOrder")
+		}
+
+		if bootUpdatePayload == nil {
+			t.Fatal("Expected boot update payload to be captured")
+		}
+
+		// Check that the payload has the correct nested structure
+		bootSection, ok := bootUpdatePayload["Boot"]
+		if !ok {
+			t.Fatalf("Expected 'Boot' section in payload, got %+v", bootUpdatePayload)
+		}
+
+		bootMap, ok := bootSection.(map[string]interface{})
+		if !ok {
+			t.Fatalf("Expected Boot section to be a map, got %T", bootSection)
+		}
+
+		bootOrderValue, ok := bootMap["BootOrder"]
+		if !ok {
+			t.Fatalf("Expected 'BootOrder' in Boot section, got %+v", bootMap)
+		}
+
+		// Verify the boot order values
+		bootOrderInterface, ok := bootOrderValue.([]interface{})
+		if !ok {
+			t.Fatalf("Expected BootOrder to be []interface{}, got %T", bootOrderValue)
+		}
+
+		expectedOrder := []string{"Hdd", "Pxe", "USB"}
+		if len(bootOrderInterface) != len(expectedOrder) {
+			t.Fatalf("Expected boot order length %d, got %d", len(expectedOrder), len(bootOrderInterface))
+		}
+
+		for i, expected := range expectedOrder {
+			actualStr, ok := bootOrderInterface[i].(string)
+			if !ok {
+				t.Fatalf("Expected boot order[%d] to be string, got %T", i, bootOrderInterface[i])
+			}
+			if actualStr != expected {
+				t.Fatalf("Expected boot order[%d] = %q, got %q", i, expected, actualStr)
+			}
+		}
+
+		// Ensure no flat "Boot.BootOrder" key exists in the payload
+		if _, exists := bootUpdatePayload["Boot.BootOrder"]; exists {
+			t.Fatal("Payload should not contain flat 'Boot.BootOrder' key")
+		}
+	})
 }

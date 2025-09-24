@@ -1868,8 +1868,20 @@ func (s *Service) UpdateSetting(ctx context.Context, bmcName, descriptorID strin
 	}
 
 	// Build the request payload for the BMC
-	payload := map[string]interface{}{
-		descriptor.Attribute: newValue,
+	var payload map[string]interface{}
+
+	// Special handling for Boot.BootOrder - it needs to be nested properly
+	if descriptor.Attribute == "Boot.BootOrder" {
+		payload = map[string]interface{}{
+			"Boot": map[string]interface{}{
+				"BootOrder": newValue,
+			},
+		}
+	} else {
+		// For other attributes, use the flat structure
+		payload = map[string]interface{}{
+			descriptor.Attribute: newValue,
+		}
 	}
 
 	// Determine the target URL - use action target if available, otherwise the resource path
