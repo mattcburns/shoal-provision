@@ -1,7 +1,7 @@
 # 016: Simplify Auditing Feature
 
 **Date**: 2025-09-23
-**Status**: Proposed
+**Status**: Implemented
 
 ## 1. Summary
 
@@ -50,3 +50,10 @@ The following core audit events will be **retained**:
 -   This change simplifies the codebase and reduces the amount of data stored in the `audit_log` table.
 -   The user-facing Audit Log will be easier to read and more focused on significant events.
 -   This change depends on the completion of Design 014, as it removes auditing for a feature that will no longer exist.
+
+## 5. Implementation Notes
+
+- Added centralized audit action constants in `pkg/models` for the retained events.
+- Updated `internal/bmc/service.go` to use `AuditActionProxy` for proxied Redfish requests.
+- Replaced literal action strings in tests with constants.
+- No schema or API changes required; UI naturally reflects reduced event diversity.
