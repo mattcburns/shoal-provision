@@ -28,6 +28,7 @@ import (
 
 	"shoal/internal/auth"
 	"shoal/internal/bmc"
+	"shoal/internal/ctxkeys"
 	"shoal/internal/database"
 	pkgAuth "shoal/pkg/auth"
 	"shoal/pkg/models"
@@ -345,7 +346,7 @@ func TestHandleProfile(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			req := httptest.NewRequest("GET", "/profile"+tt.queryParams, nil)
 			if tt.user != nil {
-				ctx := context.WithValue(req.Context(), "user", tt.user)
+				ctx := context.WithValue(req.Context(), ctxkeys.User, tt.user)
 				req = req.WithContext(ctx)
 			}
 
@@ -498,7 +499,7 @@ func TestHandleChangePassword(t *testing.T) {
 			}
 
 			if tt.user != nil {
-				ctx := context.WithValue(req.Context(), "user", tt.user)
+				ctx := context.WithValue(req.Context(), ctxkeys.User, tt.user)
 				req = req.WithContext(ctx)
 			}
 

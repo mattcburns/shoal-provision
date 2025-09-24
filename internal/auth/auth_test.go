@@ -25,6 +25,7 @@ import (
 	"testing"
 	"time"
 
+	"shoal/internal/ctxkeys"
 	"shoal/internal/database"
 	pkgAuth "shoal/pkg/auth"
 	"shoal/pkg/models"
@@ -401,7 +402,7 @@ func TestGetUserFromContext(t *testing.T) {
 		Enabled:  true,
 	}
 
-	ctx := context.WithValue(context.Background(), "user", user)
+	ctx := context.WithValue(context.Background(), ctxkeys.User, user)
 
 	retrievedUser, ok := GetUserFromContext(ctx)
 	if !ok {
@@ -426,7 +427,7 @@ func TestGetUserFromContext(t *testing.T) {
 	}
 
 	// Test with wrong type in context
-	ctx = context.WithValue(context.Background(), "user", "not-a-user")
+	ctx = context.WithValue(context.Background(), ctxkeys.User, "not-a-user")
 
 	retrievedUser, ok = GetUserFromContext(ctx)
 	if ok {

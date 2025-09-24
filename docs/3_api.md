@@ -49,25 +49,6 @@ curl -s -u admin:admin \
   "http://localhost:8080/api/bmcs/bmc1/settings?resource=EthernetInterfaces" | jq .
 ```
 
-## Configuration Profiles
-
-Shoal can capture, version, compare, and apply Redfish settings as Configuration Profiles.
-
-- `GET /api/profiles`: List all profiles.
-- `POST /api/profiles`: Create a new profile.
-- `POST /api/profiles/snapshot?bmc={name}`: Create a new profile version from a live BMC's settings.
-- `GET /api/profiles/{id}/preview?bmc={name}`: Compare a profile version to a live BMC.
-- `POST /api/profiles/{id}/apply`: Apply a profile to a BMC (with `dryRun` or `execute` mode).
-- `POST /api/profiles/diff`: Compare two profile versions.
-- `POST /api/profiles/export` / `import`: Export or import profiles as JSON.
-
-**Example: Apply a profile (dry-run)**
-```bash
-curl -s -u admin:admin \
-  -X POST "http://localhost:8080/api/profiles/<profile-id>/apply" \
-  -H "Content-Type: application/json" \
-  -d '{"bmc": "bmc1", "dryRun": true}' | jq .
-```
 
 ## DMTF Standard AggregationService
 

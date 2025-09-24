@@ -30,6 +30,7 @@ import (
 	"sync"
 	"time"
 
+	"shoal/internal/ctxkeys"
 	"shoal/internal/database"
 	"shoal/pkg/models"
 )
@@ -1217,7 +1218,7 @@ func isRefresh(ctx context.Context) bool {
 	if ctx == nil {
 		return false
 	}
-	if v := ctx.Value("refresh"); v != nil {
+	if v := ctx.Value(ctxkeys.Refresh); v != nil {
 		if b, ok := v.(bool); ok && b {
 			return true
 		}

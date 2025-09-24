@@ -25,6 +25,7 @@ import (
 	"net/http"
 	"time"
 
+	"shoal/internal/ctxkeys"
 	"shoal/internal/database"
 	"shoal/pkg/auth"
 	"shoal/pkg/models"
@@ -150,14 +151,14 @@ func (a *Authenticator) RequireAuth(next http.Handler) http.Handler {
 		}
 
 		// Add user to request context (typed key)
-		ctx := context.WithValue(r.Context(), "user", user)
+		ctx := context.WithValue(r.Context(), ctxkeys.User, user)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 
 // GetUserFromContext extracts the authenticated user from request context
 func GetUserFromContext(ctx context.Context) (*models.User, bool) {
-	user, ok := ctx.Value("user").(*models.User)
+	user, ok := ctx.Value(ctxkeys.User).(*models.User)
 	return user, ok
 }
 
