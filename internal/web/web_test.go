@@ -1003,7 +1003,7 @@ func TestAuditEndpoints(t *testing.T) {
 	h := New(db)
 
 	// Seed an audit record directly
-	a := &models.AuditRecord{UserID: admin.ID, UserName: admin.Username, BMCName: "b1", Action: "proxy", Method: http.MethodGet, Path: "/redfish/v1/Systems", StatusCode: 200, DurationMS: 5, RequestBody: "{}", ResponseBody: "{}"}
+	a := &models.AuditRecord{UserID: admin.ID, UserName: admin.Username, BMCName: "b1", Action: models.AuditActionProxy, Method: http.MethodGet, Path: "/redfish/v1/Systems", StatusCode: 200, DurationMS: 5, RequestBody: "{}", ResponseBody: "{}"}
 	if err := db.CreateAudit(ctx, a); err != nil {
 		t.Fatalf("create audit: %v", err)
 	}

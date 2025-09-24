@@ -623,7 +623,7 @@ func (s *Service) recordAudit(ctx context.Context, bmcName string, r *http.Reque
 		UserID:       userID,
 		UserName:     userName,
 		BMCName:      bmcName,
-		Action:       "proxy",
+		Action:       models.AuditActionProxy,
 		Method:       r.Method,
 		Path:         path,
 		StatusCode:   status,

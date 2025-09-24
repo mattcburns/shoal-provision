@@ -42,18 +42,18 @@ func TestAuditsPersistence(t *testing.T) {
 
 	// Create several audit records
 	longBody := strings.Repeat("x", 10000)
-	a1 := &models.AuditRecord{UserID: "u1", UserName: "admin", BMCName: "b1", Action: "proxy", Method: "GET", Path: "/redfish/v1/Systems", StatusCode: 200, DurationMS: 10, RequestBody: longBody, ResponseBody: longBody}
+	a1 := &models.AuditRecord{UserID: "u1", UserName: "admin", BMCName: "b1", Action: models.AuditActionProxy, Method: "GET", Path: "/redfish/v1/Systems", StatusCode: 200, DurationMS: 10, RequestBody: longBody, ResponseBody: longBody}
 	if err := db.CreateAudit(ctx, a1); err != nil {
 		t.Fatalf("create a1: %v", err)
 	}
 	// Small delay to ensure ordering by created_at
 	time.Sleep(5 * time.Millisecond)
-	a2 := &models.AuditRecord{UserID: "u2", UserName: "op", BMCName: "b1", Action: "proxy", Method: "POST", Path: "/redfish/v1/Actions", StatusCode: 204, DurationMS: 15}
+	a2 := &models.AuditRecord{UserID: "u2", UserName: "op", BMCName: "b1", Action: models.AuditActionProxy, Method: "POST", Path: "/redfish/v1/Actions", StatusCode: 204, DurationMS: 15}
 	if err := db.CreateAudit(ctx, a2); err != nil {
 		t.Fatalf("create a2: %v", err)
 	}
 	time.Sleep(5 * time.Millisecond)
-	a3 := &models.AuditRecord{UserID: "u3", UserName: "view", BMCName: "b2", Action: "proxy", Method: "GET", Path: "/redfish/v1/Managers", StatusCode: 200, DurationMS: 12}
+	a3 := &models.AuditRecord{UserID: "u3", UserName: "view", BMCName: "b2", Action: models.AuditActionProxy, Method: "GET", Path: "/redfish/v1/Managers", StatusCode: 200, DurationMS: 12}
 	if err := db.CreateAudit(ctx, a3); err != nil {
 		t.Fatalf("create a3: %v", err)
 	}
