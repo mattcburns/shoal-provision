@@ -27,7 +27,6 @@ import (
 
 	"shoal/internal/database"
 	"shoal/pkg/auth"
-	"shoal/pkg/contextkeys"
 	"shoal/pkg/models"
 )
 
@@ -45,7 +44,7 @@ func New(db *database.DB) *Authenticator {
 func (a *Authenticator) AuthenticateRequest(r *http.Request) (*models.User, error) {
 	// Check for session-based authentication first (X-Auth-Token header)
 	if token := r.Header.Get("X-Auth-Token"); token != "" {
-		return a.authenticateToken(r.Context(), token)
+		return a.AuthenticateToken(r.Context(), token)
 	}
 
 	// Check for basic authentication
@@ -56,8 +55,8 @@ func (a *Authenticator) AuthenticateRequest(r *http.Request) (*models.User, erro
 	return nil, fmt.Errorf("no authentication provided")
 }
 
-// authenticateToken validates a session token
-func (a *Authenticator) authenticateToken(ctx context.Context, token string) (*models.User, error) {
+// AuthenticateToken validates a session token
+func (a *Authenticator) AuthenticateToken(ctx context.Context, token string) (*models.User, error) {
 	session, err := a.db.GetSessionByToken(ctx, token)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get session: %w", err)
@@ -151,16 +150,13 @@ func (a *Authenticator) RequireAuth(next http.Handler) http.Handler {
 		}
 
 		// Add user to request context (typed key)
-		ctx := context.WithValue(r.Context(), contextkeys.UserKey, user)
+		ctx := context.WithValue(r.Context(), "user", user)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 
 // GetUserFromContext extracts the authenticated user from request context
 func GetUserFromContext(ctx context.Context) (*models.User, bool) {
-	if user, ok := ctx.Value(contextkeys.UserKey).(*models.User); ok {
-		return user, true
-	}
 	user, ok := ctx.Value("user").(*models.User)
 	return user, ok
 }

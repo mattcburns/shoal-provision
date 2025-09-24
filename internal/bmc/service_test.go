@@ -28,7 +28,6 @@ import (
 	"time"
 
 	"shoal/internal/database"
-	"shoal/pkg/contextkeys"
 	"shoal/pkg/models"
 )
 
@@ -1740,7 +1739,7 @@ func TestDiscoverSettings_RefreshBypassesCache(t *testing.T) {
 	}
 
 	// With refresh context flag, re-discovery should update DB to new value
-	ctxRefresh := context.WithValue(ctx, contextkeys.RefreshKey, true)
+	ctxRefresh := context.WithValue(ctx, "refresh", true)
 	descs2, err := svc.DiscoverSettings(ctxRefresh, "bmc1", "")
 	if err != nil {
 		t.Fatalf("discover2: %v", err)

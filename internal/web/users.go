@@ -42,7 +42,11 @@ func (h *Handler) handleUsers(w http.ResponseWriter, r *http.Request) {
 		Title: "Manage Users",
 		Users: users,
 	}
-	h.addUserToPageData(r, &data)
+	user := getUserFromContext(r.Context())
+	if user != nil {
+		data.User = user
+		data.UserRole = auth.GetRoleDisplayName(user.Role)
+	}
 
 	// Check for messages in URL parameters
 	if msg := r.URL.Query().Get("message"); msg != "" {
@@ -182,7 +186,11 @@ func (h *Handler) handleAddUser(w http.ResponseWriter, r *http.Request) {
 	data := PageData{
 		Title: "Add User",
 	}
-	h.addUserToPageData(r, &data)
+	user := getUserFromContext(r.Context())
+	if user != nil {
+		data.User = user
+		data.UserRole = auth.GetRoleDisplayName(user.Role)
+	}
 
 	if errMsg := r.URL.Query().Get("error"); errMsg != "" {
 		data.Error = errMsg
@@ -300,7 +308,11 @@ func (h *Handler) handleEditUser(w http.ResponseWriter, r *http.Request) {
 		Title:    "Edit User",
 		EditUser: user,
 	}
-	h.addUserToPageData(r, &data)
+	currentUser := getUserFromContext(r.Context())
+	if currentUser != nil {
+		data.User = currentUser
+		data.UserRole = auth.GetRoleDisplayName(currentUser.Role)
+	}
 
 	if errMsg := r.URL.Query().Get("error"); errMsg != "" {
 		data.Error = errMsg

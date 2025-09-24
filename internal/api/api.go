@@ -29,7 +29,6 @@ import (
 	"shoal/internal/auth"
 	"shoal/internal/bmc"
 	"shoal/internal/database"
-	"shoal/pkg/contextkeys"
 	"shoal/pkg/models"
 	"shoal/pkg/redfish"
 )
@@ -240,7 +239,7 @@ func (h *Handler) handleBMCProxy(w http.ResponseWriter, r *http.Request, path st
 	user, _ := h.auth.AuthenticateRequest(r)
 	ctx := r.Context()
 	if user != nil {
-		ctx = context.WithValue(ctx, contextkeys.UserKey, user)
+		ctx = context.WithValue(ctx, "user", user)
 	}
 	// Proxy request to BMC
 	resp, err := h.bmcSvc.ProxyRequest(ctx, bmcName, bmcPath, r)

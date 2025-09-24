@@ -27,7 +27,6 @@ import (
 
 	"shoal/internal/database"
 	pkgAuth "shoal/pkg/auth"
-	"shoal/pkg/contextkeys"
 	"shoal/pkg/models"
 )
 
@@ -187,7 +186,7 @@ func TestAuthenticateToken(t *testing.T) {
 	}
 
 	// Test token authentication
-	user, err := auth.authenticateToken(ctx, session.Token)
+	user, err := auth.AuthenticateToken(ctx, session.Token)
 	if err != nil {
 		t.Fatalf("Token authentication failed: %v", err)
 	}
@@ -201,7 +200,7 @@ func TestAuthenticateToken(t *testing.T) {
 	}
 
 	// Test invalid token
-	user, err = auth.authenticateToken(ctx, "invalid-token")
+	user, err = auth.AuthenticateToken(ctx, "invalid-token")
 	if err == nil {
 		t.Error("Authentication should fail for invalid token")
 	}
@@ -402,7 +401,7 @@ func TestGetUserFromContext(t *testing.T) {
 		Enabled:  true,
 	}
 
-	ctx := context.WithValue(context.Background(), contextkeys.UserKey, user)
+	ctx := context.WithValue(context.Background(), "user", user)
 
 	retrievedUser, ok := GetUserFromContext(ctx)
 	if !ok {
@@ -427,7 +426,7 @@ func TestGetUserFromContext(t *testing.T) {
 	}
 
 	// Test with wrong type in context
-	ctx = context.WithValue(context.Background(), contextkeys.UserKey, "not-a-user")
+	ctx = context.WithValue(context.Background(), "user", "not-a-user")
 
 	retrievedUser, ok = GetUserFromContext(ctx)
 	if ok {
