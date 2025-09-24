@@ -1312,14 +1312,14 @@ function initSettingsTab(bmcName) {
 					tbody.innerHTML = '<tr><td colspan="3">No settings found</td></tr>';
 					return;
 				}
-				tbody.innerHTML = list.map(function(d){
-					const cur = (d.current_value == null) ? '' : JSON.stringify(d.current_value);
-					return '<tr>' +
-						'<td>' + (d.resource_path || '') + '</td>' +
-						'<td>' + (d.attribute || '') + '</td>' +
-						'<td><span class="setting-current-value" id="current-' + d.id + '">' + cur + '</span></td>' +
-						'</tr>';
-				}).join('');
+					tbody.innerHTML = list.map(function(d){
+						const cur = (d.current_value == null) ? '' : JSON.stringify(d.current_value);
+						return '<tr>' +
+							'<td>' + (d.resource_path || '') + '</td>' +
+							'<td>' + (d.attribute || '') + '</td>' +
+							'<td>' + cur + '</td>' +
+							'</tr>';
+					}).join('');
 
 		} catch (e) {
 			tbody.innerHTML = '<tr><td colspan="3">Error loading settings</td></tr>';
