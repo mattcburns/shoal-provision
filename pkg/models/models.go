@@ -188,7 +188,7 @@ type AuditRecord struct {
 	UserID       string    `json:"user_id,omitempty" db:"user_id"`
 	UserName     string    `json:"user_name,omitempty" db:"user_name"`
 	BMCName      string    `json:"bmc_name,omitempty" db:"bmc_name"`
-	Action       string    `json:"action" db:"action"`           // e.g., "proxy", "power", "apply_profile"
+	Action       string    `json:"action" db:"action"`           // e.g., "proxy", "power"
 	Method       string    `json:"method,omitempty" db:"method"` // HTTP verb for proxy operations
 	Path         string    `json:"path,omitempty" db:"path"`
 	StatusCode   int       `json:"status_code" db:"status_code"`
@@ -197,3 +197,18 @@ type AuditRecord struct {
 	ResponseBody string    `json:"response_body,omitempty" db:"response_body"`
 	Error        string    `json:"error,omitempty" db:"error"`
 }
+
+// Audit actions retained after 016 simplification
+const (
+	AuditActionProxy         = "proxy"
+	AuditActionPower         = "power"
+	AuditActionUserLogin     = "user-login"
+	AuditActionUserLogout    = "user-logout"
+	AuditActionUserPwdChange = "user-password-change"
+	AuditActionUserCreate    = "user-create"
+	AuditActionUserUpdate    = "user-update"
+	AuditActionUserDelete    = "user-delete"
+	AuditActionBMCCreate     = "bmc-create"
+	AuditActionBMCDelete     = "bmc-delete"
+	AuditActionSettingChange = "setting-change"
+)
