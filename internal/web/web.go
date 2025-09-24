@@ -1819,7 +1819,6 @@ func (h *Handler) handleBMCSettingsAPI(w http.ResponseWriter, r *http.Request) {
 	total := len(filtered)
 	// Pagination
 	if pageSize > 0 {
-
 		start := (page - 1) * pageSize
 		if start < 0 {
 			start = 0
