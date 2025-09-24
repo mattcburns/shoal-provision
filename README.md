@@ -1,6 +1,6 @@
 # Shoal - Redfish Aggregator
 
-Shoal is a Go-based Redfish aggregator that discovers and manages multiple Baseboard Management Controllers (BMCs) through a single, unified, Redfish‑compliant API. It ships as a single binary with a web UI and REST API for power control, settings discovery, configuration profiles, and auditing.
+Shoal is a Go-based Redfish aggregator that discovers and manages multiple Baseboard Management Controllers (BMCs) through a single, unified, Redfish‑compliant API. It ships as a single binary with a web UI and REST API for power control and settings discovery.
 
 ## Key Features
 
@@ -8,8 +8,7 @@ Shoal is a Go-based Redfish aggregator that discovers and manages multiple Baseb
 - Aggregates many BMCs into one interface and API
 - Web UI for management, status, power control, and users
 - Settings discovery for BIOS, NICs, and storage (009)
-- Configuration Profiles to snapshot, diff, and apply settings
-- Audit logging of proxied requests and key actions
+
 
 ## Documentation
 
@@ -18,7 +17,6 @@ Shoal is a Go-based Redfish aggregator that discovers and manages multiple Baseb
 - API Guide: [docs/3_api.md](docs/3_api.md)
 - Development: [docs/4_development.md](docs/4_development.md)
 - Deployment & Ops: [docs/5_deployment.md](docs/5_deployment.md)
-- Audit Logging: [docs/6_auditing.md](docs/6_auditing.md)
 
 ## Quick Start
 

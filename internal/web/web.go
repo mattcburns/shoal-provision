@@ -31,6 +31,7 @@ import (
 	"shoal/internal/assets"
 	internalAuth "shoal/internal/auth"
 	"shoal/internal/bmc"
+	"shoal/internal/ctxkeys"
 	"shoal/internal/database"
 	"shoal/pkg/auth"
 	"shoal/pkg/models"
@@ -1768,7 +1769,7 @@ func (h *Handler) handleBMCSettingsAPI(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancel()
 	if refresh {
-		ctx = context.WithValue(ctx, "refresh", true)
+		ctx = context.WithValue(ctx, ctxkeys.Refresh, true)
 	}
 
 	// If refresh=true, enforce operator/admin RBAC
@@ -2106,7 +2107,7 @@ func (h *Handler) requireAuth(next http.Handler) http.Handler {
 		}
 
 		// Store user in context for subsequent handlers
-		ctx := context.WithValue(r.Context(), "user", user)
+		ctx := context.WithValue(r.Context(), ctxkeys.User, user)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
@@ -2137,7 +2138,7 @@ func (h *Handler) requireOperator(next http.Handler) http.Handler {
 
 // getUserFromContext retrieves the authenticated user from the request context
 func getUserFromContext(ctx context.Context) *models.User {
-	if user, ok := ctx.Value("user").(*models.User); ok {
+	if user, ok := ctx.Value(ctxkeys.User).(*models.User); ok {
 		return user
 	}
 	return nil
