@@ -31,7 +31,6 @@ import (
 	"time"
 
 	"shoal/internal/database"
-	"shoal/pkg/contextkeys"
 	"shoal/pkg/models"
 )
 
@@ -91,7 +90,6 @@ type actionInfoCacheEntry struct {
 
 // ProxyRequest forwards a request to the appropriate BMC and returns the response
 func (s *Service) ProxyRequest(ctx context.Context, bmcName, path string, r *http.Request) (*http.Response, error) {
-	start := time.Now()
 	// Get BMC information from database
 	bmc, err := s.db.GetBMCByName(ctx, bmcName)
 	if err != nil {
@@ -120,8 +118,6 @@ func (s *Service) ProxyRequest(ctx context.Context, bmcName, path string, r *htt
 	slog.Debug("Proxying request to BMC", "bmc", bmcName, "url", targetURL, "method", r.Method)
 	resp, err := s.client.Do(proxyReq)
 	if err != nil {
-		// Record failed attempt in audit
-		s.recordAudit(ctx, bmcName, r, path, 0, 0, nil, nil, err)
 		return nil, fmt.Errorf("failed to execute BMC request: %w", err)
 	}
 
@@ -129,24 +125,6 @@ func (s *Service) ProxyRequest(ctx context.Context, bmcName, path string, r *htt
 	if err := s.db.UpdateBMCLastSeen(ctx, bmc.ID); err != nil {
 		slog.Warn("Failed to update BMC last seen", "bmc", bmcName, "error", err)
 	}
-
-	// Read response body for auditing, but preserve for caller
-	var respBody []byte
-	if resp.Body != nil {
-		rb, _ := io.ReadAll(resp.Body)
-		respBody = rb
-		_ = resp.Body.Close()
-		resp.Body = io.NopCloser(bytes.NewReader(rb))
-	}
-	duration := time.Since(start)
-	// Read request body (if available) from original request (it was restored in createProxyRequest)
-	var reqBody []byte
-	if r.Body != nil {
-		b, _ := io.ReadAll(r.Body)
-		reqBody = b
-		r.Body = io.NopCloser(bytes.NewReader(b))
-	}
-	s.recordAudit(ctx, bmcName, r, path, resp.StatusCode, duration.Milliseconds(), reqBody, respBody, nil)
 
 	return resp, nil
 }
@@ -582,61 +560,6 @@ func (s *Service) createProxyRequest(r *http.Request, targetURL string, bmc *mod
 	proxyReq.SetBasicAuth(bmc.Username, bmc.Password)
 
 	return proxyReq, nil
-}
-
-// recordAudit builds and stores an audit record for proxied requests
-func (s *Service) recordAudit(ctx context.Context, bmcName string, r *http.Request, path string, status int, durationMS int64, reqBody, respBody []byte, execErr error) {
-	// Obtain user info from context if available
-	var userID, userName string
-	if v := ctx.Value(contextkeys.UserKey); v != nil {
-		if u, ok := v.(*models.User); ok {
-			userID = u.ID
-			userName = u.Username
-		}
-	}
-	// Redact bodies and truncate
-	redact := func(b []byte) string {
-		if len(b) == 0 {
-			return ""
-		}
-		// Limit size
-		const max = 8192
-		if len(b) > max {
-			b = b[:max]
-		}
-		// Best-effort JSON redaction of common secret keys
-		var m map[string]interface{}
-		if json.Unmarshal(b, &m) == nil {
-			secretKeys := []string{"Password", "password", "AuthToken", "X-Auth-Token", "token", "Token", "ApiKey", "apiKey", "apikey"}
-			for _, k := range secretKeys {
-				if _, ok := m[k]; ok {
-					m[k] = "***REDACTED***"
-				}
-			}
-			if bb, err := json.Marshal(m); err == nil {
-				return string(bb)
-			}
-		}
-		return string(b)
-	}
-	arec := &models.AuditRecord{
-		UserID:       userID,
-		UserName:     userName,
-		BMCName:      bmcName,
-		Action:       models.AuditActionProxy,
-		Method:       r.Method,
-		Path:         path,
-		StatusCode:   status,
-		DurationMS:   durationMS,
-		RequestBody:  redact(reqBody),
-		ResponseBody: redact(respBody),
-	}
-	if execErr != nil {
-		arec.Error = execErr.Error()
-	}
-	if err := s.db.CreateAudit(ctx, arec); err != nil {
-		slog.Warn("Failed to write audit record", "error", err)
-	}
 }
 
 // DiscoverSettings enumerates configurable settings using @Redfish.Settings and common endpoints
@@ -1294,12 +1217,6 @@ func isRefresh(ctx context.Context) bool {
 	if ctx == nil {
 		return false
 	}
-	if v := ctx.Value(contextkeys.RefreshKey); v != nil {
-		if b, ok := v.(bool); ok && b {
-			return true
-		}
-	}
-	// Legacy fallback for pre-migration contexts
 	if v := ctx.Value("refresh"); v != nil {
 		if b, ok := v.(bool); ok && b {
 			return true

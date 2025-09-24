@@ -30,7 +30,6 @@ import (
 	"shoal/internal/bmc"
 	"shoal/internal/database"
 	pkgAuth "shoal/pkg/auth"
-	"shoal/pkg/contextkeys"
 	"shoal/pkg/models"
 )
 
@@ -346,7 +345,7 @@ func TestHandleProfile(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			req := httptest.NewRequest("GET", "/profile"+tt.queryParams, nil)
 			if tt.user != nil {
-				ctx := context.WithValue(req.Context(), contextkeys.UserKey, tt.user)
+				ctx := context.WithValue(req.Context(), "user", tt.user)
 				req = req.WithContext(ctx)
 			}
 
@@ -499,7 +498,7 @@ func TestHandleChangePassword(t *testing.T) {
 			}
 
 			if tt.user != nil {
-				ctx := context.WithValue(req.Context(), contextkeys.UserKey, tt.user)
+				ctx := context.WithValue(req.Context(), "user", tt.user)
 				req = req.WithContext(ctx)
 			}
 
@@ -689,7 +688,19 @@ func TestAuthenticationMiddleware(t *testing.T) {
 
 			if tt.wantLocation != "" {
 				location := rec.Header().Get("Location")
-				if location != tt.wantLocation {
+				if strings.Contains(tt.wantLocation, "?redirect=") {
+					// Compare path and decoded redirect parameter for robustness
+					gotURL, _ := url.Parse(location)
+					wantURL, _ := url.Parse(tt.wantLocation)
+					if gotURL.Path != wantURL.Path {
+						t.Errorf("%s: location path = %v, want %v", tt.name, gotURL.Path, wantURL.Path)
+					}
+					gotRedirect, _ := url.QueryUnescape(gotURL.Query().Get("redirect"))
+					wantRedirect := wantURL.Query().Get("redirect")
+					if gotRedirect != wantRedirect {
+						t.Errorf("%s: redirect = %v, want %v", tt.name, gotRedirect, wantRedirect)
+					}
+				} else if location != tt.wantLocation {
 					t.Errorf("%s: location = %v, want %v", tt.name, location, tt.wantLocation)
 				}
 			}

@@ -23,6 +23,7 @@ import (
 	"html/template"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -32,7 +33,6 @@ import (
 	"shoal/internal/bmc"
 	"shoal/internal/database"
 	"shoal/pkg/auth"
-	"shoal/pkg/contextkeys"
 	"shoal/pkg/models"
 )
 
@@ -88,13 +88,6 @@ func New(db *database.DB) http.Handler {
 	mux.Handle("/profile", h.requireAuth(http.HandlerFunc(h.handleProfile)))
 	mux.Handle("/profile/password", h.requireAuth(http.HandlerFunc(h.handleChangePassword)))
 
-	// Audit UI + API
-	// Operators can see metadata; only admins see bodies (enforced in handlers)
-	mux.Handle("/audit", h.requireAuth(http.HandlerFunc(h.handleAuditPage)))
-	mux.Handle("/api/audit", h.requireAuth(http.HandlerFunc(h.handleAudit)))
-	mux.Handle("/api/audit/export", h.requireAuth(http.HandlerFunc(h.handleAuditExport)))
-	mux.Handle("/api/audit/", h.requireAuth(http.HandlerFunc(h.handleAuditRestful)))
-
 	// Profiles feature removed in Design 014
 
 	return mux
@@ -147,7 +140,6 @@ func (h *Handler) loadTemplates() {
 			{{if .User}}
                 {{if eq .User.Role "admin"}}
                 <a href="/users">Manage Users</a>
-				<a href="/audit">Audit Logs</a>
                 {{end}}
                 <a href="/profile">Profile</a>
                 <span style="float: right;">
@@ -197,7 +189,11 @@ func (h *Handler) handleHome(w http.ResponseWriter, r *http.Request) {
 		Title: "Dashboard",
 		BMCs:  bmcs,
 	}
-	h.addUserToPageData(r, &data)
+	user := getUserFromContext(r.Context())
+	if user != nil {
+		data.User = user
+		data.UserRole = auth.GetRoleDisplayName(user.Role)
+	}
 
 	homeTemplate := `{{define "content"}}
 <h2>Dashboard</h2>
@@ -245,11 +241,6 @@ func (h *Handler) handleHome(w http.ResponseWriter, r *http.Request) {
 
 <div>
 	<a href="/bmcs" class="btn btn-primary">Manage BMCs</a>
-	{{if .User}}
-	{{if eq .User.Role "admin"}}
-	<a href="/audit" class="btn">View Audit Logs</a>
-	{{end}}
-	{{end}}
 </div>
 {{end}}`
 
@@ -275,7 +266,11 @@ func (h *Handler) handleBMCs(w http.ResponseWriter, r *http.Request) {
 		Title: "Manage BMCs",
 		BMCs:  bmcs,
 	}
-	h.addUserToPageData(r, &data)
+	user := getUserFromContext(r.Context())
+	if user != nil {
+		data.User = user
+		data.UserRole = auth.GetRoleDisplayName(user.Role)
+	}
 
 	// Check for messages in URL parameters
 	if msg := r.URL.Query().Get("message"); msg != "" {
@@ -454,7 +449,11 @@ func (h *Handler) handleAddBMC(w http.ResponseWriter, r *http.Request) {
 	data := PageData{
 		Title: "Add BMC",
 	}
-	h.addUserToPageData(r, &data)
+	user := getUserFromContext(r.Context())
+	if user != nil {
+		data.User = user
+		data.UserRole = auth.GetRoleDisplayName(user.Role)
+	}
 
 	if errMsg := r.URL.Query().Get("error"); errMsg != "" {
 		data.Error = errMsg
@@ -633,7 +632,11 @@ func (h *Handler) handleEditBMC(w http.ResponseWriter, r *http.Request) {
 		Title: "Edit BMC",
 		BMC:   bmc,
 	}
-	h.addUserToPageData(r, &data)
+	user := getUserFromContext(r.Context())
+	if user != nil {
+		data.User = user
+		data.UserRole = auth.GetRoleDisplayName(user.Role)
+	}
 
 	if errMsg := r.URL.Query().Get("error"); errMsg != "" {
 		data.Error = errMsg
@@ -874,7 +877,11 @@ func (h *Handler) handleBMCDetails(w http.ResponseWriter, r *http.Request) {
 	data := PageData{
 		Title: fmt.Sprintf("BMC Details - %s", bmcName),
 	}
-	h.addUserToPageData(r, &data)
+	user := getUserFromContext(r.Context())
+	if user != nil {
+		data.User = user
+		data.UserRole = auth.GetRoleDisplayName(user.Role)
+	}
 
 	if errMsg := r.URL.Query().Get("error"); errMsg != "" {
 		data.Error = errMsg
@@ -897,10 +904,8 @@ func (h *Handler) handleBMCDetails(w http.ResponseWriter, r *http.Request) {
 
 <div id="bmc-details" style="display: none;">
 	<!-- Tabs -->
-	<div style="margin-bottom: 10px;">
 		<button id="tab-overview" class="btn btn-primary">Overview</button>
 		<button id="tab-settings" class="btn">Settings</button>
-		<button id="tab-changes" class="btn">Changes</button>
 	</div>
 
 	<div id="tab-overview-content">
@@ -995,64 +1000,6 @@ func (h *Handler) handleBMCDetails(w http.ResponseWriter, r *http.Request) {
 		</div>
 	</div>
 
-	<div id="tab-changes-content" style="display:none;">
-		<div class="details-section">
-			<h3>Changes (Audit)</h3>
-			<form id="changes-filters" style="display:flex; gap:8px; align-items:flex-end; flex-wrap:wrap;">
-				<div>
-					<label>Status min</label>
-					<input type="number" id="chg-status-min" placeholder="200" style="width:100px;" />
-				</div>
-				<div>
-					<label>Status max</label>
-					<input type="number" id="chg-status-max" placeholder="599" style="width:100px;" />
-				</div>
-				<div>
-					<label>Method</label>
-					<input type="text" id="chg-method" placeholder="GET|POST" style="width:120px;" />
-				</div>
-				<div>
-					<label>Path contains</label>
-					<input type="text" id="chg-path" placeholder="Systems" />
-				</div>
-				<div>
-					<label>Search</label>
-					<input type="text" id="chg-q" placeholder="text in path/body" />
-				</div>
-				<div>
-					<label>Since</label>
-					<input type="datetime-local" id="chg-since" />
-				</div>
-				<div>
-					<label>Until</label>
-					<input type="datetime-local" id="chg-until" />
-				</div>
-				<div>
-					<label>Limit</label>
-					<input type="number" id="chg-limit" placeholder="100" style="width:100px;" />
-				</div>
-				<button type="submit" class="btn btn-primary">Apply</button>
-				<a id="chg-export" class="btn" href="#">Export JSONL</a>
-			</form>
-
-			<div style="margin-top:10px; overflow:auto;">
-				<table class="table" id="changes-table">
-					<thead>
-						<tr>
-							<th>Time</th>
-							<th>User</th>
-							<th>Action</th>
-							<th>Method</th>
-							<th>Path</th>
-							<th>Status</th>
-							<th>Duration</th>
-						</tr>
-					</thead>
-					<tbody></tbody>
-				</table>
-			</div>
-		</div>
-	</div>
 </div>
 
 <div id="error-display" class="alert alert-danger" style="display: none;"></div>
@@ -1285,7 +1232,6 @@ function loadBMCDetails() {
             displayNetworkInterfaces(data.network_interfaces);
             displayStorageDevices(data.storage_devices);
             displaySELEntries(data.sel_entries);
-			initChangesTab(bmcName);
 			initSettingsTab(bmcName);
         })
         .catch(function(error) {
@@ -1298,123 +1244,28 @@ function loadBMCDetails() {
 // Load details when page loads
 loadBMCDetails();
 
-function initChangesTab(bmcName) {
-	const tabOverviewBtn = document.getElementById('tab-overview');
-	const tabChangesBtn = document.getElementById('tab-changes');
-	const overview = document.getElementById('tab-overview-content');
-	const changes = document.getElementById('tab-changes-content');
-
-	function showOverview() {
-		tabOverviewBtn.classList.add('btn-primary');
-		tabChangesBtn.classList.remove('btn-primary');
-		overview.style.display = '';
-		changes.style.display = 'none';
-	}
-	function showChanges() {
-		tabChangesBtn.classList.add('btn-primary');
-		tabOverviewBtn.classList.remove('btn-primary');
-		overview.style.display = 'none';
-		changes.style.display = '';
-		fetchChanges();
-	}
-	tabOverviewBtn.addEventListener('click', showOverview);
-	tabChangesBtn.addEventListener('click', showChanges);
-
-	const filtersForm = document.getElementById('changes-filters');
-	const tBody = document.querySelector('#changes-table tbody');
-	const exportLink = document.getElementById('chg-export');
-
-	filtersForm.addEventListener('submit', function(e) { e.preventDefault(); fetchChanges(); });
-
-	async function fetchChanges() {
-		const params = new URLSearchParams();
-		params.set('bmc', bmcName);
-		const sm = document.getElementById('chg-status-min').value.trim();
-		const sx = document.getElementById('chg-status-max').value.trim();
-		const m = document.getElementById('chg-method').value.trim();
-		const p = document.getElementById('chg-path').value.trim();
-		const q = document.getElementById('chg-q').value.trim();
-		const since = document.getElementById('chg-since').value;
-		const until = document.getElementById('chg-until').value;
-		const limit = document.getElementById('chg-limit').value.trim();
-		if (sm) params.set('status_min', sm);
-		if (sx) params.set('status_max', sx);
-		if (m) params.set('method', m);
-		if (p) params.set('path', p);
-		if (q) params.set('q', q);
-		if (since) params.set('since', new Date(since).toISOString());
-		if (until) params.set('until', new Date(until).toISOString());
-		if (limit) params.set('limit', limit); else params.set('limit', '100');
-
-		const res = await fetch('/api/audit?' + params.toString());
-		if (!res.ok) {
-			tBody.innerHTML = '<tr><td colspan="7">Failed to load changes</td></tr>';
-			return;
-		}
-		const list = await res.json();
-
-		// Update export link
-		exportLink.href = '/api/audit/export?' + params.toString();
-
-		if (!Array.isArray(list) || list.length === 0) {
-			tBody.innerHTML = '<tr><td colspan="7">No audit records found</td></tr>';
-			return;
-		}
-
-		tBody.innerHTML = list.map(function(a) {
-			const dt = a.created_at ? new Date(a.created_at).toLocaleString() : '';
-			const dur = (a.duration_ms != null) ? (a.duration_ms + ' ms') : '';
-			const path = a.path || '';
-			return '<tr>' +
-				'<td>' + dt + '</td>' +
-				'<td>' + (a.user_name || '') + '</td>' +
-				'<td>' + (a.action || '') + '</td>' +
-				'<td>' + (a.method || '') + '</td>' +
-				'<td>' + path + '</td>' +
-				'<td>' + (a.status_code != null ? a.status_code : '') + '</td>' +
-				'<td>' + dur + '</td>' +
-			'</tr>';
-		}).join('');
-	}
-}
-
 function initSettingsTab(bmcName) {
 	const tabOverviewBtn = document.getElementById('tab-overview');
 	const tabSettingsBtn = document.getElementById('tab-settings');
-	const tabChangesBtn = document.getElementById('tab-changes');
 	const overview = document.getElementById('tab-overview-content');
 	const settings = document.getElementById('tab-settings-content');
-	const changes = document.getElementById('tab-changes-content');
 
 	function showOverview() {
 		tabOverviewBtn.classList.add('btn-primary');
 		tabSettingsBtn.classList.remove('btn-primary');
-		tabChangesBtn.classList.remove('btn-primary');
 		overview.style.display = '';
 		settings.style.display = 'none';
-		changes.style.display = 'none';
 	}
 	function showSettings() {
 		tabSettingsBtn.classList.add('btn-primary');
 		tabOverviewBtn.classList.remove('btn-primary');
-		tabChangesBtn.classList.remove('btn-primary');
 		overview.style.display = 'none';
 		settings.style.display = '';
-		changes.style.display = 'none';
 		fetchSettings();
 		loadBootOrderWidget();
 	}
-	function showChanges() {
-		tabChangesBtn.classList.add('btn-primary');
-		tabOverviewBtn.classList.remove('btn-primary');
-		tabSettingsBtn.classList.remove('btn-primary');
-		overview.style.display = 'none';
-		settings.style.display = 'none';
-		changes.style.display = '';
-	}
 	tabOverviewBtn.addEventListener('click', showOverview);
 	tabSettingsBtn.addEventListener('click', showSettings);
-	tabChangesBtn.addEventListener('click', showChanges);
 
 	let page = 1;
 	const tbody = document.querySelector('#settings-table tbody');
@@ -1917,7 +1768,7 @@ func (h *Handler) handleBMCSettingsAPI(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancel()
 	if refresh {
-		ctx = context.WithValue(ctx, contextkeys.RefreshKey, true)
+		ctx = context.WithValue(ctx, "refresh", true)
 	}
 
 	// If refresh=true, enforce operator/admin RBAC
@@ -1968,6 +1819,7 @@ func (h *Handler) handleBMCSettingsAPI(w http.ResponseWriter, r *http.Request) {
 	total := len(filtered)
 	// Pagination
 	if pageSize > 0 {
+
 		start := (page - 1) * pageSize
 		if start < 0 {
 			start = 0
@@ -2230,25 +2082,37 @@ func (h *Handler) handleUpdateSetting(w http.ResponseWriter, r *http.Request, bm
 
 // Authentication middleware
 
-// requireAuth middleware ensures user is authenticated
+// requireAuth is a middleware that ensures the user is authenticated
 func (h *Handler) requireAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Try to authenticate using basic auth or session cookie
-		user, err := h.authenticateRequest(r)
-		if err != nil || user == nil {
-			// Redirect to login page
-			http.Redirect(w, r, "/login?redirect="+r.URL.Path, http.StatusSeeOther)
-			return
+		var user *models.User
+		// Try to get user from session cookie first, as this is the primary method for the web UI
+		if cookie, err := r.Cookie("session_token"); err == nil {
+			user, _ = h.auth.AuthenticateToken(r.Context(), cookie.Value)
 		}
 
-		// Add user to context using both our local key and the shared pkg key
-		ctx := context.WithValue(r.Context(), ctxUserKey, user)
-		ctx = context.WithValue(ctx, contextkeys.UserKey, user)
+		// If no user from cookie, try other auth methods (like basic auth for API calls)
+		if user == nil {
+			var authErr error
+			user, authErr = h.auth.AuthenticateRequest(r)
+			if authErr != nil {
+				// For web UI, redirect to login
+				redirectURL := "/login"
+				if r.Method == "GET" && r.URL.Path != "/" {
+					redirectURL += "?redirect=" + url.QueryEscape(r.URL.String())
+				}
+				http.Redirect(w, r, redirectURL, http.StatusSeeOther)
+				return
+			}
+		}
+
+		// Store user in context for subsequent handlers
+		ctx := context.WithValue(r.Context(), "user", user)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 
-// requireAdmin middleware ensures user has admin role
+// requireAdmin is a middleware that ensures the user is an administrator
 func (h *Handler) requireAdmin(next http.Handler) http.Handler {
 	return h.requireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		user := getUserFromContext(r.Context())
@@ -2272,364 +2136,10 @@ func (h *Handler) requireOperator(next http.Handler) http.Handler {
 	}))
 }
 
-// authenticateRequest tries to authenticate from session cookie or basic auth
-func (h *Handler) authenticateRequest(r *http.Request) (*models.User, error) {
-	// Check for session cookie
-	cookie, err := r.Cookie("session_token")
-	if err == nil && cookie.Value != "" {
-		session, err := h.db.GetSessionByToken(r.Context(), cookie.Value)
-		if err == nil && session != nil {
-			user, err := h.db.GetUser(r.Context(), session.UserID)
-			if err == nil && user != nil && user.Enabled {
-				return user, nil
-			}
-		}
-	}
-
-	// Try basic auth
-	if username, password, ok := r.BasicAuth(); ok {
-		return h.auth.AuthenticateBasic(r.Context(), username, password)
-	}
-
-	return nil, fmt.Errorf("no valid authentication")
-}
-
-// getUserFromContext gets user from request context
+// getUserFromContext retrieves the authenticated user from the request context
 func getUserFromContext(ctx context.Context) *models.User {
-	// Prefer exported typed key used across packages
-	if user, ok := ctx.Value(contextkeys.UserKey).(*models.User); ok {
-		return user
-	}
-	// Accept this package's typed key
-	if user, ok := ctx.Value(ctxUserKey).(*models.User); ok {
-		return user
-	}
-	// Back-compat: accept legacy string key set elsewhere
 	if user, ok := ctx.Value("user").(*models.User); ok {
 		return user
 	}
 	return nil
-}
-
-// context key for user in this package (avoid string keys per SA1029)
-type contextKey string
-
-var ctxUserKey contextKey = "user"
-
-// addUserToPageData adds user info to page data
-func (h *Handler) addUserToPageData(r *http.Request, data *PageData) {
-	user := getUserFromContext(r.Context())
-	if user != nil {
-		data.User = user
-		data.UserRole = auth.GetRoleDisplayName(user.Role)
-	}
-}
-
-// Audit API handlers
-// GET /api/audit?bmc=NAME&user=USERNAME&action=proxy&method=GET&path=Systems&status_min=200&status_max=299&since=2025-01-01&until=2025-12-31&limit=N
-func (h *Handler) handleAudit(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	q := r.URL.Query()
-	limit := 100
-	if ls := q.Get("limit"); ls != "" {
-		if n, err := strconv.Atoi(ls); err == nil && n > 0 {
-			limit = n
-		}
-	}
-	var since, until time.Time
-	if s := q.Get("since"); s != "" {
-		if t, err := time.Parse("2006-01-02", s); err == nil {
-			since = t
-		}
-	}
-	if s := q.Get("until"); s != "" {
-		if t, err := time.Parse("2006-01-02", s); err == nil {
-			// include full day
-			until = t.Add(24 * time.Hour)
-		}
-	}
-	statusMin, statusMax := 0, 0
-	if s := q.Get("status_min"); s != "" {
-		if n, err := strconv.Atoi(s); err == nil {
-			statusMin = n
-		}
-	}
-	if s := q.Get("status_max"); s != "" {
-		if n, err := strconv.Atoi(s); err == nil {
-			statusMax = n
-		}
-	}
-	action := q.Get("action")
-	if action == "" {
-		action = q.Get("op")
-	}
-	filter := database.AuditFilter{
-		BMCName:      q.Get("bmc"),
-		UserName:     q.Get("user"),
-		Action:       action,
-		Method:       q.Get("method"),
-		PathContains: q.Get("path"),
-		Query:        q.Get("q"),
-		StatusMin:    statusMin,
-		StatusMax:    statusMax,
-		Since:        since,
-		Until:        until,
-		Limit:        limit,
-	}
-	recs, err := h.db.ListAuditsFiltered(r.Context(), filter)
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
-		return
-	}
-	// Hide bodies for non-admins
-	if u := getUserFromContext(r.Context()); u == nil || u.Role != models.RoleAdmin {
-		for i := range recs {
-			recs[i].RequestBody = ""
-			recs[i].ResponseBody = ""
-		}
-	}
-	_ = json.NewEncoder(w).Encode(recs)
-}
-
-// GET /api/audit/{id}
-func (h *Handler) handleAuditRestful(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
-	if len(parts) != 3 || parts[0] != "api" || parts[1] != "audit" {
-		http.NotFound(w, r)
-		return
-	}
-	id := parts[2]
-	rec, err := h.db.GetAudit(r.Context(), id)
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
-		return
-	}
-	if rec == nil {
-		http.NotFound(w, r)
-		return
-	}
-	// Hide bodies for non-admins
-	if u := getUserFromContext(r.Context()); u == nil || u.Role != models.RoleAdmin {
-		rec.RequestBody = ""
-		rec.ResponseBody = ""
-	}
-	_ = json.NewEncoder(w).Encode(rec)
-}
-
-// Profiles UI removed in Design 014
-
-// POST /api/audit/export  (or GET) — returns JSONL stream using same filters
-func (h *Handler) handleAuditExport(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet && r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	// Reuse filter parsing
-	q := r.URL.Query()
-	limit := 500
-	if ls := q.Get("limit"); ls != "" {
-		if n, err := strconv.Atoi(ls); err == nil && n > 0 {
-			limit = n
-		}
-	}
-	var since, until time.Time
-	if s := q.Get("since"); s != "" {
-		if t, err := time.Parse("2006-01-02", s); err == nil {
-			since = t
-		}
-	}
-	if s := q.Get("until"); s != "" {
-		if t, err := time.Parse("2006-01-02", s); err == nil {
-			until = t.Add(24 * time.Hour)
-		}
-	}
-	statusMin, statusMax := 0, 0
-	if s := q.Get("status_min"); s != "" {
-		if n, err := strconv.Atoi(s); err == nil {
-			statusMin = n
-		}
-	}
-	if s := q.Get("status_max"); s != "" {
-		if n, err := strconv.Atoi(s); err == nil {
-			statusMax = n
-		}
-	}
-	action := q.Get("action")
-	if action == "" {
-		action = q.Get("op")
-	}
-	filter := database.AuditFilter{
-		BMCName:      q.Get("bmc"),
-		UserName:     q.Get("user"),
-		Action:       action,
-		Method:       q.Get("method"),
-		PathContains: q.Get("path"),
-		Query:        q.Get("q"),
-		StatusMin:    statusMin,
-		StatusMax:    statusMax,
-		Since:        since,
-		Until:        until,
-		Limit:        limit,
-	}
-	recs, err := h.db.ListAuditsFiltered(r.Context(), filter)
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
-		return
-	}
-	w.Header().Set("Content-Type", "application/x-ndjson")
-	w.Header().Set("Content-Disposition", "attachment; filename=audits.jsonl")
-	enc := json.NewEncoder(w)
-	u := getUserFromContext(r.Context())
-	isAdmin := u != nil && u.Role == models.RoleAdmin
-	for i := range recs {
-		if !isAdmin {
-			recs[i].RequestBody = ""
-			recs[i].ResponseBody = ""
-		}
-		if err := enc.Encode(recs[i]); err != nil {
-			slog.Warn("stream encode error", "error", err)
-			break
-		}
-	}
-}
-
-// handleAuditPage renders an admin-only audit list with filters that drives the API
-func (h *Handler) handleAuditPage(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	data := PageData{Title: "Audit Logs"}
-	h.addUserToPageData(r, &data)
-
-	page := `{{define "content"}}
-<h2>Audit Logs</h2>
-<form id="filters" style="display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end;">
-	<div class="form-group" style="width:180px;">
-		<label for="bmc">BMC</label>
-		<input id="bmc" name="bmc" />
-	</div>
-	<div class="form-group" style="width:160px;">
-		<label for="user">User</label>
-		<input id="user" name="user" />
-	</div>
-	<div class="form-group" style="width:120px;">
-		<label for="action">Action</label>
-		<input id="action" name="action" placeholder="proxy" />
-	</div>
-	<div class="form-group" style="width:120px;">
-		<label for="method">Method</label>
-		<input id="method" name="method" placeholder="GET" />
-	</div>
-	<div class="form-group" style="width:220px;">
-		<label for="path">Path contains</label>
-		<input id="path" name="path" placeholder="/redfish" />
-	</div>
-	<div class="form-group" style="width:220px;">
-		<label for="q">Search</label>
-		<input id="q" name="q" placeholder="user/path/op" />
-	</div>
-	<div class="form-group" style="width:140px;">
-		<label for="status_min">Status min</label>
-		<input id="status_min" name="status_min" type="number" min="100" max="599" />
-	</div>
-	<div class="form-group" style="width:140px;">
-		<label for="status_max">Status max</label>
-		<input id="status_max" name="status_max" type="number" min="100" max="599" />
-	</div>
-	<div class="form-group" style="width:160px;">
-		<label for="since">Since</label>
-		<input id="since" name="since" type="date" />
-	</div>
-	<div class="form-group" style="width:160px;">
-		<label for="until">Until</label>
-		<input id="until" name="until" type="date" />
-	</div>
-	<div class="form-group" style="width:120px;">
-		<label for="limit">Limit</label>
-		<input id="limit" name="limit" type="number" min="1" max="500" value="100" />
-	</div>
-	<div>
-		<button type="submit" class="btn btn-primary">Apply</button>
-	</div>
-	<div id="status" style="margin-left:10px;"></div>
-	<div style="margin-left:auto;">
-		<a id="exportLink" class="btn" target="_blank">Export JSONL</a>
-	</div>
-</form>
-
-<table class="table" id="results">
-	<thead>
-		<tr>
-			<th>Time</th><th>User</th><th>BMC</th><th>Action</th><th>Method</th><th>Path</th><th>Status</th><th>Dur (ms)</th>
-		</tr>
-	</thead>
-	<tbody></tbody>
- </table>
-
-<script>
-function buildQuery() {
-	const params = new URLSearchParams();
-	["bmc","user","action","method","path","q","status_min","status_max","since","until","limit"].forEach(id => {
-		const v = document.getElementById(id).value.trim();
-		if (v) params.set(id, v);
-	});
-	return params.toString();
-}
-async function fetchAudits() {
-	const qs = buildQuery();
-	const status = document.getElementById('status');
-	status.textContent = 'Loading...';
-	const res = await fetch('/api/audit' + (qs ? ('?' + qs) : ''));
-	if (!res.ok) {
-		status.textContent = 'Error ' + res.status;
-		return;
-	}
-	const data = await res.json();
-	status.textContent = 'Loaded ' + data.length + ' rows';
-	const tbody = document.querySelector('#results tbody');
-	tbody.innerHTML = '';
-		data.forEach(r => {
-			const tr = document.createElement('tr');
-			const t = (r.created_at || '').replace('T',' ').replace('Z','');
-			const user = r.user_name || '';
-			const bmc = r.bmc_name || '';
-			const method = r.method || '';
-			const path = r.path || '';
-			tr.innerHTML = '<td>' + t + '</td>' +
-										 '<td>' + user + '</td>' +
-										 '<td>' + bmc + '</td>' +
-										 '<td>' + r.action + '</td>' +
-										 '<td>' + method + '</td>' +
-										 '<td>' + path + '</td>' +
-										 '<td>' + r.status_code + '</td>' +
-										 '<td>' + r.duration_ms + '</td>';
-			tbody.appendChild(tr);
-		});
-	const exportLink = document.getElementById('exportLink');
-	exportLink.href = '/api/audit/export' + (qs ? ('?' + qs) : '');
-}
-document.getElementById('filters').addEventListener('submit', (e) => { e.preventDefault(); fetchAudits(); });
-fetchAudits();
-</script>
-{{end}}`
-
-	tmpl := template.Must(h.templates.Clone())
-	template.Must(tmpl.Parse(page))
-	if err := tmpl.ExecuteTemplate(w, "base", data); err != nil {
-		slog.Error("Failed to execute template", "error", err)
-		http.Error(w, "Template Error", http.StatusInternalServerError)
-	}
 }
