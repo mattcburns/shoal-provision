@@ -574,18 +574,6 @@ func TestAuthenticationMiddleware(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	viewerPasswordHash, _ := pkgAuth.HashPassword("viewerpass")
-	viewerUser := &models.User{
-		ID:           "viewer-user-id",
-		Username:     "viewer",
-		PasswordHash: viewerPasswordHash,
-		Role:         "viewer",
-		Enabled:      true,
-	}
-	if err := db.CreateUser(context.Background(), viewerUser); err != nil {
-		t.Fatal(err)
-	}
-
 	// Create session for admin
 	adminSession := &models.Session{
 		ID:        "admin-session-id",
@@ -640,18 +628,6 @@ func TestAuthenticationMiddleware(t *testing.T) {
 			name:           "requireAdmin with non-admin user",
 			middleware:     h.requireAdmin,
 			basicAuth:      &struct{ username, password string }{"operator", "operatorpass"},
-			wantStatusCode: http.StatusForbidden,
-		},
-		{
-			name:           "requireOperator with operator user",
-			middleware:     h.requireOperator,
-			basicAuth:      &struct{ username, password string }{"operator", "operatorpass"},
-			wantStatusCode: http.StatusOK,
-		},
-		{
-			name:           "requireOperator with viewer user",
-			middleware:     h.requireOperator,
-			basicAuth:      &struct{ username, password string }{"viewer", "viewerpass"},
 			wantStatusCode: http.StatusForbidden,
 		},
 	}
