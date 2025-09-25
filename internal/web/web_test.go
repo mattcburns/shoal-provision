@@ -526,7 +526,7 @@ func TestHandleBMCDetails(t *testing.T) {
 		}
 
 		body := w.Body.String()
-		if !strings.Contains(body, "BMC Details - BMC Details - test-details-bmc") {
+		if !strings.Contains(body, "BMC Details - test-details-bmc") {
 			t.Error("Response should contain BMC details title")
 		}
 		// Drag-and-drop Boot Order list should be present

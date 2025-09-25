@@ -876,7 +876,8 @@ func (h *Handler) handleBMCDetails(w http.ResponseWriter, r *http.Request) {
 	}
 
 	data := PageData{
-		Title: fmt.Sprintf("BMC Details - %s", bmcName),
+		// Title should be just the BMC name; the template adds the 'BMC Details - ' prefix
+		Title: bmcName,
 	}
 	user := getUserFromContext(r.Context())
 	if user != nil {
