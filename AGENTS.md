@@ -165,3 +165,48 @@ All build, test, and validation tasks are executed through the Python-based auto
 -   **Security:** Always sanitize inputs and validate data.
 -   **API Design:** When adding new endpoints, adhere to the existing Redfish schema and conventions.
 -   **Simplicity:** Prefer the standard library over new dependencies. Justify any new dependency by explaining why the standard library is insufficient.
+
+### 4.1 Dead Code Scans
+
+We periodically run a dead code scan to keep the exported surface minimal and avoid accumulating unused helpers.
+
+Run the scan:
+```bash
+$HOME/go/bin/deadcode ./...
+```
+If the `deadcode` binary is not installed:
+```bash
+go install golang.org/x/tools/cmd/deadcode@latest
+$HOME/go/bin/deadcode ./...
+```
+
+Interpretation notes:
+1. The tool does not treat the `main` package entry point as a root, so constructors like `internal/database.New` can appear as unreachable even though they are used via `cmd/shoal/main.go` and tests. Treat these as false positives unless truly unused.
+2. Functions referenced only from `_test.go` files are reported as unreachable. Decide case‑by‑case whether to (a) keep (test utility / future roadmap) or (b) remove / unexport.
+3. Before deleting any reported symbol, perform a repo search to ensure no reflective / template / JSON tag usage depends on the name indirectly.
+
+Current allowlist (intentionally retained though flagged):
+- `internal/database.New` (constructor used by main & tests; false positive)
+- `(*DB).GetSettingsDescriptors` (used indirectly by settings discovery tests; core to settings caching)
+- `(*DB).CleanupExpiredSessions` (future scheduled maintenance task; exercised in tests)
+- `(*DB).DisableForeignKeys` (test helper to simplify setup)
+- `(*DB).UpdateConnectionMethodAggregatedData` (future aggregation caching; covered by tests)
+- `(*DB).UpdateConnectionMethodLastSeen` (future monitoring feature; covered by tests)
+- `pkg/auth.isHashed` (intentionally unexported helper, only used in password tests)
+
+Removal / retention guidelines:
+- Remove immediately if: no test coverage, no design doc reference, and not part of an accepted roadmap item.
+- Unexport (rename to lowercase) if: only tests need it and semantics are simple.
+- Keep & document if: there is an existing design document or near‑term feature referencing it (add a NOTE comment above the function, as done for the DB helpers).
+
+When updating this allowlist:
+1. Trim items that gain real production call sites (they will disappear from the deadcode output).
+2. Add justification inline so future agents do not reintroduce churn.
+3. Re-run `python3 build.py test` after any removals.
+
+PR checklist for dead code sweeps:
+- [ ] Run deadcode tool
+- [ ] Classify each item (remove / unexport / keep+doc)
+- [ ] Update or confirm allowlist section
+- [ ] Ensure tests still pass (`python3 build.py validate`)
+- [ ] Summarize changes in PR description referencing this section

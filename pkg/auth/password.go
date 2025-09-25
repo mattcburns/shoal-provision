@@ -58,8 +58,8 @@ func VerifyPassword(password, hash string) error {
 	return nil
 }
 
-// IsHashed checks if a string appears to be a bcrypt hash
-func IsHashed(s string) bool {
+// isHashed checks if a string appears to be a bcrypt hash (internal helper; tests call it directly in same package)
+func isHashed(s string) bool {
 	// Bcrypt hashes start with $2a$, $2b$, or $2y$ followed by cost parameter
 	if len(s) < 60 {
 		return false

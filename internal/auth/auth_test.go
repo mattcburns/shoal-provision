@@ -329,7 +329,7 @@ func TestRequireAuthMiddleware(t *testing.T) {
 
 	// Create a test handler
 	testHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		user, ok := GetUserFromContext(r.Context())
+		user, ok := r.Context().Value(ctxkeys.User).(*models.User)
 		if !ok {
 			t.Error("User should be in context")
 			http.Error(w, "No user in context", http.StatusInternalServerError)
@@ -393,50 +393,7 @@ func TestRequireAuthMiddleware(t *testing.T) {
 	}
 }
 
-func TestGetUserFromContext(t *testing.T) {
-	// Test with user in context
-	user := &models.User{
-		ID:       "test-user",
-		Username: "testuser",
-		Role:     "admin",
-		Enabled:  true,
-	}
-
-	ctx := context.WithValue(context.Background(), ctxkeys.User, user)
-
-	retrievedUser, ok := GetUserFromContext(ctx)
-	if !ok {
-		t.Error("Should find user in context")
-	}
-	if retrievedUser == nil {
-		t.Fatal("Retrieved user should not be nil")
-	}
-	if retrievedUser.ID != user.ID {
-		t.Errorf("Expected user ID %s, got %s", user.ID, retrievedUser.ID)
-	}
-
-	// Test with no user in context
-	ctx = context.Background()
-
-	retrievedUser, ok = GetUserFromContext(ctx)
-	if ok {
-		t.Error("Should not find user in empty context")
-	}
-	if retrievedUser != nil {
-		t.Error("Retrieved user should be nil")
-	}
-
-	// Test with wrong type in context
-	ctx = context.WithValue(context.Background(), ctxkeys.User, "not-a-user")
-
-	retrievedUser, ok = GetUserFromContext(ctx)
-	if ok {
-		t.Error("Should not find user with wrong type")
-	}
-	if retrievedUser != nil {
-		t.Error("Retrieved user should be nil for wrong type")
-	}
-}
+// (Removed TestGetUserFromContext: function under test deleted as dead code)
 
 func TestGenerateIDAndToken(t *testing.T) {
 	// Test generateID

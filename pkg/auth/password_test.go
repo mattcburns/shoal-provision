@@ -67,7 +67,7 @@ func TestHashPassword(t *testing.T) {
 				if hash == tt.password {
 					t.Error("HashPassword() returned plaintext password")
 				}
-				if !IsHashed(hash) {
+				if !isHashed(hash) {
 					t.Error("HashPassword() returned invalid hash format")
 				}
 			}
@@ -211,7 +211,7 @@ func TestIsHashed(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := IsHashed(tt.s); got != tt.want {
+			if got := isHashed(tt.s); got != tt.want {
 				t.Errorf("IsHashed() = %v, want %v", got, tt.want)
 			}
 		})

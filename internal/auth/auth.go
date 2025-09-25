@@ -157,10 +157,7 @@ func (a *Authenticator) RequireAuth(next http.Handler) http.Handler {
 }
 
 // GetUserFromContext extracts the authenticated user from request context
-func GetUserFromContext(ctx context.Context) (*models.User, bool) {
-	user, ok := ctx.Value(ctxkeys.User).(*models.User)
-	return user, ok
-}
+// (Removed exported GetUserFromContext: duplicate of local helpers in web package and unused in application runtime)
 
 // generateID generates a random ID for sessions
 func generateID() (string, error) {

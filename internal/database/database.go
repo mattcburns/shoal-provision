@@ -692,6 +692,7 @@ func (db *DB) DeleteSession(ctx context.Context, token string) error {
 }
 
 // CleanupExpiredSessions removes expired sessions
+// NOTE: Test-only utility currently used in tests; retained for potential future scheduled cleanup task.
 func (db *DB) CleanupExpiredSessions(ctx context.Context) error {
 	query := `DELETE FROM sessions WHERE expires_at <= ?`
 
@@ -752,6 +753,7 @@ func (db *DB) DeleteSessionByID(ctx context.Context, id string) error {
 }
 
 // DisableForeignKeys disables foreign key constraints (for testing)
+// NOTE: Test-only helper used by unit/integration tests to bypass FK ordering constraints; not used in production code.
 func (db *DB) DisableForeignKeys() error {
 	_, err := db.conn.Exec("PRAGMA foreign_keys=OFF")
 	return err
@@ -965,6 +967,7 @@ func (db *DB) CreateConnectionMethod(ctx context.Context, method *models.Connect
 }
 
 // UpdateConnectionMethodAggregatedData updates the cached aggregated data for a connection method
+// NOTE: Currently only exercised in tests; retained to support future aggregation caching logic.
 func (db *DB) UpdateConnectionMethodAggregatedData(ctx context.Context, id string, managers, systems string) error {
 	query := `UPDATE connection_methods SET aggregated_managers = ?, aggregated_systems = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
 
@@ -989,6 +992,7 @@ func (db *DB) DeleteConnectionMethod(ctx context.Context, id string) error {
 }
 
 // UpdateConnectionMethodLastSeen updates the last seen timestamp
+// NOTE: Currently only exercised in tests; retained for prospective connection method monitoring.
 func (db *DB) UpdateConnectionMethodLastSeen(ctx context.Context, id string) error {
 	query := `UPDATE connection_methods SET last_seen = CURRENT_TIMESTAMP WHERE id = ?`
 
