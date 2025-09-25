@@ -2108,7 +2108,6 @@ func (h *Handler) requireAdmin(next http.Handler) http.Handler {
 }
 
 // requireOperator middleware ensures user has operator role or higher
-// (Removed requireOperator middleware: unused in runtime; tests adjusted accordingly)
 
 // getUserFromContext retrieves the authenticated user from the request context
 func getUserFromContext(ctx context.Context) *models.User {

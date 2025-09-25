@@ -574,8 +574,6 @@ func TestAuthenticationMiddleware(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// viewer user removed (no operator middleware tests)
-
 	// Create session for admin
 	adminSession := &models.Session{
 		ID:        "admin-session-id",

@@ -31,7 +31,6 @@ func IsOperator(user *models.User) bool {
 }
 
 // IsViewer checks if the user has any valid role (can view)
-// (Removed unused RBAC helper functions: IsViewer, CanManageUsers, CanManageBMCs, CanExecutePowerActions, CanViewBMCs, CanChangeOwnPassword)
 
 // GetRoleDisplayName returns a human-friendly name for a role
 func GetRoleDisplayName(role string) string {
@@ -48,4 +47,3 @@ func GetRoleDisplayName(role string) string {
 }
 
 // GetRoleDescription returns a description of what a role can do
-// (Removed GetRoleDescription: unused)

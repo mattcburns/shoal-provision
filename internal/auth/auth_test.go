@@ -393,8 +393,6 @@ func TestRequireAuthMiddleware(t *testing.T) {
 	}
 }
 
-// (Removed TestGetUserFromContext: function under test deleted as dead code)
-
 func TestGenerateIDAndToken(t *testing.T) {
 	// Test generateID
 	id1, err := generateID()
