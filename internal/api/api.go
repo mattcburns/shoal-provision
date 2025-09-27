@@ -18,6 +18,8 @@ package api
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -30,6 +32,7 @@ import (
 	"shoal/internal/bmc"
 	"shoal/internal/ctxkeys"
 	"shoal/internal/database"
+	authpkg "shoal/pkg/auth"
 	"shoal/pkg/models"
 	"shoal/pkg/redfish"
 )
@@ -107,6 +110,12 @@ func (h *Handler) handleRedfish(w http.ResponseWriter, r *http.Request) {
 	// Handle AggregationService endpoints
 	if strings.HasPrefix(path, "/v1/AggregationService") {
 		h.handleAggregationService(w, r, path, user)
+		return
+	}
+
+	// Handle AccountService endpoints
+	if strings.HasPrefix(path, "/v1/AccountService") {
+		h.handleAccountService(w, r, path, user)
 		return
 	}
 
@@ -246,6 +255,8 @@ func (h *Handler) handleServiceRoot(w http.ResponseWriter, r *http.Request) {
 	// Add compliance navigation links (will be implemented in Phase 1)
 	serviceRoot.Registries = &redfish.ODataIDRef{ODataID: "/redfish/v1/Registries"}
 	serviceRoot.JsonSchemas = &redfish.ODataIDRef{ODataID: "/redfish/v1/SchemaStore"}
+	// Phase 2 link
+	serviceRoot.AccountService = &redfish.ODataIDRef{ODataID: "/redfish/v1/AccountService"}
 
 	h.writeJSONResponse(w, http.StatusOK, serviceRoot)
 }
@@ -403,6 +414,371 @@ func (h *Handler) handleAggregatorEndpoints(w http.ResponseWriter, r *http.Reque
 	}
 
 	h.writeErrorResponse(w, http.StatusNotFound, "Base.1.0.ResourceNotFound", "Resource not found")
+}
+
+// handleAccountService routes and implements AccountService endpoints
+func (h *Handler) handleAccountService(w http.ResponseWriter, r *http.Request, path string, user *models.User) {
+	// Remove /v1/AccountService prefix
+	subPath := strings.TrimPrefix(path, "/v1/AccountService")
+
+	// Root resource
+	if subPath == "" || subPath == "/" {
+		if r.Method != http.MethodGet {
+			h.writeErrorResponse(w, http.StatusMethodNotAllowed, "Base.1.0.MethodNotAllowed", "Method not allowed")
+			return
+		}
+		svc := redfish.AccountService{
+			ODataContext:   "/redfish/v1/$metadata#AccountService.AccountService",
+			ODataID:        "/redfish/v1/AccountService",
+			ODataType:      "#AccountService.v1_0_0.AccountService",
+			ID:             "AccountService",
+			Name:           "Account Service",
+			ServiceEnabled: true,
+			Accounts:       redfish.ODataIDRef{ODataID: "/redfish/v1/AccountService/Accounts"},
+			Roles:          redfish.ODataIDRef{ODataID: "/redfish/v1/AccountService/Roles"},
+		}
+		h.writeJSONResponse(w, http.StatusOK, svc)
+		return
+	}
+
+	// Accounts collection
+	if subPath == "/Accounts" || subPath == "/Accounts/" {
+		switch r.Method {
+		case http.MethodGet:
+			// Admin only
+			if !authpkg.IsAdmin(user) {
+				h.writeErrorResponse(w, http.StatusForbidden, "Base.1.0.InsufficientPrivilege", "Administrator privilege required")
+				return
+			}
+			h.handleGetAccountsCollection(w, r)
+			return
+		case http.MethodPost:
+			if !authpkg.IsAdmin(user) {
+				h.writeErrorResponse(w, http.StatusForbidden, "Base.1.0.InsufficientPrivilege", "Administrator privilege required")
+				return
+			}
+			h.handleCreateAccount(w, r)
+			return
+		default:
+			h.writeErrorResponse(w, http.StatusMethodNotAllowed, "Base.1.0.MethodNotAllowed", "Method not allowed")
+			return
+		}
+	}
+
+	// Individual account
+	if strings.HasPrefix(subPath, "/Accounts/") {
+		if !authpkg.IsAdmin(user) {
+			h.writeErrorResponse(w, http.StatusForbidden, "Base.1.0.InsufficientPrivilege", "Administrator privilege required")
+			return
+		}
+		id := strings.Trim(strings.TrimPrefix(subPath, "/Accounts/"), "/")
+		if id == "" {
+			h.writeErrorResponse(w, http.StatusNotFound, "Base.1.0.ResourceNotFound", "Account not found")
+			return
+		}
+
+		switch r.Method {
+		case http.MethodGet:
+			h.handleGetAccount(w, r, id)
+			return
+		case http.MethodPatch:
+			h.handlePatchAccount(w, r, id)
+			return
+		case http.MethodDelete:
+			h.handleDeleteAccount(w, r, id)
+			return
+		default:
+			h.writeErrorResponse(w, http.StatusMethodNotAllowed, "Base.1.0.MethodNotAllowed", "Method not allowed")
+			return
+		}
+	}
+
+	// Roles endpoints
+	if subPath == "/Roles" || subPath == "/Roles/" {
+		if r.Method != http.MethodGet {
+			h.writeErrorResponse(w, http.StatusMethodNotAllowed, "Base.1.0.MethodNotAllowed", "Method not allowed")
+			return
+		}
+		h.handleGetRolesCollection(w, r)
+		return
+	}
+	if strings.HasPrefix(subPath, "/Roles/") {
+		if r.Method != http.MethodGet {
+			h.writeErrorResponse(w, http.StatusMethodNotAllowed, "Base.1.0.MethodNotAllowed", "Method not allowed")
+			return
+		}
+		roleID := strings.Trim(strings.TrimPrefix(subPath, "/Roles/"), "/")
+		h.handleGetRole(w, r, roleID)
+		return
+	}
+
+	h.writeErrorResponse(w, http.StatusNotFound, "Base.1.0.ResourceNotFound", "Resource not found")
+}
+
+// handleGetAccountsCollection returns the Accounts collection
+func (h *Handler) handleGetAccountsCollection(w http.ResponseWriter, r *http.Request) {
+	users, err := h.db.GetUsers(r.Context())
+	if err != nil {
+		slog.Error("Failed to get users", "error", err)
+		h.writeErrorResponse(w, http.StatusInternalServerError, "Base.1.0.InternalError", "Failed to retrieve users")
+		return
+	}
+	var members []redfish.ODataIDRef
+	for _, u := range users {
+		members = append(members, redfish.ODataIDRef{ODataID: fmt.Sprintf("/redfish/v1/AccountService/Accounts/%s", u.ID)})
+	}
+	coll := redfish.Collection{
+		ODataContext: "/redfish/v1/$metadata#ManagerAccountCollection.ManagerAccountCollection",
+		ODataID:      "/redfish/v1/AccountService/Accounts",
+		ODataType:    "#ManagerAccountCollection.ManagerAccountCollection",
+		Name:         "Manager Account Collection",
+		Members:      members,
+		MembersCount: len(members),
+	}
+	h.writeJSONResponse(w, http.StatusOK, coll)
+}
+
+// handleCreateAccount creates a new user account
+func (h *Handler) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		UserName string `json:"UserName"`
+		RoleID   string `json:"RoleId"`
+		Password string `json:"Password"`
+		Enabled  *bool  `json:"Enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		h.writeErrorResponse(w, http.StatusBadRequest, "Base.1.0.MalformedJSON", "Invalid JSON in request body")
+		return
+	}
+	if strings.TrimSpace(req.UserName) == "" || req.Password == "" || strings.TrimSpace(req.RoleID) == "" {
+		h.writeErrorResponse(w, http.StatusBadRequest, "Base.1.0.PropertyMissing", "UserName, Password and RoleId are required")
+		return
+	}
+	// Check existing username
+	if existing, _ := h.db.GetUserByUsername(r.Context(), req.UserName); existing != nil {
+		h.writeErrorResponse(w, http.StatusConflict, "Base.1.0.GeneralError", "Username already exists")
+		return
+	}
+	// Map role
+	role, ok := modelsRoleFromRedfish(req.RoleID)
+	if !ok {
+		h.writeErrorResponse(w, http.StatusBadRequest, "Base.1.0.PropertyValueNotInList", "Unsupported RoleId")
+		return
+	}
+	// Hash password
+	pwHash, err := authpkg.HashPassword(req.Password)
+	if err != nil {
+		slog.Error("Failed to hash password", "error", err)
+		h.writeErrorResponse(w, http.StatusInternalServerError, "Base.1.0.InternalError", "Failed to create account")
+		return
+	}
+	// Generate user ID
+	idBytes := make([]byte, 16)
+	if _, err := rand.Read(idBytes); err != nil {
+		slog.Error("Failed to generate user ID", "error", err)
+		h.writeErrorResponse(w, http.StatusInternalServerError, "Base.1.0.InternalError", "Failed to create account")
+		return
+	}
+	user := &models.User{
+		ID:           hex.EncodeToString(idBytes),
+		Username:     req.UserName,
+		PasswordHash: pwHash,
+		Role:         role,
+		Enabled:      true,
+	}
+	if req.Enabled != nil {
+		user.Enabled = *req.Enabled
+	}
+	if err := h.db.CreateUser(r.Context(), user); err != nil {
+		slog.Error("Failed to create user", "error", err)
+		h.writeErrorResponse(w, http.StatusInternalServerError, "Base.1.0.InternalError", "Failed to create account")
+		return
+	}
+	resp := toRedfishAccount(user)
+	w.Header().Set("Location", resp.ODataID)
+	h.writeJSONResponse(w, http.StatusCreated, resp)
+}
+
+// handleGetAccount returns an individual account
+func (h *Handler) handleGetAccount(w http.ResponseWriter, r *http.Request, id string) {
+	u, err := h.db.GetUser(r.Context(), id)
+	if err != nil {
+		slog.Error("Failed to get user", "id", id, "error", err)
+		h.writeErrorResponse(w, http.StatusInternalServerError, "Base.1.0.InternalError", "Failed to retrieve account")
+		return
+	}
+	if u == nil {
+		h.writeErrorResponse(w, http.StatusNotFound, "Base.1.0.ResourceNotFound", "Account not found")
+		return
+	}
+	h.writeJSONResponse(w, http.StatusOK, toRedfishAccount(u))
+}
+
+// handlePatchAccount updates fields on an account
+func (h *Handler) handlePatchAccount(w http.ResponseWriter, r *http.Request, id string) {
+	u, err := h.db.GetUser(r.Context(), id)
+	if err != nil || u == nil {
+		h.writeErrorResponse(w, http.StatusNotFound, "Base.1.0.ResourceNotFound", "Account not found")
+		return
+	}
+	var patch map[string]any
+	if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
+		h.writeErrorResponse(w, http.StatusBadRequest, "Base.1.0.MalformedJSON", "Invalid JSON in request body")
+		return
+	}
+	if v, ok := patch["UserName"].(string); ok && strings.TrimSpace(v) != "" {
+		// Validate uniqueness
+		if existing, _ := h.db.GetUserByUsername(r.Context(), v); existing != nil && existing.ID != u.ID {
+			h.writeErrorResponse(w, http.StatusConflict, "Base.1.0.GeneralError", "Username already exists")
+			return
+		}
+		u.Username = v
+	}
+	if v, ok := patch["Enabled"].(bool); ok {
+		u.Enabled = v
+	}
+	if v, ok := patch["RoleId"].(string); ok {
+		role, ok2 := modelsRoleFromRedfish(v)
+		if !ok2 {
+			h.writeErrorResponse(w, http.StatusBadRequest, "Base.1.0.PropertyValueNotInList", "Unsupported RoleId")
+			return
+		}
+		u.Role = role
+	}
+	if v, ok := patch["Password"].(string); ok && v != "" {
+		pwHash, err := authpkg.HashPassword(v)
+		if err != nil {
+			h.writeErrorResponse(w, http.StatusInternalServerError, "Base.1.0.InternalError", "Failed to update account")
+			return
+		}
+		u.PasswordHash = pwHash
+	}
+	if u.Username == "admin" && !u.Enabled {
+		h.writeErrorResponse(w, http.StatusBadRequest, "Base.1.0.GeneralError", "Cannot disable admin user")
+		return
+	}
+	if err := h.db.UpdateUser(r.Context(), u); err != nil {
+		slog.Error("Failed to update user", "id", id, "error", err)
+		h.writeErrorResponse(w, http.StatusInternalServerError, "Base.1.0.InternalError", "Failed to update account")
+		return
+	}
+	h.writeJSONResponse(w, http.StatusOK, toRedfishAccount(u))
+}
+
+// handleDeleteAccount deletes a user account
+func (h *Handler) handleDeleteAccount(w http.ResponseWriter, r *http.Request, id string) {
+	u, err := h.db.GetUser(r.Context(), id)
+	if err != nil || u == nil {
+		h.writeErrorResponse(w, http.StatusNotFound, "Base.1.0.ResourceNotFound", "Account not found")
+		return
+	}
+	if u.Username == "admin" {
+		h.writeErrorResponse(w, http.StatusBadRequest, "Base.1.0.GeneralError", "Cannot delete admin user")
+		return
+	}
+	if err := h.db.DeleteUser(r.Context(), id); err != nil {
+		slog.Error("Failed to delete user", "id", id, "error", err)
+		h.writeErrorResponse(w, http.StatusInternalServerError, "Base.1.0.InternalError", "Failed to delete account")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleGetRolesCollection returns the Roles collection
+func (h *Handler) handleGetRolesCollection(w http.ResponseWriter, r *http.Request) {
+	members := []redfish.ODataIDRef{
+		{ODataID: "/redfish/v1/AccountService/Roles/Administrator"},
+		{ODataID: "/redfish/v1/AccountService/Roles/Operator"},
+		{ODataID: "/redfish/v1/AccountService/Roles/ReadOnly"},
+	}
+	coll := redfish.Collection{
+		ODataContext: "/redfish/v1/$metadata#RoleCollection.RoleCollection",
+		ODataID:      "/redfish/v1/AccountService/Roles",
+		ODataType:    "#RoleCollection.RoleCollection",
+		Name:         "Role Collection",
+		Members:      members,
+		MembersCount: len(members),
+	}
+	h.writeJSONResponse(w, http.StatusOK, coll)
+}
+
+// handleGetRole returns a specific role
+func (h *Handler) handleGetRole(w http.ResponseWriter, r *http.Request, roleID string) {
+	roleID = strings.Title(strings.ToLower(roleID))
+	switch roleID {
+	case "Administrator":
+		h.writeJSONResponse(w, http.StatusOK, redfish.Role{
+			ODataContext:       "/redfish/v1/$metadata#Role.Role",
+			ODataID:            "/redfish/v1/AccountService/Roles/Administrator",
+			ODataType:          "#Role.v1_0_0.Role",
+			ID:                 "Administrator",
+			Name:               "Administrator",
+			IsPredefined:       true,
+			AssignedPrivileges: []string{"Login", "ConfigureManager", "ConfigureUsers", "ConfigureComponents", "ConfigureSelf"},
+		})
+	case "Operator":
+		h.writeJSONResponse(w, http.StatusOK, redfish.Role{
+			ODataContext:       "/redfish/v1/$metadata#Role.Role",
+			ODataID:            "/redfish/v1/AccountService/Roles/Operator",
+			ODataType:          "#Role.v1_0_0.Role",
+			ID:                 "Operator",
+			Name:               "Operator",
+			IsPredefined:       true,
+			AssignedPrivileges: []string{"Login", "ConfigureComponents", "ConfigureSelf"},
+		})
+	case "Readonly", "ReadOnly":
+		h.writeJSONResponse(w, http.StatusOK, redfish.Role{
+			ODataContext:       "/redfish/v1/$metadata#Role.Role",
+			ODataID:            "/redfish/v1/AccountService/Roles/ReadOnly",
+			ODataType:          "#Role.v1_0_0.Role",
+			ID:                 "ReadOnly",
+			Name:               "ReadOnly",
+			IsPredefined:       true,
+			AssignedPrivileges: []string{"Login", "ConfigureSelf"},
+		})
+	default:
+		h.writeErrorResponse(w, http.StatusNotFound, "Base.1.0.ResourceNotFound", "Role not found")
+	}
+}
+
+// toRedfishAccount converts models.User to Redfish ManagerAccount
+func toRedfishAccount(u *models.User) redfish.ManagerAccount {
+	return redfish.ManagerAccount{
+		ODataContext: "/redfish/v1/$metadata#ManagerAccount.ManagerAccount",
+		ODataID:      fmt.Sprintf("/redfish/v1/AccountService/Accounts/%s", u.ID),
+		ODataType:    "#ManagerAccount.v1_0_0.ManagerAccount",
+		ID:           u.ID,
+		Name:         "User Account",
+		UserName:     u.Username,
+		RoleID:       redfishRoleFromModels(u.Role),
+		Enabled:      u.Enabled,
+	}
+}
+
+func redfishRoleFromModels(role string) string {
+	switch role {
+	case models.RoleAdmin:
+		return "Administrator"
+	case models.RoleOperator:
+		return "Operator"
+	case models.RoleViewer:
+		return "ReadOnly"
+	default:
+		return "ReadOnly"
+	}
+}
+
+func modelsRoleFromRedfish(roleID string) (string, bool) {
+	switch strings.ToLower(roleID) {
+	case "administrator":
+		return models.RoleAdmin, true
+	case "operator":
+		return models.RoleOperator, true
+	case "readonly", "read-only", "read_only", "viewer":
+		return models.RoleViewer, true
+	default:
+		return "", false
+	}
 }
 
 // handleManagersCollection returns the list of managed BMCs as managers
@@ -757,6 +1133,8 @@ func (h *Handler) writeErrorResponse(w http.ResponseWriter, status int, code, me
 		messageID = "Base.1.0.Unauthorized"
 	case "Base.1.0.InternalError":
 		messageID = "Base.1.0.GeneralError"
+	case "Base.1.0.InsufficientPrivilege":
+		messageID = "Base.1.0.InsufficientPrivilege"
 	}
 	errorResp := map[string]interface{}{
 		"error": map[string]interface{}{
