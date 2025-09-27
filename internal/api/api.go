@@ -704,9 +704,9 @@ func (h *Handler) handleGetRolesCollection(w http.ResponseWriter, r *http.Reques
 
 // handleGetRole returns a specific role
 func (h *Handler) handleGetRole(w http.ResponseWriter, r *http.Request, roleID string) {
-	roleID = strings.Title(strings.ToLower(roleID))
-	switch roleID {
-	case "Administrator":
+	norm := strings.ToLower(roleID)
+	switch norm {
+	case "administrator":
 		h.writeJSONResponse(w, http.StatusOK, redfish.Role{
 			ODataContext:       "/redfish/v1/$metadata#Role.Role",
 			ODataID:            "/redfish/v1/AccountService/Roles/Administrator",
@@ -716,7 +716,7 @@ func (h *Handler) handleGetRole(w http.ResponseWriter, r *http.Request, roleID s
 			IsPredefined:       true,
 			AssignedPrivileges: []string{"Login", "ConfigureManager", "ConfigureUsers", "ConfigureComponents", "ConfigureSelf"},
 		})
-	case "Operator":
+	case "operator":
 		h.writeJSONResponse(w, http.StatusOK, redfish.Role{
 			ODataContext:       "/redfish/v1/$metadata#Role.Role",
 			ODataID:            "/redfish/v1/AccountService/Roles/Operator",
@@ -726,7 +726,7 @@ func (h *Handler) handleGetRole(w http.ResponseWriter, r *http.Request, roleID s
 			IsPredefined:       true,
 			AssignedPrivileges: []string{"Login", "ConfigureComponents", "ConfigureSelf"},
 		})
-	case "Readonly", "ReadOnly":
+	case "readonly", "read-only", "read_only", "viewer":
 		h.writeJSONResponse(w, http.StatusOK, redfish.Role{
 			ODataContext:       "/redfish/v1/$metadata#Role.Role",
 			ODataID:            "/redfish/v1/AccountService/Roles/ReadOnly",
