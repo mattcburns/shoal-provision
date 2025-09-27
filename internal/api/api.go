@@ -137,6 +137,10 @@ func (h *Handler) handleRedfish(w http.ResponseWriter, r *http.Request) {
 
 // handleMetadata serves the OData $metadata CSDL. For Phase 1, return a minimal static shell.
 func (h *Handler) handleMetadata(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodOptions {
+		h.writeAllow(w, http.MethodGet)
+		return
+	}
 	if r.Method != http.MethodGet {
 		h.writeErrorResponse(w, http.StatusMethodNotAllowed, "Base.1.0.MethodNotAllowed", "Method not allowed")
 		return
@@ -165,6 +169,10 @@ func (h *Handler) handleMetadata(w http.ResponseWriter, r *http.Request) {
 
 // handleRegistriesCollection lists available message registries (minimal: Base)
 func (h *Handler) handleRegistriesCollection(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodOptions {
+		h.writeAllow(w, http.MethodGet)
+		return
+	}
 	if r.Method != http.MethodGet {
 		h.writeErrorResponse(w, http.StatusMethodNotAllowed, "Base.1.0.MethodNotAllowed", "Method not allowed")
 		return
@@ -184,6 +192,10 @@ func (h *Handler) handleRegistriesCollection(w http.ResponseWriter, r *http.Requ
 
 // handleRegistryFile serves individual registry; for now, return a small Base stub.
 func (h *Handler) handleRegistryFile(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodOptions {
+		h.writeAllow(w, http.MethodGet)
+		return
+	}
 	if r.Method != http.MethodGet {
 		h.writeErrorResponse(w, http.StatusMethodNotAllowed, "Base.1.0.MethodNotAllowed", "Method not allowed")
 		return
@@ -214,6 +226,10 @@ func (h *Handler) handleRegistryFile(w http.ResponseWriter, r *http.Request) {
 
 // handleSchemaStoreRoot returns a placeholder SchemaStore collection
 func (h *Handler) handleSchemaStoreRoot(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodOptions {
+		h.writeAllow(w, http.MethodGet)
+		return
+	}
 	if r.Method != http.MethodGet {
 		h.writeErrorResponse(w, http.StatusMethodNotAllowed, "Base.1.0.MethodNotAllowed", "Method not allowed")
 		return
@@ -231,6 +247,10 @@ func (h *Handler) handleSchemaStoreRoot(w http.ResponseWriter, r *http.Request) 
 
 // handleSchemaFile placeholder for individual schema files
 func (h *Handler) handleSchemaFile(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodOptions {
+		h.writeAllow(w, http.MethodGet)
+		return
+	}
 	if r.Method != http.MethodGet {
 		h.writeErrorResponse(w, http.StatusMethodNotAllowed, "Base.1.0.MethodNotAllowed", "Method not allowed")
 		return
@@ -240,6 +260,10 @@ func (h *Handler) handleSchemaFile(w http.ResponseWriter, r *http.Request) {
 
 // handleServiceRoot returns the Redfish service root
 func (h *Handler) handleServiceRoot(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodOptions {
+		h.writeAllow(w, http.MethodGet)
+		return
+	}
 	if r.Method != "GET" {
 		h.writeErrorResponse(w, http.StatusMethodNotAllowed, "Base.1.0.MethodNotAllowed", "Method not allowed")
 		return
@@ -438,6 +462,10 @@ func (h *Handler) handleAccountService(w http.ResponseWriter, r *http.Request, p
 
 	// Root resource
 	if subPath == "" || subPath == "/" {
+		if r.Method == http.MethodOptions {
+			h.writeAllow(w, http.MethodGet)
+			return
+		}
 		if r.Method != http.MethodGet {
 			h.writeErrorResponse(w, http.StatusMethodNotAllowed, "Base.1.0.MethodNotAllowed", "Method not allowed")
 			return
@@ -458,6 +486,10 @@ func (h *Handler) handleAccountService(w http.ResponseWriter, r *http.Request, p
 
 	// Accounts collection
 	if subPath == "/Accounts" || subPath == "/Accounts/" {
+		if r.Method == http.MethodOptions {
+			h.writeAllow(w, http.MethodGet, http.MethodPost)
+			return
+		}
 		switch r.Method {
 		case http.MethodGet:
 			// Admin only
@@ -482,6 +514,10 @@ func (h *Handler) handleAccountService(w http.ResponseWriter, r *http.Request, p
 
 	// Individual account
 	if strings.HasPrefix(subPath, "/Accounts/") {
+		if r.Method == http.MethodOptions {
+			h.writeAllow(w, http.MethodGet, http.MethodPatch, http.MethodDelete)
+			return
+		}
 		if !authpkg.IsAdmin(user) {
 			h.writeErrorResponse(w, http.StatusForbidden, "Base.1.0.InsufficientPrivilege", "Administrator privilege required")
 			return
@@ -510,6 +546,10 @@ func (h *Handler) handleAccountService(w http.ResponseWriter, r *http.Request, p
 
 	// Roles endpoints
 	if subPath == "/Roles" || subPath == "/Roles/" {
+		if r.Method == http.MethodOptions {
+			h.writeAllow(w, http.MethodGet)
+			return
+		}
 		if r.Method != http.MethodGet {
 			h.writeErrorResponse(w, http.StatusMethodNotAllowed, "Base.1.0.MethodNotAllowed", "Method not allowed")
 			return
@@ -518,6 +558,10 @@ func (h *Handler) handleAccountService(w http.ResponseWriter, r *http.Request, p
 		return
 	}
 	if strings.HasPrefix(subPath, "/Roles/") {
+		if r.Method == http.MethodOptions {
+			h.writeAllow(w, http.MethodGet)
+			return
+		}
 		if r.Method != http.MethodGet {
 			h.writeErrorResponse(w, http.StatusMethodNotAllowed, "Base.1.0.MethodNotAllowed", "Method not allowed")
 			return
@@ -762,6 +806,10 @@ func (h *Handler) handleEventService(w http.ResponseWriter, r *http.Request, pat
 
 	// Root resource
 	if subPath == "" || subPath == "/" {
+		if r.Method == http.MethodOptions {
+			h.writeAllow(w, http.MethodGet)
+			return
+		}
 		if r.Method != http.MethodGet {
 			h.writeErrorResponse(w, http.StatusMethodNotAllowed, "Base.1.0.MethodNotAllowed", "Method not allowed")
 			return
@@ -787,6 +835,10 @@ func (h *Handler) handleTaskService(w http.ResponseWriter, r *http.Request, path
 
 	// Root resource
 	if subPath == "" || subPath == "/" {
+		if r.Method == http.MethodOptions {
+			h.writeAllow(w, http.MethodGet)
+			return
+		}
 		if r.Method != http.MethodGet {
 			h.writeErrorResponse(w, http.StatusMethodNotAllowed, "Base.1.0.MethodNotAllowed", "Method not allowed")
 			return
@@ -805,6 +857,10 @@ func (h *Handler) handleTaskService(w http.ResponseWriter, r *http.Request, path
 
 	// Tasks collection
 	if subPath == "/Tasks" || subPath == "/Tasks/" {
+		if r.Method == http.MethodOptions {
+			h.writeAllow(w, http.MethodGet)
+			return
+		}
 		if r.Method != http.MethodGet {
 			h.writeErrorResponse(w, http.StatusMethodNotAllowed, "Base.1.0.MethodNotAllowed", "Method not allowed")
 			return
@@ -866,6 +922,10 @@ func modelsRoleFromRedfish(roleID string) (string, bool) {
 
 // handleManagersCollection returns the list of managed BMCs as managers
 func (h *Handler) handleManagersCollection(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodOptions {
+		h.writeAllow(w, http.MethodGet)
+		return
+	}
 	if r.Method != "GET" {
 		h.writeErrorResponse(w, http.StatusMethodNotAllowed, "Base.1.0.MethodNotAllowed", "Method not allowed")
 		return
@@ -929,6 +989,10 @@ func (h *Handler) handleManagersCollection(w http.ResponseWriter, r *http.Reques
 
 // handleSystemsCollection returns the list of systems from managed BMCs
 func (h *Handler) handleSystemsCollection(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodOptions {
+		h.writeAllow(w, http.MethodGet)
+		return
+	}
 	if r.Method != "GET" {
 		h.writeErrorResponse(w, http.StatusMethodNotAllowed, "Base.1.0.MethodNotAllowed", "Method not allowed")
 		return
@@ -1001,6 +1065,23 @@ func (h *Handler) writeJSONResponse(w http.ResponseWriter, status int, data inte
 	}
 }
 
+// writeAllow responds to an HTTP OPTIONS request by advertising allowed methods
+func (h *Handler) writeAllow(w http.ResponseWriter, methods ...string) {
+	// Deduplicate while preserving order
+	seen := make(map[string]bool)
+	ordered := make([]string, 0, len(methods))
+	for _, m := range methods {
+		if !seen[m] {
+			seen[m] = true
+			ordered = append(ordered, m)
+		}
+	}
+	w.Header().Set("Allow", strings.Join(ordered, ", "))
+	// Maintain OData header consistency even for 204
+	w.Header().Set("OData-Version", "4.0")
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // (removed unused handleSessions)
 
 // handleManagedNodes handles BMC management operations
@@ -1016,6 +1097,10 @@ func (h *Handler) handleAggregationService(w http.ResponseWriter, r *http.Reques
 
 	if subPath == "" || subPath == "/" {
 		// Handle AggregationService root
+		if r.Method == http.MethodOptions {
+			h.writeAllow(w, http.MethodGet)
+			return
+		}
 		if r.Method != "GET" {
 			h.writeErrorResponse(w, http.StatusMethodNotAllowed, "Base.1.0.MethodNotAllowed", "Method not allowed")
 			return
@@ -1039,6 +1124,10 @@ func (h *Handler) handleAggregationService(w http.ResponseWriter, r *http.Reques
 
 	if subPath == "/ConnectionMethods" || subPath == "/ConnectionMethods/" {
 		// Handle ConnectionMethods collection
+		if r.Method == http.MethodOptions {
+			h.writeAllow(w, http.MethodGet, http.MethodPost)
+			return
+		}
 		h.handleConnectionMethodsCollection(w, r, user)
 		return
 	}
@@ -1057,6 +1146,10 @@ func (h *Handler) handleAggregationService(w http.ResponseWriter, r *http.Reques
 
 // handleConnectionMethodsCollection handles the ConnectionMethods collection
 func (h *Handler) handleConnectionMethodsCollection(w http.ResponseWriter, r *http.Request, user *models.User) {
+	if r.Method == http.MethodOptions {
+		h.writeAllow(w, http.MethodGet, http.MethodPost)
+		return
+	}
 	switch r.Method {
 	case "GET":
 		// Get all connection methods
@@ -1155,6 +1248,10 @@ func (h *Handler) handleConnectionMethodsCollection(w http.ResponseWriter, r *ht
 
 // handleConnectionMethod handles a specific ConnectionMethod resource
 func (h *Handler) handleConnectionMethod(w http.ResponseWriter, r *http.Request, id string, user *models.User) {
+	if r.Method == http.MethodOptions {
+		h.writeAllow(w, http.MethodGet, http.MethodDelete)
+		return
+	}
 	switch r.Method {
 	case "GET":
 		method, err := h.bmcSvc.GetConnectionMethod(r.Context(), id)
@@ -1270,6 +1367,24 @@ func resolutionForMessageID(msgID string) string {
 func (h *Handler) handleSessionService(w http.ResponseWriter, r *http.Request, path string) {
 	// Remove /v1/SessionService prefix
 	subPath := strings.TrimPrefix(path, "/v1/SessionService")
+
+	// OPTIONS handling (allow unauthenticated for CORS-style discovery)
+	if subPath == "" || subPath == "/" {
+		if r.Method == http.MethodOptions {
+			h.writeAllow(w, http.MethodGet)
+			return
+		}
+	} else if subPath == "/Sessions" || subPath == "/Sessions/" {
+		if r.Method == http.MethodOptions {
+			h.writeAllow(w, http.MethodGet, http.MethodPost)
+			return
+		}
+	} else if strings.HasPrefix(subPath, "/Sessions/") {
+		if r.Method == http.MethodOptions {
+			h.writeAllow(w, http.MethodGet, http.MethodDelete)
+			return
+		}
+	}
 
 	// Allow unauthenticated session creation
 	if (subPath == "/Sessions" || subPath == "/Sessions/") && r.Method == http.MethodPost {
