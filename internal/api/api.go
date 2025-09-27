@@ -54,6 +54,13 @@ func New(db *database.DB) http.Handler {
 	// Redfish service root
 	mux.HandleFunc("/redfish/", h.handleRedfish)
 
+	// $metadata and registries/schema store endpoints (Phase 1)
+	mux.HandleFunc("/redfish/v1/$metadata", h.handleMetadata)
+	mux.HandleFunc("/redfish/v1/Registries", h.auth.RequireAuth(http.HandlerFunc(h.handleRegistriesCollection)).ServeHTTP)
+	mux.HandleFunc("/redfish/v1/Registries/", h.auth.RequireAuth(http.HandlerFunc(h.handleRegistryFile)).ServeHTTP)
+	mux.HandleFunc("/redfish/v1/SchemaStore", h.auth.RequireAuth(http.HandlerFunc(h.handleSchemaStoreRoot)).ServeHTTP)
+	mux.HandleFunc("/redfish/v1/SchemaStore/", h.auth.RequireAuth(http.HandlerFunc(h.handleSchemaFile)).ServeHTTP)
+
 	// BMC management endpoints (aggregator-specific)
 	mux.HandleFunc("/redfish/v1/AggregationService/ManagedNodes/", h.auth.RequireAuth(http.HandlerFunc(h.handleManagedNodes)).ServeHTTP)
 
@@ -107,6 +114,109 @@ func (h *Handler) handleRedfish(w http.ResponseWriter, r *http.Request) {
 	h.handleAggregatorEndpoints(w, r, path, user)
 }
 
+// handleMetadata serves the OData $metadata CSDL. For Phase 1, return a minimal static shell.
+func (h *Handler) handleMetadata(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		h.writeErrorResponse(w, http.StatusMethodNotAllowed, "Base.1.0.MethodNotAllowed", "Method not allowed")
+		return
+	}
+	w.Header().Set("Content-Type", "application/xml")
+	w.Header().Set("OData-Version", "4.0")
+	// Minimal CSDL skeleton aligning to entities we expose; to be replaced with embedded DMTF schemas.
+	const csdl = `<?xml version="1.0" encoding="UTF-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+	<Schema Namespace="ServiceRoot" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+	  <EntityType Name="ServiceRoot">
+		<Key><PropertyRef Name="Id"/></Key>
+		<Property Name="Id" Type="Edm.String" Nullable="false"/>
+	  </EntityType>
+	  <EntityContainer Name="ServiceContainer">
+		<EntitySet Name="ServiceRoot" EntityType="ServiceRoot.ServiceRoot"/>
+	  </EntityContainer>
+	</Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`
+	// Write raw XML (bypass JSON writer)
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(csdl))
+}
+
+// handleRegistriesCollection lists available message registries (minimal: Base)
+func (h *Handler) handleRegistriesCollection(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		h.writeErrorResponse(w, http.StatusMethodNotAllowed, "Base.1.0.MethodNotAllowed", "Method not allowed")
+		return
+	}
+	coll := redfish.Collection{
+		ODataContext: "/redfish/v1/$metadata#MessageRegistryFileCollection.MessageRegistryFileCollection",
+		ODataID:      "/redfish/v1/Registries",
+		ODataType:    "#MessageRegistryFileCollection.MessageRegistryFileCollection",
+		Name:         "Message Registry File Collection",
+		Members: []redfish.ODataIDRef{
+			{ODataID: "/redfish/v1/Registries/Base"},
+		},
+		MembersCount: 1,
+	}
+	h.writeJSONResponse(w, http.StatusOK, coll)
+}
+
+// handleRegistryFile serves individual registry; for now, return a small Base stub.
+func (h *Handler) handleRegistryFile(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		h.writeErrorResponse(w, http.StatusMethodNotAllowed, "Base.1.0.MethodNotAllowed", "Method not allowed")
+		return
+	}
+	// Expect paths like /redfish/v1/Registries/Base or /redfish/v1/Registries/Base/Base.json
+	path := strings.TrimPrefix(r.URL.Path, "/redfish/v1/Registries/")
+	if path == "Base" || strings.HasPrefix(path, "Base/") {
+		// Serve a minimal Base registry JSON
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("OData-Version", "4.0")
+		base := map[string]any{
+			"Id":       "Base",
+			"Name":     "Base Message Registry",
+			"Language": "en",
+			"Messages": map[string]any{
+				"GeneralError":     map[string]any{"Message": "A general error has occurred. See ExtendedInfo for more information.", "NumberOfArgs": 0, "Resolution": "See ExtendedInfo for more information.", "Severity": "Critical"},
+				"ResourceNotFound": map[string]any{"Message": "The resource was not found.", "NumberOfArgs": 1, "Resolution": "Provide a valid resource and resubmit the request.", "Severity": "Warning"},
+				"MethodNotAllowed": map[string]any{"Message": "The HTTP method is not allowed on the resource.", "NumberOfArgs": 0, "Resolution": "Change the method and resubmit the request.", "Severity": "Warning"},
+				"Unauthorized":     map[string]any{"Message": "The request requires user authentication.", "NumberOfArgs": 0, "Resolution": "Provide valid credentials and resubmit the request.", "Severity": "Critical"},
+				"InternalError":    map[string]any{"Message": "The service encountered an internal error.", "NumberOfArgs": 0, "Resolution": "Retry the operation; if the problem persists, contact the service provider.", "Severity": "Critical"},
+			},
+		}
+		h.writeJSONResponse(w, http.StatusOK, base)
+		return
+	}
+	h.writeErrorResponse(w, http.StatusNotFound, "Base.1.0.ResourceNotFound", "Registry not found")
+}
+
+// handleSchemaStoreRoot returns a placeholder SchemaStore collection
+func (h *Handler) handleSchemaStoreRoot(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		h.writeErrorResponse(w, http.StatusMethodNotAllowed, "Base.1.0.MethodNotAllowed", "Method not allowed")
+		return
+	}
+	coll := redfish.Collection{
+		ODataContext: "/redfish/v1/$metadata#JsonSchemaFileCollection.JsonSchemaFileCollection",
+		ODataID:      "/redfish/v1/SchemaStore",
+		ODataType:    "#JsonSchemaFileCollection.JsonSchemaFileCollection",
+		Name:         "JSON Schema File Collection",
+		Members:      []redfish.ODataIDRef{},
+		MembersCount: 0,
+	}
+	h.writeJSONResponse(w, http.StatusOK, coll)
+}
+
+// handleSchemaFile placeholder for individual schema files
+func (h *Handler) handleSchemaFile(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		h.writeErrorResponse(w, http.StatusMethodNotAllowed, "Base.1.0.MethodNotAllowed", "Method not allowed")
+		return
+	}
+	h.writeErrorResponse(w, http.StatusNotFound, "Base.1.0.ResourceNotFound", "Schema not found")
+}
+
 // handleServiceRoot returns the Redfish service root
 func (h *Handler) handleServiceRoot(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "GET" {
@@ -114,6 +224,8 @@ func (h *Handler) handleServiceRoot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Fetch or generate a stable service UUID
+	uuid, _ := h.db.EnsureServiceUUID(r.Context())
 	serviceRoot := redfish.ServiceRoot{
 		ODataContext:   "/redfish/v1/$metadata#ServiceRoot.ServiceRoot",
 		ODataID:        "/redfish/v1/",
@@ -121,7 +233,7 @@ func (h *Handler) handleServiceRoot(w http.ResponseWriter, r *http.Request) {
 		ID:             "RootService",
 		Name:           "Shoal Redfish Aggregator",
 		RedfishVersion: "1.6.0",
-		UUID:           "12345678-1234-1234-1234-123456789012", // TODO: Generate proper UUID
+		UUID:           uuid,
 		Links: redfish.ServiceRootLinks{
 			Sessions: redfish.ODataIDRef{ODataID: "/redfish/v1/SessionService/Sessions"},
 		},
@@ -130,6 +242,10 @@ func (h *Handler) handleServiceRoot(w http.ResponseWriter, r *http.Request) {
 		SessionService:     redfish.ODataIDRef{ODataID: "/redfish/v1/SessionService"},
 		AggregationService: &redfish.ODataIDRef{ODataID: "/redfish/v1/AggregationService"},
 	}
+
+	// Add compliance navigation links (will be implemented in Phase 1)
+	serviceRoot.Registries = &redfish.ODataIDRef{ODataID: "/redfish/v1/Registries"}
+	serviceRoot.JsonSchemas = &redfish.ODataIDRef{ODataID: "/redfish/v1/SchemaStore"}
 
 	h.writeJSONResponse(w, http.StatusOK, serviceRoot)
 }
@@ -418,6 +534,7 @@ func (h *Handler) handleSystemsCollection(w http.ResponseWriter, r *http.Request
 // writeJSONResponse writes a JSON response
 func (h *Handler) writeJSONResponse(w http.ResponseWriter, status int, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("OData-Version", "4.0")
 	w.WriteHeader(status)
 
 	if err := json.NewEncoder(w).Encode(data); err != nil {
@@ -629,14 +746,63 @@ func (h *Handler) writeErrorResponse(w http.ResponseWriter, status int, code, me
 		w.Header().Set("WWW-Authenticate", `Basic realm="Redfish"`)
 	}
 
+	// Map our code to a Base registry MessageId (best-effort)
+	messageID := "Base.1.0.GeneralError"
+	switch code {
+	case "Base.1.0.ResourceNotFound":
+		messageID = "Base.1.0.ResourceNotFound"
+	case "Base.1.0.MethodNotAllowed":
+		messageID = "Base.1.0.MethodNotAllowed"
+	case "Base.1.0.Unauthorized":
+		messageID = "Base.1.0.Unauthorized"
+	case "Base.1.0.InternalError":
+		messageID = "Base.1.0.GeneralError"
+	}
 	errorResp := map[string]interface{}{
 		"error": map[string]interface{}{
 			"code":    code,
 			"message": message,
+			"@Message.ExtendedInfo": []map[string]interface{}{
+				{
+					"@odata.type": "#Message.v1_1_0.Message",
+					"MessageId":   messageID,
+					"Message":     message,
+					"Severity":    severityForStatus(status),
+					"Resolution":  resolutionForMessageID(messageID),
+				},
+			},
 		},
 	}
 
 	h.writeJSONResponse(w, status, errorResp)
+}
+
+// severityForStatus maps HTTP status to a Redfish severity string
+func severityForStatus(status int) string {
+	switch {
+	case status >= 500:
+		return "Critical"
+	case status == http.StatusUnauthorized || status == http.StatusForbidden:
+		return "Critical"
+	case status == http.StatusNotFound || status == http.StatusMethodNotAllowed || status == http.StatusBadRequest:
+		return "Warning"
+	default:
+		return "OK"
+	}
+}
+
+// resolutionForMessageID returns a generic resolution for known Base messages
+func resolutionForMessageID(msgID string) string {
+	switch msgID {
+	case "Base.1.0.ResourceNotFound":
+		return "Provide a valid resource identifier and resubmit the request."
+	case "Base.1.0.MethodNotAllowed":
+		return "Use an allowed HTTP method for the target resource and resubmit the request."
+	case "Base.1.0.Unauthorized":
+		return "Provide valid credentials and resubmit the request."
+	default:
+		return "Retry the operation; if the problem persists, contact the service provider."
+	}
 }
 
 // handleSessionService routes and implements SessionService endpoints

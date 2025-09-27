@@ -18,6 +18,7 @@ package database
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -81,6 +82,12 @@ func (db *DB) Migrate(ctx context.Context) error {
 	slog.Info("Running database migrations")
 
 	migrations := []string{
+		// Key/value settings store for service-level configuration (e.g., service UUID)
+		`CREATE TABLE IF NOT EXISTS settings (
+			key TEXT PRIMARY KEY,
+			value TEXT NOT NULL,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		)`,
 		`CREATE TABLE IF NOT EXISTS bmcs (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			name TEXT NOT NULL UNIQUE,
@@ -175,6 +182,57 @@ func (db *DB) Migrate(ctx context.Context) error {
 
 	return tx.Commit()
 }
+
+// Settings helpers
+
+// GetSetting retrieves a value by key from the settings table.
+func (db *DB) GetSetting(ctx context.Context, key string) (string, error) {
+	var value string
+	err := db.conn.QueryRowContext(ctx, `SELECT value FROM settings WHERE key = ?`, key).Scan(&value)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("failed to get setting %s: %w", key, err)
+	}
+	return value, nil
+}
+
+// SetSetting upserts a key/value pair in the settings table.
+func (db *DB) SetSetting(ctx context.Context, key, value string) error {
+	_, err := db.conn.ExecContext(ctx, `INSERT INTO settings(key, value, updated_at) VALUES(?, ?, CURRENT_TIMESTAMP)
+		ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=CURRENT_TIMESTAMP`, key, value)
+	if err != nil {
+		return fmt.Errorf("failed to set setting %s: %w", key, err)
+	}
+	return nil
+}
+
+// EnsureServiceUUID returns a stable service UUID, creating and persisting one if missing.
+func (db *DB) EnsureServiceUUID(ctx context.Context) (string, error) {
+	const key = "service_uuid"
+	val, err := db.GetSetting(ctx, key)
+	if err != nil {
+		return "", err
+	}
+	if val != "" {
+		return val, nil
+	}
+	// Generate a new UUID (v4-like) using crypto/rand hex
+	b := make([]byte, 16)
+	if _, err := crypto_randRead(b); err != nil {
+		return "", fmt.Errorf("failed to generate service uuid: %w", err)
+	}
+	// Format as 8-4-4-4-12 hex segments
+	uuid := fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
+	if err := db.SetSetting(ctx, key, uuid); err != nil {
+		return "", err
+	}
+	return uuid, nil
+}
+
+// crypto_randRead wraps crypto/rand.Read for testability.
+func crypto_randRead(b []byte) (int, error) { return rand.Read(b) }
 
 // Settings operations
 

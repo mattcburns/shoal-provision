@@ -34,6 +34,8 @@ type ServiceRoot struct {
 	Managers           ODataIDRef       `json:"Managers"`
 	SessionService     ODataIDRef       `json:"SessionService"`
 	AggregationService *ODataIDRef      `json:"AggregationService,omitempty"`
+	Registries         *ODataIDRef      `json:"Registries,omitempty"`
+	JsonSchemas        *ODataIDRef      `json:"JsonSchemas,omitempty"`
 	Links              ServiceRootLinks `json:"Links"`
 }
 
