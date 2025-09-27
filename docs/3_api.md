@@ -33,6 +33,20 @@ The API supports two authentication methods:
 - `GET /redfish/v1/Managers/{bmc-name}`: Proxy to a specific BMC manager.
 - `GET /redfish/v1/Systems/{bmc-name}`: Proxy to a specific system.
 - `GET /redfish/v1/SessionService`: Session service root.
+ - `GET /redfish/v1/$metadata`: Minimal OData CSDL describing the service.
+ - `GET /redfish/v1/Registries`: Message registries collection (includes Base).
+ - `GET /redfish/v1/SchemaStore`: JSON Schema store root.
+
+### OPTIONS and Allow
+
+Shoal advertises supported HTTP methods via OPTIONS with the `Allow` header on key resources. Examples:
+
+- `OPTIONS /redfish/v1/` → `Allow: GET`
+- `OPTIONS /redfish/v1/AccountService/Accounts` → `Allow: GET, POST`
+- `OPTIONS /redfish/v1/AccountService/Accounts/{id}` → `Allow: GET, PATCH, DELETE`
+- `OPTIONS /redfish/v1/SessionService/Sessions` → `Allow: GET, POST` (accessible without auth)
+
+All Redfish JSON responses include `OData-Version: 4.0`.
 
 ## Settings Discovery
 
