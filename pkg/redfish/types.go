@@ -36,6 +36,7 @@ type ServiceRoot struct {
 	AggregationService *ODataIDRef      `json:"AggregationService,omitempty"`
 	Registries         *ODataIDRef      `json:"Registries,omitempty"`
 	JsonSchemas        *ODataIDRef      `json:"JsonSchemas,omitempty"`
+	AccountService     *ODataIDRef      `json:"AccountService,omitempty"`
 	Links              ServiceRootLinks `json:"Links"`
 }
 
@@ -75,6 +76,41 @@ type SessionService struct {
 	ServiceEnabled bool       `json:"ServiceEnabled"`
 	SessionTimeout int        `json:"SessionTimeout"`
 	Sessions       ODataIDRef `json:"Sessions"`
+}
+
+// AccountService represents the Redfish AccountService
+type AccountService struct {
+	ODataContext   string     `json:"@odata.context"`
+	ODataID        string     `json:"@odata.id"`
+	ODataType      string     `json:"@odata.type"`
+	ID             string     `json:"Id"`
+	Name           string     `json:"Name"`
+	ServiceEnabled bool       `json:"ServiceEnabled"`
+	Accounts       ODataIDRef `json:"Accounts"`
+	Roles          ODataIDRef `json:"Roles"`
+}
+
+// ManagerAccount represents a user account
+type ManagerAccount struct {
+	ODataContext string `json:"@odata.context"`
+	ODataID      string `json:"@odata.id"`
+	ODataType    string `json:"@odata.type"`
+	ID           string `json:"Id"`
+	Name         string `json:"Name"`
+	UserName     string `json:"UserName"`
+	RoleID       string `json:"RoleId"`
+	Enabled      bool   `json:"Enabled"`
+}
+
+// Role represents a Redfish Role resource
+type Role struct {
+	ODataContext       string   `json:"@odata.context"`
+	ODataID            string   `json:"@odata.id"`
+	ODataType          string   `json:"@odata.type"`
+	ID                 string   `json:"Id"`
+	Name               string   `json:"Name"`
+	IsPredefined       bool     `json:"IsPredefined"`
+	AssignedPrivileges []string `json:"AssignedPrivileges"`
 }
 
 // ErrorResponse represents a Redfish error response
