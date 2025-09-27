@@ -23,11 +23,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"regexp"
 	"strings"
 
+	"shoal/internal/assets"
 	"shoal/internal/auth"
 	"shoal/internal/bmc"
 	"shoal/internal/ctxkeys"
@@ -177,15 +179,32 @@ func (h *Handler) handleRegistriesCollection(w http.ResponseWriter, r *http.Requ
 		h.writeErrorResponse(w, http.StatusMethodNotAllowed, "Base.1.0.MethodNotAllowed", "Method not allowed")
 		return
 	}
+	// Discover embedded registry files under redfish/ directory
+	staticFS := assets.GetStaticFS()
+	var members []redfish.ODataIDRef
+	_ = fs.WalkDir(staticFS, ".", func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			return nil
+		}
+		if strings.HasPrefix(path, "redfish/") && strings.HasSuffix(strings.ToLower(path), ".json") {
+			name := strings.TrimSuffix(strings.TrimPrefix(path, "redfish/"), ".json")
+			// Only include top-level registry files (e.g., Base.json)
+			if !strings.Contains(name, "/") {
+				members = append(members, redfish.ODataIDRef{ODataID: "/redfish/v1/Registries/" + name})
+			}
+		}
+		return nil
+	})
 	coll := redfish.Collection{
 		ODataContext: "/redfish/v1/$metadata#MessageRegistryFileCollection.MessageRegistryFileCollection",
 		ODataID:      "/redfish/v1/Registries",
 		ODataType:    "#MessageRegistryFileCollection.MessageRegistryFileCollection",
 		Name:         "Message Registry File Collection",
-		Members: []redfish.ODataIDRef{
-			{ODataID: "/redfish/v1/Registries/Base"},
-		},
-		MembersCount: 1,
+		Members:      members,
+		MembersCount: len(members),
 	}
 	h.writeJSONResponse(w, http.StatusOK, coll)
 }
@@ -200,26 +219,34 @@ func (h *Handler) handleRegistryFile(w http.ResponseWriter, r *http.Request) {
 		h.writeErrorResponse(w, http.StatusMethodNotAllowed, "Base.1.0.MethodNotAllowed", "Method not allowed")
 		return
 	}
-	// Expect paths like /redfish/v1/Registries/Base or /redfish/v1/Registries/Base/Base.json
-	path := strings.TrimPrefix(r.URL.Path, "/redfish/v1/Registries/")
-	if path == "Base" || strings.HasPrefix(path, "Base/") {
-		// Serve a minimal Base registry JSON
+	// Expect paths like /redfish/v1/Registries/Base or /redfish/v1/Registries/<Name>/<file>
+	name := strings.Trim(strings.TrimPrefix(r.URL.Path, "/redfish/v1/Registries/"), "/")
+	if name == "" {
+		h.writeErrorResponse(w, http.StatusNotFound, "Base.1.0.ResourceNotFound", "Registry not found")
+		return
+	}
+	// If requesting just the registry name, serve the JSON file from embedded FS
+	// Map name -> static/redfish/<name>.json
+	filePath := "redfish/" + name + ".json"
+	staticFS := assets.GetStaticFS()
+	data, err := fs.ReadFile(staticFS, filePath)
+	if err == nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("OData-Version", "4.0")
-		base := map[string]any{
-			"Id":       "Base",
-			"Name":     "Base Message Registry",
-			"Language": "en",
-			"Messages": map[string]any{
-				"GeneralError":     map[string]any{"Message": "A general error has occurred. See ExtendedInfo for more information.", "NumberOfArgs": 0, "Resolution": "See ExtendedInfo for more information.", "Severity": "Critical"},
-				"ResourceNotFound": map[string]any{"Message": "The resource was not found.", "NumberOfArgs": 1, "Resolution": "Provide a valid resource and resubmit the request.", "Severity": "Warning"},
-				"MethodNotAllowed": map[string]any{"Message": "The HTTP method is not allowed on the resource.", "NumberOfArgs": 0, "Resolution": "Change the method and resubmit the request.", "Severity": "Warning"},
-				"Unauthorized":     map[string]any{"Message": "The request requires user authentication.", "NumberOfArgs": 0, "Resolution": "Provide valid credentials and resubmit the request.", "Severity": "Critical"},
-				"InternalError":    map[string]any{"Message": "The service encountered an internal error.", "NumberOfArgs": 0, "Resolution": "Retry the operation; if the problem persists, contact the service provider.", "Severity": "Critical"},
-			},
-		}
-		h.writeJSONResponse(w, http.StatusOK, base)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(data)
 		return
+	}
+	// Support nested paths like /Registries/Base/Base.json
+	if strings.Contains(name, "/") {
+		p := "redfish/" + name
+		if d, err2 := fs.ReadFile(staticFS, p); err2 == nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("OData-Version", "4.0")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(d)
+			return
+		}
 	}
 	h.writeErrorResponse(w, http.StatusNotFound, "Base.1.0.ResourceNotFound", "Registry not found")
 }
@@ -234,13 +261,29 @@ func (h *Handler) handleSchemaStoreRoot(w http.ResponseWriter, r *http.Request) 
 		h.writeErrorResponse(w, http.StatusMethodNotAllowed, "Base.1.0.MethodNotAllowed", "Method not allowed")
 		return
 	}
+	// Discover embedded JSON schemas under schemas/ if present
+	staticFS := assets.GetStaticFS()
+	var members []redfish.ODataIDRef
+	_ = fs.WalkDir(staticFS, ".", func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			return nil
+		}
+		if strings.HasPrefix(path, "schemas/") && strings.HasSuffix(strings.ToLower(path), ".json") {
+			name := strings.TrimPrefix(path, "schemas/")
+			members = append(members, redfish.ODataIDRef{ODataID: "/redfish/v1/SchemaStore/" + name})
+		}
+		return nil
+	})
 	coll := redfish.Collection{
 		ODataContext: "/redfish/v1/$metadata#JsonSchemaFileCollection.JsonSchemaFileCollection",
 		ODataID:      "/redfish/v1/SchemaStore",
 		ODataType:    "#JsonSchemaFileCollection.JsonSchemaFileCollection",
 		Name:         "JSON Schema File Collection",
-		Members:      []redfish.ODataIDRef{},
-		MembersCount: 0,
+		Members:      members,
+		MembersCount: len(members),
 	}
 	h.writeJSONResponse(w, http.StatusOK, coll)
 }
@@ -253,6 +296,21 @@ func (h *Handler) handleSchemaFile(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.Method != http.MethodGet {
 		h.writeErrorResponse(w, http.StatusMethodNotAllowed, "Base.1.0.MethodNotAllowed", "Method not allowed")
+		return
+	}
+	// Serve files from embedded schemas directory
+	name := strings.Trim(strings.TrimPrefix(r.URL.Path, "/redfish/v1/SchemaStore/"), "/")
+	if name == "" {
+		h.writeErrorResponse(w, http.StatusNotFound, "Base.1.0.ResourceNotFound", "Schema not found")
+		return
+	}
+	p := "schemas/" + name
+	staticFS := assets.GetStaticFS()
+	if data, err := fs.ReadFile(staticFS, p); err == nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("OData-Version", "4.0")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(data)
 		return
 	}
 	h.writeErrorResponse(w, http.StatusNotFound, "Base.1.0.ResourceNotFound", "Schema not found")
