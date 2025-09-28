@@ -363,7 +363,6 @@ func (h *Handler) handleSchemaFile(w http.ResponseWriter, r *http.Request) {
 // computeETag returns a strong ETag value for the provided bytes (quoted per RFC 7232)
 func computeETag(b []byte) string {
 	// Strong ETag: sha256 hex
-	// Keep local import of sha256 to top if not present
 	sum := sha256Sum(b)
 	return "\"sha256-" + sum + "\""
 }

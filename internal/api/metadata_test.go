@@ -18,9 +18,9 @@ package api
 
 import (
 	"bytes"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"encoding/json"
 	"testing"
 )
 
