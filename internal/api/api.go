@@ -57,6 +57,11 @@ var validMessageIDs = map[string]struct{}{
 	"Base.1.0.NotImplemented":          {},
 }
 
+// Common error messages
+const (
+	errorUsernameAlreadyExists = "Username already exists"
+)
+
 // Handler implements the Redfish API endpoints
 type Handler struct {
 	db     *database.DB
@@ -222,7 +227,7 @@ func (h *Handler) handleRegistriesCollection(w http.ResponseWriter, r *http.Requ
 	// Discover embedded registry files under redfish/ directory
 	staticFS := assets.GetStaticFS()
 	var members []redfish.ODataIDRef
-	_ = fs.WalkDir(staticFS, ".", func(path string, d fs.DirEntry, err error) error {
+	if err := fs.WalkDir(staticFS, ".", func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
@@ -237,7 +242,10 @@ func (h *Handler) handleRegistriesCollection(w http.ResponseWriter, r *http.Requ
 			}
 		}
 		return nil
-	})
+	}); err != nil {
+		slog.Error("Failed to walk registries directory", "error", err)
+		// Continue with empty members list rather than failing the request
+	}
 	coll := redfish.Collection{
 		ODataContext: "/redfish/v1/$metadata#MessageRegistryFileCollection.MessageRegistryFileCollection",
 		ODataID:      "/redfish/v1/Registries",
@@ -318,7 +326,7 @@ func (h *Handler) handleSchemaStoreRoot(w http.ResponseWriter, r *http.Request) 
 	// Discover embedded JSON schemas under schemas/ if present
 	staticFS := assets.GetStaticFS()
 	var members []redfish.ODataIDRef
-	_ = fs.WalkDir(staticFS, ".", func(path string, d fs.DirEntry, err error) error {
+	if err := fs.WalkDir(staticFS, ".", func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
@@ -330,7 +338,10 @@ func (h *Handler) handleSchemaStoreRoot(w http.ResponseWriter, r *http.Request) 
 			members = append(members, redfish.ODataIDRef{ODataID: "/redfish/v1/SchemaStore/" + name})
 		}
 		return nil
-	})
+	}); err != nil {
+		slog.Error("Failed to walk schemas directory", "error", err)
+		// Continue with empty members list rather than failing the request
+	}
 	coll := redfish.Collection{
 		ODataContext: "/redfish/v1/$metadata#JsonSchemaFileCollection.JsonSchemaFileCollection",
 		ODataID:      "/redfish/v1/SchemaStore",
@@ -795,7 +806,7 @@ func (h *Handler) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
 	}
 	// Check existing username
 	if existing, _ := h.db.GetUserByUsername(r.Context(), req.UserName); existing != nil {
-		h.writeErrorResponse(w, http.StatusConflict, "Base.1.0.ResourceCannotBeCreated", "Username already exists")
+		h.writeErrorResponse(w, http.StatusConflict, "Base.1.0.ResourceCannotBeCreated", errorUsernameAlreadyExists)
 		return
 	}
 	// Map role
@@ -876,7 +887,7 @@ func (h *Handler) handlePatchAccount(w http.ResponseWriter, r *http.Request, id 
 	if v, ok := patch["UserName"].(string); ok && strings.TrimSpace(v) != "" {
 		// Validate uniqueness
 		if existing, _ := h.db.GetUserByUsername(r.Context(), v); existing != nil && existing.ID != u.ID {
-			h.writeErrorResponse(w, http.StatusConflict, "Base.1.0.ResourceCannotBeCreated", "Username already exists")
+			h.writeErrorResponse(w, http.StatusConflict, "Base.1.0.ResourceCannotBeCreated", errorUsernameAlreadyExists)
 			return
 		}
 		u.Username = v
