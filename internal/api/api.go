@@ -19,6 +19,7 @@ package api
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -152,6 +153,13 @@ func (h *Handler) handleMetadata(w http.ResponseWriter, r *http.Request) {
 	// Try to serve embedded metadata.xml from assets; fallback to minimal shell
 	staticFS := assets.GetStaticFS()
 	if data, err := fs.ReadFile(staticFS, "metadata.xml"); err == nil {
+		etag := computeETag(data)
+		if match := r.Header.Get("If-None-Match"); match != "" && ifNoneMatchMatches(match, etag) {
+			w.Header().Set("ETag", etag)
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		w.Header().Set("ETag", etag)
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(data)
 		return
@@ -171,8 +179,17 @@ func (h *Handler) handleMetadata(w http.ResponseWriter, r *http.Request) {
 		</Schema>
 	</edmx:DataServices>
 </edmx:Edmx>`
+	// Fallback content also gets an ETag
+	fb := []byte(csdl)
+	etag := computeETag(fb)
+	if match := r.Header.Get("If-None-Match"); match != "" && ifNoneMatchMatches(match, etag) {
+		w.Header().Set("ETag", etag)
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+	w.Header().Set("ETag", etag)
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(csdl))
+	_, _ = w.Write(fb)
 }
 
 // handleRegistriesCollection lists available message registries (minimal: Base)
@@ -237,8 +254,15 @@ func (h *Handler) handleRegistryFile(w http.ResponseWriter, r *http.Request) {
 	staticFS := assets.GetStaticFS()
 	data, err := fs.ReadFile(staticFS, filePath)
 	if err == nil {
+		etag := computeETag(data)
+		if match := r.Header.Get("If-None-Match"); match != "" && ifNoneMatchMatches(match, etag) {
+			w.Header().Set("ETag", etag)
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("OData-Version", "4.0")
+		w.Header().Set("ETag", etag)
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(data)
 		return
@@ -247,8 +271,15 @@ func (h *Handler) handleRegistryFile(w http.ResponseWriter, r *http.Request) {
 	if strings.Contains(name, "/") {
 		p := "redfish/" + name
 		if d, err2 := fs.ReadFile(staticFS, p); err2 == nil {
+			etag := computeETag(d)
+			if match := r.Header.Get("If-None-Match"); match != "" && ifNoneMatchMatches(match, etag) {
+				w.Header().Set("ETag", etag)
+				w.WriteHeader(http.StatusNotModified)
+				return
+			}
 			w.Header().Set("Content-Type", "application/json")
 			w.Header().Set("OData-Version", "4.0")
+			w.Header().Set("ETag", etag)
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write(d)
 			return
@@ -313,13 +344,60 @@ func (h *Handler) handleSchemaFile(w http.ResponseWriter, r *http.Request) {
 	p := "schemas/" + name
 	staticFS := assets.GetStaticFS()
 	if data, err := fs.ReadFile(staticFS, p); err == nil {
+		etag := computeETag(data)
+		if match := r.Header.Get("If-None-Match"); match != "" && ifNoneMatchMatches(match, etag) {
+			w.Header().Set("ETag", etag)
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("OData-Version", "4.0")
+		w.Header().Set("ETag", etag)
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(data)
 		return
 	}
 	h.writeErrorResponse(w, http.StatusNotFound, "Base.1.0.ResourceNotFound", "Schema not found")
+}
+
+// computeETag returns a strong ETag value for the provided bytes (quoted per RFC 7232)
+func computeETag(b []byte) string {
+	// Strong ETag: sha256 hex
+	sum := sha256Sum(b)
+	return "\"sha256-" + sum + "\""
+}
+
+// weakMatch compares If-None-Match header to a generated ETag, handling weak validators
+func ifNoneMatchMatches(ifNoneMatch, etag string) bool {
+	s := strings.TrimSpace(ifNoneMatch)
+	if s == "" {
+		return false
+	}
+	// Any current representation
+	if s == "*" {
+		return true
+	}
+	// Split on comma for multiple ETags
+	parts := strings.Split(s, ",")
+	for _, p := range parts {
+		v := strings.TrimSpace(p)
+		if v == etag {
+			return true
+		}
+		if strings.HasPrefix(v, "W/") {
+			if strings.TrimSpace(strings.TrimPrefix(v, "W/")) == etag {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// sha256Sum returns hex-encoded SHA-256 sum of the input
+func sha256Sum(b []byte) string {
+	h := sha256.New()
+	_, _ = h.Write(b)
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 // handleServiceRoot returns the Redfish service root

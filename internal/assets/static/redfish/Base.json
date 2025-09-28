@@ -1,0 +1,18 @@
+{
+  "Id": "Base",
+  "Name": "Base Message Registry",
+  "Language": "en",
+  "RegistryPrefix": "Base",
+  "RegistryVersion": "1.0.0",
+  "OwningEntity": "DMTF",
+  "Messages": {
+    "GeneralError": {
+      "Description": "A general error occurred.",
+      "Message": "A general error has occurred. See Resolution for details.",
+      "Severity": "Critical",
+      "NumberOfArgs": 0,
+      "Resolution": "Retry the operation; if the problem persists, contact the service provider.",
+      "MessageSeverity": "Critical"
+    }
+  }
+}

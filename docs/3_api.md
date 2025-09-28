@@ -37,6 +37,16 @@ The API supports two authentication methods:
  - `GET /redfish/v1/Registries`: Message registries collection (includes Base).
  - `GET /redfish/v1/SchemaStore`: JSON Schema store root.
 
+### Caching and ETags
+
+Shoal includes HTTP ETag support for static Redfish assets to improve client-side caching:
+
+- `GET /redfish/v1/$metadata`
+- `GET /redfish/v1/Registries/{name}[/{file}]` (e.g., Base)
+- `GET /redfish/v1/SchemaStore/{path}.json`
+
+Responses include an `ETag` header. Clients may send `If-None-Match` with the previously received ETag to receive `304 Not Modified` when content has not changed. ETags are strong validators derived from the content hash.
+
 ### OPTIONS and Allow
 
 Shoal advertises supported HTTP methods via OPTIONS with the `Allow` header on key resources. Examples:
