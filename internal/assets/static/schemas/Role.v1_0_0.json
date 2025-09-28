@@ -1,0 +1,36 @@
+{
+  "$id": "Role.v1_0_0.json",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Role",
+  "type": "object",
+  "properties": {
+    "@odata.context": {
+      "type": "string"
+    },
+    "@odata.id": {
+      "type": "string",
+      "format": "uri"
+    },
+    "@odata.type": {
+      "type": "string",
+      "const": "#Role.v1_0_0.Role"
+    },
+    "Id": {
+      "type": "string"
+    },
+    "Name": {
+      "type": "string"
+    },
+    "IsPredefined": {
+      "type": "boolean"
+    },
+    "AssignedPrivileges": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": ["@odata.type", "@odata.id", "Id", "Name"],
+  "additionalProperties": true
+}

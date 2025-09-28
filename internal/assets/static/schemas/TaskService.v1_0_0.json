@@ -1,0 +1,43 @@
+{
+  "$id": "TaskService.v1_0_0.json",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "TaskService",
+  "type": "object",
+  "definitions": {
+    "ODataId": {
+      "type": "object",
+      "properties": {
+        "@odata.id": {
+          "type": "string",
+          "format": "uri"
+        }
+      },
+      "required": ["@odata.id"],
+      "additionalProperties": false
+    }
+  },
+  "properties": {
+    "@odata.context": {
+      "type": "string"
+    },
+    "@odata.id": {
+      "type": "string",
+      "format": "uri"
+    },
+    "@odata.type": {
+      "type": "string",
+      "const": "#TaskService.v1_0_0.TaskService"
+    },
+    "Id": {
+      "type": "string"
+    },
+    "Name": {
+      "type": "string"
+    },
+    "Tasks": {
+      "$ref": "#/definitions/ODataId"
+    }
+  },
+  "required": ["@odata.type", "@odata.id", "Id", "Name"],
+  "additionalProperties": true
+}

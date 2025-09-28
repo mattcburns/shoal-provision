@@ -1,13 +1,238 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
   <edmx:DataServices>
-    <Schema Namespace="Shoal" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+    <Schema Namespace="Resource.v1_0_0" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <ComplexType Name="ODataIdRef">
+        <Property Name="@odata.id" Type="Edm.String" Nullable="false" />
+      </ComplexType>
+    </Schema>
+    <Schema Namespace="ServiceRoot.v1_5_0" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <ComplexType Name="ServiceRootLinks">
+        <Property Name="Sessions" Type="Resource.v1_0_0.ODataIdRef" Nullable="false" />
+      </ComplexType>
       <EntityType Name="ServiceRoot">
-        <Key><PropertyRef Name="Id"/></Key>
-        <Property Name="Id" Type="Edm.String" Nullable="false"/>
+        <Key>
+          <PropertyRef Name="Id" />
+        </Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+        <Property Name="Name" Type="Edm.String" />
+        <Property Name="RedfishVersion" Type="Edm.String" />
+        <Property Name="UUID" Type="Edm.String" />
+        <Property Name="Systems" Type="Resource.v1_0_0.ODataIdRef" />
+        <Property Name="Managers" Type="Resource.v1_0_0.ODataIdRef" />
+        <Property Name="SessionService" Type="Resource.v1_0_0.ODataIdRef" />
+        <Property Name="AggregationService" Type="Resource.v1_0_0.ODataIdRef" />
+        <Property Name="Registries" Type="Resource.v1_0_0.ODataIdRef" />
+        <Property Name="JsonSchemas" Type="Resource.v1_0_0.ODataIdRef" />
+        <Property Name="AccountService" Type="Resource.v1_0_0.ODataIdRef" />
+        <Property Name="EventService" Type="Resource.v1_0_0.ODataIdRef" />
+        <Property Name="TaskService" Type="Resource.v1_0_0.ODataIdRef" />
+        <Property Name="Links" Type="ServiceRoot.v1_5_0.ServiceRootLinks" Nullable="false" />
       </EntityType>
-      <EntityContainer Name="ServiceContainer">
-        <EntitySet Name="ServiceRoot" EntityType="Shoal.ServiceRoot"/>
+    </Schema>
+    <Schema Namespace="SessionService.v1_0_0" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="SessionService">
+        <Key>
+          <PropertyRef Name="Id" />
+        </Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+        <Property Name="Name" Type="Edm.String" />
+        <Property Name="Description" Type="Edm.String" />
+        <Property Name="ServiceEnabled" Type="Edm.Boolean" />
+        <Property Name="SessionTimeout" Type="Edm.Int32" />
+        <Property Name="Sessions" Type="Resource.v1_0_0.ODataIdRef" />
+      </EntityType>
+      <EntityType Name="Session">
+        <Key>
+          <PropertyRef Name="Id" />
+        </Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+        <Property Name="Name" Type="Edm.String" />
+        <Property Name="UserName" Type="Edm.String" />
+      </EntityType>
+    </Schema>
+    <Schema Namespace="SessionCollection" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="SessionCollection">
+        <Property Name="Name" Type="Edm.String" />
+        <Property Name="Members" Type="Collection(Resource.v1_0_0.ODataIdRef)" Nullable="false" />
+      </EntityType>
+    </Schema>
+    <Schema Namespace="ManagerCollection" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="ManagerCollection">
+        <Property Name="Name" Type="Edm.String" />
+        <Property Name="Members" Type="Collection(Resource.v1_0_0.ODataIdRef)" Nullable="false" />
+      </EntityType>
+    </Schema>
+    <Schema Namespace="ComputerSystemCollection" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="ComputerSystemCollection">
+        <Property Name="Name" Type="Edm.String" />
+        <Property Name="Members" Type="Collection(Resource.v1_0_0.ODataIdRef)" Nullable="false" />
+      </EntityType>
+    </Schema>
+    <Schema Namespace="AggregationService.v1_0_0" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <ComplexType Name="ConnectionMethodVariant">
+        <Property Name="Address" Type="Edm.String" />
+      </ComplexType>
+      <EntityType Name="AggregationService">
+        <Key>
+          <PropertyRef Name="Id" />
+        </Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+        <Property Name="Name" Type="Edm.String" />
+        <Property Name="Description" Type="Edm.String" />
+        <Property Name="ConnectionMethods" Type="Resource.v1_0_0.ODataIdRef" />
+      </EntityType>
+      <EntityType Name="ConnectionMethod">
+        <Key>
+          <PropertyRef Name="Id" />
+        </Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+        <Property Name="Name" Type="Edm.String" />
+        <Property Name="ConnectionMethodType" Type="Edm.String" />
+        <Property Name="ConnectionMethodVariant" Type="AggregationService.v1_0_0.ConnectionMethodVariant" />
+      </EntityType>
+    </Schema>
+    <Schema Namespace="ConnectionMethodCollection" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="ConnectionMethodCollection">
+        <Property Name="Name" Type="Edm.String" />
+        <Property Name="Members" Type="Collection(Resource.v1_0_0.ODataIdRef)" Nullable="false" />
+      </EntityType>
+    </Schema>
+    <Schema Namespace="MessageRegistryFile.v1_0_0" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="MessageRegistryFile">
+        <Key>
+          <PropertyRef Name="Id" />
+        </Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+        <Property Name="Name" Type="Edm.String" />
+        <Property Name="Language" Type="Edm.String" />
+        <Property Name="RegistryPrefix" Type="Edm.String" />
+        <Property Name="RegistryVersion" Type="Edm.String" />
+        <Property Name="OwningEntity" Type="Edm.String" />
+      </EntityType>
+    </Schema>
+    <Schema Namespace="MessageRegistryFileCollection" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="MessageRegistryFileCollection">
+        <Property Name="Name" Type="Edm.String" />
+        <Property Name="Members" Type="Collection(Resource.v1_0_0.ODataIdRef)" Nullable="false" />
+      </EntityType>
+    </Schema>
+    <Schema Namespace="JsonSchemaFile.v1_0_0" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="JsonSchemaFile">
+        <Key>
+          <PropertyRef Name="Id" />
+        </Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+        <Property Name="Name" Type="Edm.String" />
+        <Property Name="Schema" Type="Edm.String" />
+      </EntityType>
+    </Schema>
+    <Schema Namespace="JsonSchemaFileCollection" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="JsonSchemaFileCollection">
+        <Property Name="Name" Type="Edm.String" />
+        <Property Name="Members" Type="Collection(Resource.v1_0_0.ODataIdRef)" Nullable="false" />
+      </EntityType>
+    </Schema>
+    <Schema Namespace="AccountService.v1_0_0" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="AccountService">
+        <Key>
+          <PropertyRef Name="Id" />
+        </Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+        <Property Name="Name" Type="Edm.String" />
+        <Property Name="ServiceEnabled" Type="Edm.Boolean" />
+        <Property Name="Accounts" Type="Resource.v1_0_0.ODataIdRef" />
+        <Property Name="Roles" Type="Resource.v1_0_0.ODataIdRef" />
+      </EntityType>
+      <EntityType Name="ManagerAccount">
+        <Key>
+          <PropertyRef Name="Id" />
+        </Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+        <Property Name="Name" Type="Edm.String" />
+        <Property Name="UserName" Type="Edm.String" />
+        <Property Name="RoleId" Type="Edm.String" />
+        <Property Name="Enabled" Type="Edm.Boolean" />
+      </EntityType>
+      <EntityType Name="Role">
+        <Key>
+          <PropertyRef Name="Id" />
+        </Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+        <Property Name="Name" Type="Edm.String" />
+        <Property Name="IsPredefined" Type="Edm.Boolean" />
+      </EntityType>
+    </Schema>
+    <Schema Namespace="ManagerAccountCollection" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="ManagerAccountCollection">
+        <Property Name="Name" Type="Edm.String" />
+        <Property Name="Members" Type="Collection(Resource.v1_0_0.ODataIdRef)" Nullable="false" />
+      </EntityType>
+    </Schema>
+    <Schema Namespace="RoleCollection" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="RoleCollection">
+        <Property Name="Name" Type="Edm.String" />
+        <Property Name="Members" Type="Collection(Resource.v1_0_0.ODataIdRef)" Nullable="false" />
+      </EntityType>
+    </Schema>
+    <Schema Namespace="EventService.v1_0_0" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="EventService">
+        <Key>
+          <PropertyRef Name="Id" />
+        </Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+        <Property Name="Name" Type="Edm.String" />
+        <Property Name="ServiceEnabled" Type="Edm.Boolean" />
+      </EntityType>
+    </Schema>
+    <Schema Namespace="TaskService.v1_0_0" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="TaskService">
+        <Key>
+          <PropertyRef Name="Id" />
+        </Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+        <Property Name="Name" Type="Edm.String" />
+        <Property Name="Tasks" Type="Resource.v1_0_0.ODataIdRef" />
+      </EntityType>
+      <EntityType Name="Task">
+        <Key>
+          <PropertyRef Name="Id" />
+        </Key>
+        <Property Name="Id" Type="Edm.String" Nullable="false" />
+        <Property Name="Name" Type="Edm.String" />
+        <Property Name="TaskState" Type="Edm.String" />
+      </EntityType>
+    </Schema>
+    <Schema Namespace="TaskCollection" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="TaskCollection">
+        <Property Name="Name" Type="Edm.String" />
+        <Property Name="Members" Type="Collection(Resource.v1_0_0.ODataIdRef)" Nullable="false" />
+      </EntityType>
+    </Schema>
+    <Schema Namespace="ShoalService" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityContainer Name="ShoalService">
+        <EntitySet Name="ServiceRoot" EntityType="ServiceRoot.v1_5_0.ServiceRoot" />
+        <EntitySet Name="SessionService" EntityType="SessionService.v1_0_0.SessionService" />
+        <EntitySet Name="Sessions" EntityType="SessionService.v1_0_0.Session" />
+        <EntitySet Name="SessionCollection" EntityType="SessionCollection.SessionCollection" />
+        <EntitySet Name="Managers" EntityType="ManagerCollection.ManagerCollection" />
+        <EntitySet Name="Systems" EntityType="ComputerSystemCollection.ComputerSystemCollection" />
+        <EntitySet Name="AggregationService" EntityType="AggregationService.v1_0_0.AggregationService" />
+        <EntitySet Name="ConnectionMethods" EntityType="AggregationService.v1_0_0.ConnectionMethod" />
+        <EntitySet Name="ConnectionMethodCollection" EntityType="ConnectionMethodCollection.ConnectionMethodCollection" />
+        <EntitySet Name="Registries" EntityType="MessageRegistryFile.v1_0_0.MessageRegistryFile" />
+        <EntitySet Name="MessageRegistryFileCollection" EntityType="MessageRegistryFileCollection.MessageRegistryFileCollection" />
+        <EntitySet Name="JsonSchemas" EntityType="JsonSchemaFile.v1_0_0.JsonSchemaFile" />
+        <EntitySet Name="JsonSchemaFileCollection" EntityType="JsonSchemaFileCollection.JsonSchemaFileCollection" />
+        <EntitySet Name="AccountService" EntityType="AccountService.v1_0_0.AccountService" />
+        <EntitySet Name="Accounts" EntityType="AccountService.v1_0_0.ManagerAccount" />
+        <EntitySet Name="ManagerAccountCollection" EntityType="ManagerAccountCollection.ManagerAccountCollection" />
+        <EntitySet Name="Roles" EntityType="AccountService.v1_0_0.Role" />
+        <EntitySet Name="RoleCollection" EntityType="RoleCollection.RoleCollection" />
+        <EntitySet Name="EventService" EntityType="EventService.v1_0_0.EventService" />
+        <EntitySet Name="TaskService" EntityType="TaskService.v1_0_0.TaskService" />
+        <EntitySet Name="Tasks" EntityType="TaskService.v1_0_0.Task" />
+        <EntitySet Name="TaskCollection" EntityType="TaskCollection.TaskCollection" />
       </EntityContainer>
     </Schema>
   </edmx:DataServices>

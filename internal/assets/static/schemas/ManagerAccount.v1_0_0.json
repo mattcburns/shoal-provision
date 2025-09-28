@@ -1,0 +1,36 @@
+{
+  "$id": "ManagerAccount.v1_0_0.json",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ManagerAccount",
+  "type": "object",
+  "properties": {
+    "@odata.context": {
+      "type": "string"
+    },
+    "@odata.id": {
+      "type": "string",
+      "format": "uri"
+    },
+    "@odata.type": {
+      "type": "string",
+      "const": "#ManagerAccount.v1_0_0.ManagerAccount"
+    },
+    "Id": {
+      "type": "string"
+    },
+    "Name": {
+      "type": "string"
+    },
+    "UserName": {
+      "type": "string"
+    },
+    "RoleId": {
+      "type": "string"
+    },
+    "Enabled": {
+      "type": "boolean"
+    }
+  },
+  "required": ["@odata.type", "@odata.id", "Id", "Name", "UserName"],
+  "additionalProperties": true
+}

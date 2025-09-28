@@ -1,0 +1,38 @@
+{
+  "$id": "MessageRegistryFile.v1_0_0.json",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "MessageRegistryFile",
+  "type": "object",
+  "properties": {
+    "@odata.context": {
+      "type": "string"
+    },
+    "@odata.id": {
+      "type": "string",
+      "format": "uri"
+    },
+    "@odata.type": {
+      "type": "string"
+    },
+    "Id": {
+      "type": "string"
+    },
+    "Name": {
+      "type": "string"
+    },
+    "Language": {
+      "type": "string"
+    },
+    "RegistryPrefix": {
+      "type": "string"
+    },
+    "RegistryVersion": {
+      "type": "string"
+    },
+    "OwningEntity": {
+      "type": "string"
+    }
+  },
+  "required": ["Id", "Name"],
+  "additionalProperties": true
+}
