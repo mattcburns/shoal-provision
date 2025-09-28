@@ -1,0 +1,15 @@
+{
+  "Id": "Base",
+  "Name": "Base Message Registry (Shoal minimal)",
+  "Language": "en",
+  "OwningEntity": "DMTF",
+  "RegistryPrefix": "Base",
+  "RegistryVersion": "1.0.0",
+  "Messages": {
+    "GeneralError": {"Message": "A general error has occurred. See ExtendedInfo for more information.", "NumberOfArgs": 0, "Resolution": "See ExtendedInfo for more information.", "Severity": "Critical"},
+    "ResourceNotFound": {"Message": "The resource was not found.", "NumberOfArgs": 1, "Resolution": "Provide a valid resource and resubmit the request.", "Severity": "Warning"},
+    "MethodNotAllowed": {"Message": "The HTTP method is not allowed on the resource.", "NumberOfArgs": 0, "Resolution": "Change the method and resubmit the request.", "Severity": "Warning"},
+    "Unauthorized": {"Message": "The request requires user authentication.", "NumberOfArgs": 0, "Resolution": "Provide valid credentials and resubmit the request.", "Severity": "Critical"},
+    "InsufficientPrivilege": {"Message": "The user does not have sufficient privilege to perform the requested operation.", "NumberOfArgs": 0, "Resolution": "Use an account with the required privilege or contact your administrator.", "Severity": "Critical"}
+  }
+}
