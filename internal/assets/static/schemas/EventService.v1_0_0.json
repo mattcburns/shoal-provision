@@ -1,0 +1,30 @@
+{
+  "$id": "EventService.v1_0_0.json",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "EventService",
+  "type": "object",
+  "properties": {
+    "@odata.context": {
+      "type": "string"
+    },
+    "@odata.id": {
+      "type": "string",
+      "format": "uri"
+    },
+    "@odata.type": {
+      "type": "string",
+      "const": "#EventService.v1_0_0.EventService"
+    },
+    "Id": {
+      "type": "string"
+    },
+    "Name": {
+      "type": "string"
+    },
+    "ServiceEnabled": {
+      "type": "boolean"
+    }
+  },
+  "required": ["@odata.type", "@odata.id", "Id", "Name"],
+  "additionalProperties": true
+}

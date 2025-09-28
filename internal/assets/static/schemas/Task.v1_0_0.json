@@ -1,0 +1,30 @@
+{
+  "$id": "Task.v1_0_0.json",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Task",
+  "type": "object",
+  "properties": {
+    "@odata.context": {
+      "type": "string"
+    },
+    "@odata.id": {
+      "type": "string",
+      "format": "uri"
+    },
+    "@odata.type": {
+      "type": "string",
+      "const": "#Task.v1_0_0.Task"
+    },
+    "Id": {
+      "type": "string"
+    },
+    "Name": {
+      "type": "string"
+    },
+    "TaskState": {
+      "type": "string"
+    }
+  },
+  "required": ["@odata.type", "@odata.id", "Id", "Name"],
+  "additionalProperties": true
+}

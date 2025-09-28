@@ -33,9 +33,15 @@ The API supports two authentication methods:
 - `GET /redfish/v1/Managers/{bmc-name}`: Proxy to a specific BMC manager.
 - `GET /redfish/v1/Systems/{bmc-name}`: Proxy to a specific system.
 - `GET /redfish/v1/SessionService`: Session service root.
- - `GET /redfish/v1/$metadata`: Minimal OData CSDL describing the service.
- - `GET /redfish/v1/Registries`: Message registries collection (includes Base).
- - `GET /redfish/v1/SchemaStore`: JSON Schema store root.
+
+### Protocol Compliance Endpoints (Phase 1)
+
+- `GET /redfish/v1/$metadata` (no auth): OData CSDL describing the service. Returns `Content-Type: application/xml` and `OData-Version: 4.0` with strong `ETag` support.
+- `GET /redfish/v1/Registries` (auth required): Message registries collection (includes Base).
+  - `GET /redfish/v1/Registries/Base` (auth required): Base registry file (en locale).
+  - `GET /redfish/v1/Registries/Base/Base.json` (auth required): Explicit locale path.
+- `GET /redfish/v1/SchemaStore` (auth required): JSON Schema store root enumerating embedded schemas.
+  - `GET /redfish/v1/SchemaStore/{SchemaName}.vX_Y_Z.json` (auth required): Individual schema file.
 
 ### Caching and ETags
 
@@ -47,6 +53,29 @@ Shoal includes HTTP ETag support for static Redfish assets to improve client-sid
 
 Responses include an `ETag` header. Clients may send `If-None-Match` with the previously received ETag to receive `304 Not Modified` when content has not changed. ETags are strong validators derived from the content hash.
 
+Examples:
+
+```bash
+# $metadata (no auth)
+curl -i http://localhost:8080/redfish/v1/$metadata
+
+# Registries (requires session token)
+curl -s -X POST http://localhost:8080/redfish/v1/SessionService/Sessions \
+  -H 'Content-Type: application/json' \
+  -d '{"UserName":"admin","Password":"admin"}' | jq -r '. | .@odata.id' >/dev/null
+TOKEN=$(curl -s -X POST http://localhost:8080/redfish/v1/SessionService/Sessions \
+  -H 'Content-Type: application/json' \
+  -d '{"UserName":"admin","Password":"admin"}' -D - 2>/dev/null | awk '/X-Auth-Token:/ {print $2}' | tr -d '\r')
+curl -i -H "X-Auth-Token: $TOKEN" http://localhost:8080/redfish/v1/Registries/Base
+
+# Conditional GET using ETag
+ETAG=$(curl -sI -H "X-Auth-Token: $TOKEN" http://localhost:8080/redfish/v1/Registries/Base | awk -F': ' '/^ETag:/ {print $2}' | tr -d '\r')
+curl -i -H "X-Auth-Token: $TOKEN" -H "If-None-Match: $ETAG" http://localhost:8080/redfish/v1/Registries/Base
+
+# Schema file
+curl -i -H "X-Auth-Token: $TOKEN" http://localhost:8080/redfish/v1/SchemaStore/ServiceRoot.v1_5_0.json
+```
+
 ### OPTIONS and Allow
 
 Shoal advertises supported HTTP methods via OPTIONS with the `Allow` header on key resources. Examples:
@@ -57,6 +86,34 @@ Shoal advertises supported HTTP methods via OPTIONS with the `Allow` header on k
 - `OPTIONS /redfish/v1/SessionService/Sessions` → `Allow: GET, POST` (accessible without auth)
 
 All Redfish JSON responses include `OData-Version: 4.0`.
+
+### Error Responses and Message Registries
+
+Shoal returns Redfish-compliant error envelopes that include `@Message.ExtendedInfo`. The `MessageId` values map to entries in the Base Message Registry, allowing clients to correlate errors with standardized messages.
+
+- Example `MessageId` values: `Base.1.0.Unauthorized`, `Base.1.0.MethodNotAllowed`, `Base.1.0.ResourceNotFound`, `Base.1.0.InsufficientPrivilege`, `Base.1.0.GeneralError`.
+- The Base registry is available at `/redfish/v1/Registries/Base` (and `/redfish/v1/Registries/Base/Base.json`).
+- 401 responses also include `WWW-Authenticate: Basic realm="Redfish"`.
+
+Sample error payload:
+
+```json
+{
+  "error": {
+    "code": "Base.1.0.Unauthorized",
+    "message": "Authentication required",
+    "@Message.ExtendedInfo": [
+      {
+        "@odata.type": "#Message.v1_1_0.Message",
+        "MessageId": "Base.1.0.Unauthorized",
+        "Message": "Authentication required",
+        "Severity": "Critical",
+        "Resolution": "Provide valid credentials and resubmit the request."
+      }
+    ]
+  }
+}
+```
 
 ## Settings Discovery
 

@@ -1,0 +1,48 @@
+{
+  "$id": "ConnectionMethod.v1_0_0.json",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ConnectionMethod",
+  "type": "object",
+  "definitions": {
+    "ConnectionMethodVariant": {
+      "type": "object",
+      "properties": {
+        "@odata.type": {
+          "type": "string"
+        },
+        "Address": {
+          "type": "string"
+        }
+      },
+      "required": ["Address"],
+      "additionalProperties": true
+    }
+  },
+  "properties": {
+    "@odata.context": {
+      "type": "string"
+    },
+    "@odata.id": {
+      "type": "string",
+      "format": "uri"
+    },
+    "@odata.type": {
+      "type": "string",
+      "const": "#ConnectionMethod.v1_0_0.ConnectionMethod"
+    },
+    "Id": {
+      "type": "string"
+    },
+    "Name": {
+      "type": "string"
+    },
+    "ConnectionMethodType": {
+      "type": "string"
+    },
+    "ConnectionMethodVariant": {
+      "$ref": "#/definitions/ConnectionMethodVariant"
+    }
+  },
+  "required": ["@odata.type", "@odata.id", "Id", "Name"],
+  "additionalProperties": true
+}

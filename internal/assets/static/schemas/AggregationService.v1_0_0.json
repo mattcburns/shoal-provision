@@ -1,0 +1,59 @@
+{
+  "$id": "AggregationService.v1_0_0.json",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "AggregationService",
+  "type": "object",
+  "definitions": {
+    "ODataId": {
+      "type": "object",
+      "properties": {
+        "@odata.id": {
+          "type": "string",
+          "format": "uri"
+        }
+      },
+      "required": ["@odata.id"],
+      "additionalProperties": false
+    },
+    "ConnectionMethodVariant": {
+      "type": "object",
+      "properties": {
+        "@odata.type": {
+          "type": "string"
+        },
+        "Address": {
+          "type": "string"
+        }
+      },
+      "required": ["Address"],
+      "additionalProperties": true
+    }
+  },
+  "properties": {
+    "@odata.context": {
+      "type": "string"
+    },
+    "@odata.id": {
+      "type": "string",
+      "format": "uri"
+    },
+    "@odata.type": {
+      "type": "string",
+      "const": "#AggregationService.v1_0_0.AggregationService"
+    },
+    "Id": {
+      "type": "string"
+    },
+    "Name": {
+      "type": "string"
+    },
+    "Description": {
+      "type": "string"
+    },
+    "ConnectionMethods": {
+      "$ref": "#/definitions/ODataId"
+    }
+  },
+  "required": ["@odata.type", "@odata.id", "Id", "Name"],
+  "additionalProperties": true
+}
