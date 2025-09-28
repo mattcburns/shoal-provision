@@ -757,7 +757,7 @@ func (h *Handler) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
 	}
 	// Check existing username
 	if existing, _ := h.db.GetUserByUsername(r.Context(), req.UserName); existing != nil {
-		h.writeErrorResponse(w, http.StatusConflict, "Base.1.0.GeneralError", "Username already exists")
+		h.writeErrorResponse(w, http.StatusConflict, "Base.1.0.ResourceCannotBeCreated", "Username already exists")
 		return
 	}
 	// Map role
@@ -830,7 +830,7 @@ func (h *Handler) handlePatchAccount(w http.ResponseWriter, r *http.Request, id 
 	if v, ok := patch["UserName"].(string); ok && strings.TrimSpace(v) != "" {
 		// Validate uniqueness
 		if existing, _ := h.db.GetUserByUsername(r.Context(), v); existing != nil && existing.ID != u.ID {
-			h.writeErrorResponse(w, http.StatusConflict, "Base.1.0.GeneralError", "Username already exists")
+			h.writeErrorResponse(w, http.StatusConflict, "Base.1.0.ResourceCannotBeCreated", "Username already exists")
 			return
 		}
 		u.Username = v
@@ -1445,18 +1445,22 @@ func (h *Handler) writeErrorResponse(w http.ResponseWriter, status int, code, me
 	}
 
 	// Map our code to a Base registry MessageId (best-effort)
+	validMessageIDs := map[string]struct{}{
+		"Base.1.0.GeneralError":            {},
+		"Base.1.0.ResourceNotFound":        {},
+		"Base.1.0.MethodNotAllowed":        {},
+		"Base.1.0.Unauthorized":            {},
+		"Base.1.0.InternalError":           {},
+		"Base.1.0.InsufficientPrivilege":   {},
+		"Base.1.0.MalformedJSON":           {},
+		"Base.1.0.PropertyMissing":         {},
+		"Base.1.0.PropertyValueNotInList":  {},
+		"Base.1.0.ResourceCannotBeCreated": {},
+		"Base.1.0.NotImplemented":          {},
+	}
 	messageID := "Base.1.0.GeneralError"
-	switch code {
-	case "Base.1.0.ResourceNotFound":
-		messageID = "Base.1.0.ResourceNotFound"
-	case "Base.1.0.MethodNotAllowed":
-		messageID = "Base.1.0.MethodNotAllowed"
-	case "Base.1.0.Unauthorized":
-		messageID = "Base.1.0.Unauthorized"
-	case "Base.1.0.InternalError":
-		messageID = "Base.1.0.GeneralError"
-	case "Base.1.0.InsufficientPrivilege":
-		messageID = "Base.1.0.InsufficientPrivilege"
+	if _, ok := validMessageIDs[code]; ok {
+		messageID = code
 	}
 	errorResp := map[string]interface{}{
 		"error": map[string]interface{}{
@@ -1500,6 +1504,20 @@ func resolutionForMessageID(msgID string) string {
 		return "Use an allowed HTTP method for the target resource and resubmit the request."
 	case "Base.1.0.Unauthorized":
 		return "Provide valid credentials and resubmit the request."
+	case "Base.1.0.InsufficientPrivilege":
+		return "Resubmit the request using an account with the required privileges."
+	case "Base.1.0.MalformedJSON":
+		return "Correct the JSON payload formatting and resubmit the request."
+	case "Base.1.0.PropertyMissing":
+		return "Include all required properties in the request and resubmit."
+	case "Base.1.0.PropertyValueNotInList":
+		return "Use a supported value for the property and resubmit the request."
+	case "Base.1.0.ResourceCannotBeCreated":
+		return "Verify the request data and permissions, correct any issues, and resubmit."
+	case "Base.1.0.NotImplemented":
+		return "Remove the unsupported operation from the request or await a future implementation."
+	case "Base.1.0.InternalError":
+		fallthrough
 	default:
 		return "Retry the operation; if the problem persists, contact the service provider."
 	}

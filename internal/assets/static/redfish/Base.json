@@ -45,6 +45,54 @@
       "NumberOfArgs": 0,
       "Resolution": "Resubmit the request using an account with the required privileges.",
       "MessageSeverity": "Critical"
+    },
+    "MalformedJSON": {
+      "Description": "The JSON payload was malformed.",
+      "Message": "The request body contained malformed JSON and could not be parsed.",
+      "Severity": "Warning",
+      "NumberOfArgs": 0,
+      "Resolution": "Correct the JSON payload formatting and resubmit the request.",
+      "MessageSeverity": "Warning"
+    },
+    "PropertyMissing": {
+      "Description": "A required property was missing from the request payload.",
+      "Message": "A required property is missing from the request payload.",
+      "Severity": "Warning",
+      "NumberOfArgs": 0,
+      "Resolution": "Include all required properties in the request and resubmit.",
+      "MessageSeverity": "Warning"
+    },
+    "PropertyValueNotInList": {
+      "Description": "The value provided for a property is not in the allowed list of values.",
+      "Message": "The value for the property is not in the list of acceptable values.",
+      "Severity": "Warning",
+      "NumberOfArgs": 0,
+      "Resolution": "Use one of the documented allowed values for the property and resubmit the request.",
+      "MessageSeverity": "Warning"
+    },
+    "ResourceCannotBeCreated": {
+      "Description": "The resource could not be created.",
+      "Message": "The service was unable to create the resource with the supplied data.",
+      "Severity": "Critical",
+      "NumberOfArgs": 0,
+      "Resolution": "Verify the request data and permissions, correct any issues, and resubmit the request.",
+      "MessageSeverity": "Critical"
+    },
+    "NotImplemented": {
+      "Description": "The requested operation is not implemented by the service.",
+      "Message": "The operation is not implemented by the service.",
+      "Severity": "Warning",
+      "NumberOfArgs": 0,
+      "Resolution": "Remove the unsupported operation from the request or await a future implementation.",
+      "MessageSeverity": "Warning"
+    },
+    "InternalError": {
+      "Description": "An internal error occurred while processing the request.",
+      "Message": "The service detected an internal error while processing the request.",
+      "Severity": "Critical",
+      "NumberOfArgs": 0,
+      "Resolution": "Retry the operation; if the problem persists, contact the service provider.",
+      "MessageSeverity": "Critical"
     }
   }
 }
