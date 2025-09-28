@@ -44,3 +44,31 @@ func TestMetadataEndpoint(t *testing.T) {
 		t.Fatalf("expected non-empty metadata body")
 	}
 }
+
+func TestMetadataETagConditionalGet(t *testing.T) {
+	handler, db := setupTestAPI(t)
+	defer func() { _ = db.Close() }()
+
+	// First request to get ETag
+	req1 := httptest.NewRequest(http.MethodGet, "/redfish/v1/$metadata", nil)
+	rec1 := httptest.NewRecorder()
+	handler.ServeHTTP(rec1, req1)
+
+	if rec1.Code != http.StatusOK {
+		t.Fatalf("expected 200 from $metadata, got %d", rec1.Code)
+	}
+	etag := rec1.Header().Get("ETag")
+	if etag == "" {
+		t.Fatalf("expected ETag header on first response")
+	}
+
+	// Second request with If-None-Match should yield 304
+	req2 := httptest.NewRequest(http.MethodGet, "/redfish/v1/$metadata", nil)
+	req2.Header.Set("If-None-Match", etag)
+	rec2 := httptest.NewRecorder()
+	handler.ServeHTTP(rec2, req2)
+
+	if rec2.Code != http.StatusNotModified {
+		t.Fatalf("expected 304 Not Modified when ETag matches, got %d", rec2.Code)
+	}
+}
