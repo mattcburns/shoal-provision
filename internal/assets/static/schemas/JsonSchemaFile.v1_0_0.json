@@ -12,7 +12,8 @@
       "format": "uri"
     },
     "@odata.type": {
-      "type": "string"
+      "type": "string",
+      "const": "#JsonSchemaFile.v1_0_0.JsonSchemaFile"
     },
     "Id": {
       "type": "string"
@@ -24,6 +25,6 @@
       "type": "string"
     }
   },
-  "required": ["Id", "Name"],
+  "required": ["@odata.type", "Id", "Name"],
   "additionalProperties": true
 }

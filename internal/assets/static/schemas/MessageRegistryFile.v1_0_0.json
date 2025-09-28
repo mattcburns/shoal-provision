@@ -12,7 +12,8 @@
       "format": "uri"
     },
     "@odata.type": {
-      "type": "string"
+      "type": "string",
+      "const": "#MessageRegistryFile.v1_0_0.MessageRegistryFile"
     },
     "Id": {
       "type": "string"
@@ -33,6 +34,6 @@
       "type": "string"
     }
   },
-  "required": ["Id", "Name"],
+  "required": ["@odata.type", "Id", "Name"],
   "additionalProperties": true
 }
