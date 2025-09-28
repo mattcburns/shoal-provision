@@ -18,11 +18,14 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"shoal/pkg/models"
 )
 
 func TestOptionsServiceRoot(t *testing.T) {
@@ -123,6 +126,62 @@ func TestOptionsSessionService(t *testing.T) {
 	for _, m := range []string{http.MethodGet, http.MethodPost} {
 		if !strings.Contains(allow, m) {
 			t.Fatalf("expected Allow to contain %s; got %q", m, allow)
+		}
+	}
+}
+
+func TestOptionsAggregationServiceConnectionMethods(t *testing.T) {
+	handler, db := setupTestAPI(t)
+	defer func() { _ = db.Close() }()
+
+	body, _ := json.Marshal(map[string]string{"UserName": "admin", "Password": "admin"})
+	req := httptest.NewRequest(http.MethodPost, "/redfish/v1/SessionService/Sessions", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("login failed: %d", rec.Code)
+	}
+	token := rec.Header().Get("X-Auth-Token")
+
+	method := &models.ConnectionMethod{
+		ID:                   "cm-options",
+		Name:                 "Options Method",
+		ConnectionMethodType: "Redfish",
+		Address:              "https://bmc-options.example.com",
+		Username:             "admin",
+		Password:             "secret",
+		Enabled:              true,
+	}
+	if err := db.CreateConnectionMethod(context.Background(), method); err != nil {
+		t.Fatalf("failed to seed connection method: %v", err)
+	}
+
+	req = httptest.NewRequest(http.MethodOptions, "/redfish/v1/AggregationService/ConnectionMethods", nil)
+	req.Header.Set("X-Auth-Token", token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("expected 204 OPTIONS on collection, got %d", rec.Code)
+	}
+	allow := rec.Header().Get("Allow")
+	for _, m := range []string{http.MethodGet, http.MethodPost} {
+		if !strings.Contains(allow, m) {
+			t.Fatalf("expected Allow header to include %s; got %q", m, allow)
+		}
+	}
+
+	req = httptest.NewRequest(http.MethodOptions, "/redfish/v1/AggregationService/ConnectionMethods/"+method.ID, nil)
+	req.Header.Set("X-Auth-Token", token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("expected 204 OPTIONS on resource, got %d", rec.Code)
+	}
+	allow = rec.Header().Get("Allow")
+	for _, m := range []string{http.MethodGet, http.MethodDelete} {
+		if !strings.Contains(allow, m) {
+			t.Fatalf("expected Allow header to include %s; got %q", m, allow)
 		}
 	}
 }

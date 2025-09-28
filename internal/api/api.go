@@ -28,7 +28,9 @@ import (
 	"log/slog"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
+	"time"
 
 	"shoal/internal/assets"
 	"shoal/internal/auth"
@@ -54,6 +56,11 @@ var validMessageIDs = map[string]struct{}{
 	"Base.1.0.ResourceCannotBeCreated": {},
 	"Base.1.0.NotImplemented":          {},
 }
+
+// Common error messages
+const (
+	errorUsernameAlreadyExists = "Username already exists"
+)
 
 // Handler implements the Redfish API endpoints
 type Handler struct {
@@ -220,7 +227,7 @@ func (h *Handler) handleRegistriesCollection(w http.ResponseWriter, r *http.Requ
 	// Discover embedded registry files under redfish/ directory
 	staticFS := assets.GetStaticFS()
 	var members []redfish.ODataIDRef
-	_ = fs.WalkDir(staticFS, ".", func(path string, d fs.DirEntry, err error) error {
+	if err := fs.WalkDir(staticFS, ".", func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
@@ -235,7 +242,10 @@ func (h *Handler) handleRegistriesCollection(w http.ResponseWriter, r *http.Requ
 			}
 		}
 		return nil
-	})
+	}); err != nil {
+		slog.Error("Failed to walk registries directory", "error", err)
+		// Continue with empty members list rather than failing the request
+	}
 	coll := redfish.Collection{
 		ODataContext: "/redfish/v1/$metadata#MessageRegistryFileCollection.MessageRegistryFileCollection",
 		ODataID:      "/redfish/v1/Registries",
@@ -316,7 +326,7 @@ func (h *Handler) handleSchemaStoreRoot(w http.ResponseWriter, r *http.Request) 
 	// Discover embedded JSON schemas under schemas/ if present
 	staticFS := assets.GetStaticFS()
 	var members []redfish.ODataIDRef
-	_ = fs.WalkDir(staticFS, ".", func(path string, d fs.DirEntry, err error) error {
+	if err := fs.WalkDir(staticFS, ".", func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
@@ -328,7 +338,10 @@ func (h *Handler) handleSchemaStoreRoot(w http.ResponseWriter, r *http.Request) 
 			members = append(members, redfish.ODataIDRef{ODataID: "/redfish/v1/SchemaStore/" + name})
 		}
 		return nil
-	})
+	}); err != nil {
+		slog.Error("Failed to walk schemas directory", "error", err)
+		// Continue with empty members list rather than failing the request
+	}
 	coll := redfish.Collection{
 		ODataContext: "/redfish/v1/$metadata#JsonSchemaFileCollection.JsonSchemaFileCollection",
 		ODataID:      "/redfish/v1/SchemaStore",
@@ -380,6 +393,21 @@ func computeETag(b []byte) string {
 	// Strong ETag: sha256 hex
 	sum := sha256Sum(b)
 	return "\"sha256-" + sum + "\""
+}
+
+func weakETag(parts ...string) string {
+	if len(parts) == 0 {
+		return "W/\"sha256-" + sha256Sum(nil) + "\""
+	}
+	joined := strings.Join(parts, "\x1f")
+	return "W/\"sha256-" + sha256Sum([]byte(joined)) + "\""
+}
+
+func formatTimeForETag(t time.Time) string {
+	if t.IsZero() {
+		return "0"
+	}
+	return t.UTC().Format(time.RFC3339Nano)
 }
 
 // weakMatch compares If-None-Match header to a generated ETag, handling weak validators
@@ -751,7 +779,13 @@ func (h *Handler) handleGetAccountsCollection(w http.ResponseWriter, r *http.Req
 		Members:      members,
 		MembersCount: len(members),
 	}
-	h.writeJSONResponse(w, http.StatusOK, coll)
+	etag := accountsCollectionETag(users)
+	if match := r.Header.Get("If-None-Match"); match != "" && ifNoneMatchMatches(match, etag) {
+		w.Header().Set("ETag", etag)
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+	h.writeJSONResponseWithETag(w, http.StatusOK, coll, etag)
 }
 
 // handleCreateAccount creates a new user account
@@ -772,7 +806,7 @@ func (h *Handler) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
 	}
 	// Check existing username
 	if existing, _ := h.db.GetUserByUsername(r.Context(), req.UserName); existing != nil {
-		h.writeErrorResponse(w, http.StatusConflict, "Base.1.0.ResourceCannotBeCreated", "Username already exists")
+		h.writeErrorResponse(w, http.StatusConflict, "Base.1.0.ResourceCannotBeCreated", errorUsernameAlreadyExists)
 		return
 	}
 	// Map role
@@ -811,8 +845,9 @@ func (h *Handler) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	resp := toRedfishAccount(user)
+	etag := accountETag(user)
 	w.Header().Set("Location", resp.ODataID)
-	h.writeJSONResponse(w, http.StatusCreated, resp)
+	h.writeJSONResponseWithETag(w, http.StatusCreated, resp, etag)
 }
 
 // handleGetAccount returns an individual account
@@ -827,7 +862,14 @@ func (h *Handler) handleGetAccount(w http.ResponseWriter, r *http.Request, id st
 		h.writeErrorResponse(w, http.StatusNotFound, "Base.1.0.ResourceNotFound", "Account not found")
 		return
 	}
-	h.writeJSONResponse(w, http.StatusOK, toRedfishAccount(u))
+	resp := toRedfishAccount(u)
+	etag := accountETag(u)
+	if match := r.Header.Get("If-None-Match"); match != "" && ifNoneMatchMatches(match, etag) {
+		w.Header().Set("ETag", etag)
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+	h.writeJSONResponseWithETag(w, http.StatusOK, resp, etag)
 }
 
 // handlePatchAccount updates fields on an account
@@ -845,7 +887,7 @@ func (h *Handler) handlePatchAccount(w http.ResponseWriter, r *http.Request, id 
 	if v, ok := patch["UserName"].(string); ok && strings.TrimSpace(v) != "" {
 		// Validate uniqueness
 		if existing, _ := h.db.GetUserByUsername(r.Context(), v); existing != nil && existing.ID != u.ID {
-			h.writeErrorResponse(w, http.StatusConflict, "Base.1.0.ResourceCannotBeCreated", "Username already exists")
+			h.writeErrorResponse(w, http.StatusConflict, "Base.1.0.ResourceCannotBeCreated", errorUsernameAlreadyExists)
 			return
 		}
 		u.Username = v
@@ -878,7 +920,14 @@ func (h *Handler) handlePatchAccount(w http.ResponseWriter, r *http.Request, id 
 		h.writeErrorResponse(w, http.StatusInternalServerError, "Base.1.0.InternalError", "Failed to update account")
 		return
 	}
-	h.writeJSONResponse(w, http.StatusOK, toRedfishAccount(u))
+	updated, err := h.db.GetUser(r.Context(), id)
+	if err != nil || updated == nil {
+		h.writeErrorResponse(w, http.StatusInternalServerError, "Base.1.0.InternalError", "Failed to reload account")
+		return
+	}
+	resp := toRedfishAccount(updated)
+	etag := accountETag(updated)
+	h.writeJSONResponseWithETag(w, http.StatusOK, resp, etag)
 }
 
 // handleDeleteAccount deletes a user account
@@ -1213,12 +1262,25 @@ func (h *Handler) handleSystemsCollection(w http.ResponseWriter, r *http.Request
 
 // writeJSONResponse writes a JSON response
 func (h *Handler) writeJSONResponse(w http.ResponseWriter, status int, data interface{}) {
+	h.writeJSONResponseWithETag(w, status, data, "")
+}
+
+// writeJSONResponseWithETag writes JSON while emitting an optional ETag header
+func (h *Handler) writeJSONResponseWithETag(w http.ResponseWriter, status int, data interface{}, etag string) {
+	body, err := json.Marshal(data)
+	if err != nil {
+		slog.Error("Failed to marshal JSON response", "error", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+	if etag != "" {
+		w.Header().Set("ETag", etag)
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("OData-Version", "4.0")
 	w.WriteHeader(status)
-
-	if err := json.NewEncoder(w).Encode(data); err != nil {
-		slog.Error("Failed to encode JSON response", "error", err)
+	if _, err := w.Write(body); err != nil {
+		slog.Warn("Failed to write JSON response body", "error", err)
 	}
 }
 
@@ -1333,7 +1395,13 @@ func (h *Handler) handleConnectionMethodsCollection(w http.ResponseWriter, r *ht
 			MembersCount: len(members),
 		}
 
-		h.writeJSONResponse(w, http.StatusOK, collection)
+		etag := connectionMethodsCollectionETag(methods)
+		if match := r.Header.Get("If-None-Match"); match != "" && ifNoneMatchMatches(match, etag) {
+			w.Header().Set("ETag", etag)
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		h.writeJSONResponseWithETag(w, http.StatusOK, collection, etag)
 
 	case "POST":
 		// Create a new connection method
@@ -1395,8 +1463,9 @@ func (h *Handler) handleConnectionMethodsCollection(w http.ResponseWriter, r *ht
 			},
 		}
 
+		etag := connectionMethodETag(method)
 		w.Header().Set("Location", fmt.Sprintf("/redfish/v1/AggregationService/ConnectionMethods/%s", method.ID))
-		h.writeJSONResponse(w, http.StatusCreated, connMethod)
+		h.writeJSONResponseWithETag(w, http.StatusCreated, connMethod, etag)
 
 	default:
 		h.writeErrorResponse(w, http.StatusMethodNotAllowed, "Base.1.0.MethodNotAllowed", "Method not allowed")
@@ -1435,7 +1504,13 @@ func (h *Handler) handleConnectionMethod(w http.ResponseWriter, r *http.Request,
 			},
 		}
 
-		h.writeJSONResponse(w, http.StatusOK, connMethod)
+		etag := connectionMethodETag(method)
+		if match := r.Header.Get("If-None-Match"); match != "" && ifNoneMatchMatches(match, etag) {
+			w.Header().Set("ETag", etag)
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		h.writeJSONResponseWithETag(w, http.StatusOK, connMethod, etag)
 
 	case "DELETE":
 		err := h.bmcSvc.RemoveConnectionMethod(r.Context(), id)
@@ -1450,6 +1525,59 @@ func (h *Handler) handleConnectionMethod(w http.ResponseWriter, r *http.Request,
 	default:
 		h.writeErrorResponse(w, http.StatusMethodNotAllowed, "Base.1.0.MethodNotAllowed", "Method not allowed")
 	}
+}
+
+func accountETag(u *models.User) string {
+	stamp := u.UpdatedAt
+	if stamp.IsZero() {
+		stamp = u.CreatedAt
+	}
+	return weakETag(
+		"account",
+		u.ID,
+		formatTimeForETag(stamp),
+		u.Username,
+		u.Role,
+		strconv.FormatBool(u.Enabled),
+	)
+}
+
+func accountsCollectionETag(users []models.User) string {
+	parts := []string{"accounts"}
+	for _, u := range users {
+		stamp := u.UpdatedAt
+		if stamp.IsZero() {
+			stamp = u.CreatedAt
+		}
+		parts = append(parts,
+			u.ID,
+			formatTimeForETag(stamp),
+			u.Username,
+			u.Role,
+			strconv.FormatBool(u.Enabled),
+		)
+	}
+	return weakETag(parts...)
+}
+
+func connectionMethodETag(m *models.ConnectionMethod) string {
+	stamp := m.UpdatedAt
+	if stamp.IsZero() {
+		stamp = m.CreatedAt
+	}
+	return weakETag("connection-method", m.ID, formatTimeForETag(stamp), strconv.FormatBool(m.Enabled), m.Name)
+}
+
+func connectionMethodsCollectionETag(methods []models.ConnectionMethod) string {
+	parts := []string{"connection-methods"}
+	for _, m := range methods {
+		stamp := m.UpdatedAt
+		if stamp.IsZero() {
+			stamp = m.CreatedAt
+		}
+		parts = append(parts, m.ID, formatTimeForETag(stamp))
+	}
+	return weakETag(parts...)
 }
 
 // writeErrorResponse writes a Redfish-compliant error response

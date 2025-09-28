@@ -40,18 +40,22 @@ The API supports two authentication methods:
 - `GET /redfish/v1/Registries` (auth required): Message registries collection (includes Base).
   - `GET /redfish/v1/Registries/Base` (auth required): Base registry file (en locale).
   - `GET /redfish/v1/Registries/Base/Base.json` (auth required): Explicit locale path.
-- `GET /redfish/v1/SchemaStore` (auth required): JSON Schema store root enumerating embedded schemas.
+- `GET /redfish/v1/SchemaStore` (auth required): JSON Schema store root enumerating embedded schemas. Shoal embeds the minimal set required by the Redfish Service Validator, including `ServiceRoot`, `AccountService`, `ManagerAccount`, `Role`, `SessionService`, `Session`, `AggregationService`, `ConnectionMethod`, `EventService`, `TaskService`, and the `Message.v1_1_0` schema referenced by `@Message.ExtendedInfo`.
   - `GET /redfish/v1/SchemaStore/{SchemaName}.vX_Y_Z.json` (auth required): Individual schema file.
 
 ### Caching and ETags
 
-Shoal includes HTTP ETag support for static Redfish assets to improve client-side caching:
+Shoal includes HTTP ETag support for both static Redfish assets and mutable resources to improve client-side caching:
 
 - `GET /redfish/v1/$metadata`
 - `GET /redfish/v1/Registries/{name}[/{file}]` (e.g., Base)
 - `GET /redfish/v1/SchemaStore/{path}.json`
+- `GET /redfish/v1/AccountService/Accounts`
+- `GET /redfish/v1/AccountService/Accounts/{id}`
+- `GET /redfish/v1/AggregationService/ConnectionMethods`
+- `GET /redfish/v1/AggregationService/ConnectionMethods/{id}`
 
-Responses include an `ETag` header. Clients may send `If-None-Match` with the previously received ETag to receive `304 Not Modified` when content has not changed. ETags are strong validators derived from the content hash.
+Static documents use strong validators derived from the exact content hash, while Accounts and ConnectionMethods emit weak validators that change whenever the underlying record is updated. Clients may send `If-None-Match` with the previously received ETag to receive `304 Not Modified` when content has not changed.
 
 Examples:
 

@@ -180,6 +180,7 @@ func TestSchemaStoreETagConditionalGet(t *testing.T) {
 	if !ok || len(membersAny) == 0 {
 		t.Fatalf("expected SchemaStore to list at least one schema, got %v", coll["Members"])
 	}
+	foundMessageSchema := false
 	first, ok := membersAny[0].(map[string]any)
 	if !ok {
 		t.Fatalf("expected Members to contain objects, got %T", membersAny[0])
@@ -190,6 +191,20 @@ func TestSchemaStoreETagConditionalGet(t *testing.T) {
 	}
 	if !strings.HasPrefix(schemaPath, "/redfish/v1/SchemaStore/") {
 		t.Fatalf("unexpected schema member path %q", schemaPath)
+	}
+	for _, member := range membersAny {
+		mObj, ok := member.(map[string]any)
+		if !ok {
+			continue
+		}
+		path, _ := mObj["@odata.id"].(string)
+		if strings.HasSuffix(path, "/Message.v1_1_0.json") {
+			foundMessageSchema = true
+			break
+		}
+	}
+	if !foundMessageSchema {
+		t.Fatalf("expected SchemaStore to include Message.v1_1_0.json; members=%v", coll["Members"])
 	}
 
 	// Fetch schema file

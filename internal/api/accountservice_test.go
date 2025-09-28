@@ -351,3 +351,115 @@ func extractFirstExtendedInfo(t *testing.T, errResp map[string]any) map[string]a
 	}
 	return first
 }
+
+func TestAccountServiceETags(t *testing.T) {
+	handler, db := setupTestAPI(t)
+	defer func() { _ = db.Close() }()
+
+	adminToken := loginAndGetToken(t, handler, "admin", "admin")
+
+	req := httptest.NewRequest(http.MethodGet, "/redfish/v1/AccountService/Accounts", nil)
+	req.Header.Set("X-Auth-Token", adminToken)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 from accounts collection, got %d", rec.Code)
+	}
+	collectionETag := rec.Header().Get("ETag")
+	if collectionETag == "" {
+		t.Fatalf("expected ETag header on accounts collection response")
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/redfish/v1/AccountService/Accounts", nil)
+	req.Header.Set("X-Auth-Token", adminToken)
+	req.Header.Set("If-None-Match", collectionETag)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotModified {
+		t.Fatalf("expected 304 when collection ETag matches, got %d", rec.Code)
+	}
+
+	createBody, _ := json.Marshal(map[string]any{
+		"UserName": "etag-user",
+		"Password": "etag-pass",
+		"RoleId":   "Operator",
+	})
+	req = httptest.NewRequest(http.MethodPost, "/redfish/v1/AccountService/Accounts", bytes.NewReader(createBody))
+	req.Header.Set("X-Auth-Token", adminToken)
+	req.Header.Set("Content-Type", "application/json")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201 on account creation, got %d", rec.Code)
+	}
+	var created map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatalf("failed to parse created account: %v", err)
+	}
+	accountID, _ := created["Id"].(string)
+
+	req = httptest.NewRequest(http.MethodGet, "/redfish/v1/AccountService/Accounts", nil)
+	req.Header.Set("X-Auth-Token", adminToken)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 after adding account, got %d", rec.Code)
+	}
+	newCollectionETag := rec.Header().Get("ETag")
+	if newCollectionETag == collectionETag {
+		t.Fatalf("expected collection ETag to change after modification")
+	}
+
+	resourceURL := "/redfish/v1/AccountService/Accounts/" + accountID
+	req = httptest.NewRequest(http.MethodGet, resourceURL, nil)
+	req.Header.Set("X-Auth-Token", adminToken)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 when reading account, got %d", rec.Code)
+	}
+	accountETag := rec.Header().Get("ETag")
+	if accountETag == "" {
+		t.Fatalf("expected ETag header on account resource")
+	}
+
+	req = httptest.NewRequest(http.MethodGet, resourceURL, nil)
+	req.Header.Set("X-Auth-Token", adminToken)
+	req.Header.Set("If-None-Match", accountETag)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotModified {
+		t.Fatalf("expected 304 when resource ETag matches, got %d", rec.Code)
+	}
+
+	patchBody, _ := json.Marshal(map[string]any{
+		"Enabled": false,
+	})
+	req = httptest.NewRequest(http.MethodPatch, resourceURL, bytes.NewReader(patchBody))
+	req.Header.Set("X-Auth-Token", adminToken)
+	req.Header.Set("Content-Type", "application/json")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 from patch, got %d", rec.Code)
+	}
+	updatedETag := rec.Header().Get("ETag")
+	if updatedETag == "" {
+		t.Fatalf("expected ETag header on patch response")
+	}
+	if updatedETag == accountETag {
+		t.Fatalf("expected account ETag to change after patch")
+	}
+
+	req = httptest.NewRequest(http.MethodGet, resourceURL, nil)
+	req.Header.Set("X-Auth-Token", adminToken)
+	req.Header.Set("If-None-Match", accountETag)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 when using stale ETag, got %d", rec.Code)
+	}
+	if got := rec.Header().Get("ETag"); got != updatedETag {
+		t.Fatalf("expected latest ETag in response, got %q want %q", got, updatedETag)
+	}
+}
