@@ -40,6 +40,21 @@ import (
 	"shoal/pkg/redfish"
 )
 
+// validMessageIDs contains the set of valid Base message registry IDs
+var validMessageIDs = map[string]struct{}{
+	"Base.1.0.GeneralError":            {},
+	"Base.1.0.ResourceNotFound":        {},
+	"Base.1.0.MethodNotAllowed":        {},
+	"Base.1.0.Unauthorized":            {},
+	"Base.1.0.InternalError":           {},
+	"Base.1.0.InsufficientPrivilege":   {},
+	"Base.1.0.MalformedJSON":           {},
+	"Base.1.0.PropertyMissing":         {},
+	"Base.1.0.PropertyValueNotInList":  {},
+	"Base.1.0.ResourceCannotBeCreated": {},
+	"Base.1.0.NotImplemented":          {},
+}
+
 // Handler implements the Redfish API endpoints
 type Handler struct {
 	db     *database.DB
@@ -1445,19 +1460,6 @@ func (h *Handler) writeErrorResponse(w http.ResponseWriter, status int, code, me
 	}
 
 	// Map our code to a Base registry MessageId (best-effort)
-	validMessageIDs := map[string]struct{}{
-		"Base.1.0.GeneralError":            {},
-		"Base.1.0.ResourceNotFound":        {},
-		"Base.1.0.MethodNotAllowed":        {},
-		"Base.1.0.Unauthorized":            {},
-		"Base.1.0.InternalError":           {},
-		"Base.1.0.InsufficientPrivilege":   {},
-		"Base.1.0.MalformedJSON":           {},
-		"Base.1.0.PropertyMissing":         {},
-		"Base.1.0.PropertyValueNotInList":  {},
-		"Base.1.0.ResourceCannotBeCreated": {},
-		"Base.1.0.NotImplemented":          {},
-	}
 	messageID := "Base.1.0.GeneralError"
 	if _, ok := validMessageIDs[code]; ok {
 		messageID = code
