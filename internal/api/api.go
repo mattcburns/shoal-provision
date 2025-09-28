@@ -149,22 +149,28 @@ func (h *Handler) handleMetadata(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/xml")
 	w.Header().Set("OData-Version", "4.0")
-	// Minimal CSDL skeleton aligning to entities we expose; to be replaced with embedded DMTF schemas.
+	// Try to serve embedded metadata.xml from assets; fallback to minimal shell
+	staticFS := assets.GetStaticFS()
+	if data, err := fs.ReadFile(staticFS, "metadata.xml"); err == nil {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(data)
+		return
+	}
+	// Fallback minimal CSDL skeleton aligning to entities we expose
 	const csdl = `<?xml version="1.0" encoding="UTF-8"?>
 <edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
-  <edmx:DataServices>
-	<Schema Namespace="ServiceRoot" xmlns="http://docs.oasis-open.org/odata/ns/edm">
-	  <EntityType Name="ServiceRoot">
-		<Key><PropertyRef Name="Id"/></Key>
-		<Property Name="Id" Type="Edm.String" Nullable="false"/>
-	  </EntityType>
-	  <EntityContainer Name="ServiceContainer">
-		<EntitySet Name="ServiceRoot" EntityType="ServiceRoot.ServiceRoot"/>
-	  </EntityContainer>
-	</Schema>
-  </edmx:DataServices>
+	<edmx:DataServices>
+		<Schema Namespace="ServiceRoot" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+			<EntityType Name="ServiceRoot">
+				<Key><PropertyRef Name="Id"/></Key>
+				<Property Name="Id" Type="Edm.String" Nullable="false"/>
+			</EntityType>
+			<EntityContainer Name="ServiceContainer">
+				<EntitySet Name="ServiceRoot" EntityType="ServiceRoot.ServiceRoot"/>
+			</EntityContainer>
+		</Schema>
+	</edmx:DataServices>
 </edmx:Edmx>`
-	// Write raw XML (bypass JSON writer)
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte(csdl))
 }
