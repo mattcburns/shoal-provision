@@ -91,7 +91,7 @@ All Redfish JSON responses include `OData-Version: 4.0`.
 
 Shoal returns Redfish-compliant error envelopes that include `@Message.ExtendedInfo`. The `MessageId` values map to entries in the Base Message Registry, allowing clients to correlate errors with standardized messages.
 
-- Example `MessageId` values: `Base.1.0.Unauthorized`, `Base.1.0.MethodNotAllowed`, `Base.1.0.ResourceNotFound`, `Base.1.0.InsufficientPrivilege`, `Base.1.0.GeneralError`.
+- Example `MessageId` values: `Base.1.0.Unauthorized`, `Base.1.0.MethodNotAllowed`, `Base.1.0.ResourceNotFound`, `Base.1.0.InsufficientPrivilege`, `Base.1.0.MalformedJSON`, `Base.1.0.PropertyMissing`, `Base.1.0.PropertyValueNotInList`, `Base.1.0.ResourceCannotBeCreated`, `Base.1.0.NotImplemented`, `Base.1.0.InternalError`, and `Base.1.0.GeneralError`.
 - The Base registry is available at `/redfish/v1/Registries/Base` (and `/redfish/v1/Registries/Base/Base.json`).
 - 401 responses also include `WWW-Authenticate: Basic realm="Redfish"`.
 
@@ -114,6 +114,39 @@ Sample error payload:
   }
 }
 ```
+
+## Account Management (AccountService)
+
+Shoal now implements the Redfish AccountService for managing local user accounts.
+
+### Endpoints
+
+- `GET /redfish/v1/AccountService` (auth required): AccountService root with links to Accounts and Roles collections.
+- `GET /redfish/v1/AccountService/Accounts` (Admin only): List all local accounts.
+- `POST /redfish/v1/AccountService/Accounts` (Admin only): Create a new account. Provide `UserName`, `Password`, optional `Enabled` (default `true`), and `RoleId` (`Administrator`, `Operator`, or `ReadOnly`).
+- `GET /redfish/v1/AccountService/Accounts/{id}` (Admin only): Retrieve account details.
+- `PATCH /redfish/v1/AccountService/Accounts/{id}` (Admin only): Update `Enabled`, `RoleId`, or `Password`. Password updates are immediately hashed and stored securely.
+- `DELETE /redfish/v1/AccountService/Accounts/{id}` (Admin only): Remove a non-admin account.
+- `GET /redfish/v1/AccountService/Roles` (auth required): List available Redfish roles.
+- `GET /redfish/v1/AccountService/Roles/{roleId}` (auth required): Retrieve details for a specific role.
+
+### Role-Based Access Control
+
+- **Administrator**: Full control over all AccountService resources. Cannot be disabled or deleted via the API to prevent lockout.
+- **Operator**: Operational capabilities for BMC resources but no user management privileges.
+- **ReadOnly**: View-only access to Redfish resources; no mutation privileges.
+
+Account collection and resource mutations are blocked for non-admin users and return `403 Forbidden` with `Base.1.0.InsufficientPrivilege`. All AccountService endpoints require a valid session or basic authentication.
+
+### Validation and Error Messaging
+
+- Missing required fields return `400 Bad Request` with `Base.1.0.PropertyMissing`.
+- Invalid role selections return `400 Bad Request` with `Base.1.0.PropertyValueNotInList`.
+- Malformed JSON payloads return `400 Bad Request` with `Base.1.0.MalformedJSON`.
+- Attempting to create a duplicate username returns `409 Conflict` with `Base.1.0.ResourceCannotBeCreated`.
+- Operations that are not yet implemented respond with `Base.1.0.NotImplemented`.
+
+Refer to the Base message registry for full descriptions and recommended resolutions.
 
 ## Settings Discovery
 

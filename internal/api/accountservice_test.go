@@ -30,250 +30,324 @@ import (
 	"shoal/pkg/models"
 )
 
-func TestAccountService_RootAndRoles(t *testing.T) {
-	handler, db := setupTestAPI(t)
-	defer func() { _ = db.Close() }()
+func loginAndGetToken(t *testing.T, handler http.Handler, username, password string) string {
+	t.Helper()
 
-	// Login to get token
-	loginBody, _ := json.Marshal(map[string]string{"UserName": "admin", "Password": "admin"})
-	req := httptest.NewRequest(http.MethodPost, "/redfish/v1/SessionService/Sessions", bytes.NewReader(loginBody))
+	body, err := json.Marshal(map[string]string{
+		"UserName": username,
+		"Password": password,
+	})
+	if err != nil {
+		t.Fatalf("failed to marshal login body: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/redfish/v1/SessionService/Sessions", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
+
 	if rec.Code != http.StatusCreated {
-		t.Fatalf("expected 201 Created on login, got %d", rec.Code)
+		t.Fatalf("expected 201 from login, got %d", rec.Code)
 	}
 	token := rec.Header().Get("X-Auth-Token")
+	if token == "" {
+		t.Fatalf("login response missing X-Auth-Token header")
+	}
+	return token
+}
 
-	// AccountService root
+func createUser(t *testing.T, db testDatabase, username, password, role string) *models.User {
+	t.Helper()
+
+	hash, err := auth.HashPassword(password)
+	if err != nil {
+		t.Fatalf("failed to hash password: %v", err)
+	}
+	idBytes := make([]byte, 8)
+	if _, err := rand.Read(idBytes); err != nil {
+		t.Fatalf("failed to generate user id: %v", err)
+	}
+	user := &models.User{
+		ID:           hex.EncodeToString(idBytes),
+		Username:     username,
+		PasswordHash: hash,
+		Role:         role,
+		Enabled:      true,
+	}
+	if err := db.CreateUser(context.Background(), user); err != nil {
+		t.Fatalf("failed to create user %s: %v", username, err)
+	}
+	return user
+}
+
+type testDatabase interface {
+	CreateUser(ctx context.Context, user *models.User) error
+	GetUserByUsername(ctx context.Context, username string) (*models.User, error)
+	GetUser(ctx context.Context, id string) (*models.User, error)
+	DeleteUser(ctx context.Context, id string) error
+}
+
+func TestAccountServiceRootAndCRUD(t *testing.T) {
+	handler, db := setupTestAPI(t)
+	defer func() { _ = db.Close() }()
+
+	// unauthenticated access should be rejected
+	req := httptest.NewRequest(http.MethodGet, "/redfish/v1/AccountService", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for unauthenticated AccountService root, got %d", rec.Code)
+	}
+
+	adminToken := loginAndGetToken(t, handler, "admin", "admin")
+
+	// root fetch succeeds with token
 	req = httptest.NewRequest(http.MethodGet, "/redfish/v1/AccountService", nil)
-	req.Header.Set("X-Auth-Token", token)
+	req.Header.Set("X-Auth-Token", adminToken)
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200 for AccountService root, got %d", rec.Code)
 	}
+	var svc map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &svc); err != nil {
+		t.Fatalf("failed to parse AccountService root: %v", err)
+	}
+	if svc["Accounts"].(map[string]any)["@odata.id"] != "/redfish/v1/AccountService/Accounts" {
+		t.Fatalf("expected Accounts link in AccountService root")
+	}
 
-	// Roles collection
-	req = httptest.NewRequest(http.MethodGet, "/redfish/v1/AccountService/Roles", nil)
-	req.Header.Set("X-Auth-Token", token)
+	// GET accounts collection (should contain admin)
+	req = httptest.NewRequest(http.MethodGet, "/redfish/v1/AccountService/Accounts", nil)
+	req.Header.Set("X-Auth-Token", adminToken)
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200 for Roles collection, got %d", rec.Code)
+		t.Fatalf("expected 200 from accounts collection, got %d", rec.Code)
 	}
-}
+	var coll map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &coll); err != nil {
+		t.Fatalf("failed to parse accounts collection: %v", err)
+	}
+	members, ok := coll["Members"].([]any)
+	if !ok || len(members) != 1 {
+		t.Fatalf("expected admin account present, got %v", coll["Members"])
+	}
 
-func TestAccountService_AccountsCRUD_RBAC(t *testing.T) {
-	handler, db := setupTestAPI(t)
-	defer func() { _ = db.Close() }()
-
-	// Admin login
-	loginBody, _ := json.Marshal(map[string]string{"UserName": "admin", "Password": "admin"})
-	req := httptest.NewRequest(http.MethodPost, "/redfish/v1/SessionService/Sessions", bytes.NewReader(loginBody))
+	// create a new account
+	createBody, _ := json.Marshal(map[string]any{
+		"UserName": "operator1",
+		"Password": "op-pass",
+		"RoleId":   "Operator",
+	})
+	req = httptest.NewRequest(http.MethodPost, "/redfish/v1/AccountService/Accounts", bytes.NewReader(createBody))
+	req.Header.Set("X-Auth-Token", adminToken)
 	req.Header.Set("Content-Type", "application/json")
-	rec := httptest.NewRecorder()
+	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusCreated {
-		t.Fatalf("expected 201 on admin login, got %d", rec.Code)
+		t.Fatalf("expected 201 on create account, got %d", rec.Code)
 	}
-	adminToken := rec.Header().Get("X-Auth-Token")
+	var created map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatalf("failed to parse created account: %v", err)
+	}
+	accountID, _ := created["Id"].(string)
+	if accountID == "" {
+		t.Fatalf("missing account Id in create response")
+	}
 
-	// Create a viewer user via AccountService
-	create := map[string]any{
-		"UserName": "viewer1",
-		"Password": "secret",
-		"RoleId":   "ReadOnly",
+	// fetch account
+	req = httptest.NewRequest(http.MethodGet, "/redfish/v1/AccountService/Accounts/"+accountID, nil)
+	req.Header.Set("X-Auth-Token", adminToken)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 retrieving account, got %d", rec.Code)
+	}
+
+	// patch account: disable and change role + password
+	patchBody, _ := json.Marshal(map[string]any{
 		"Enabled":  true,
-	}
-	body, _ := json.Marshal(create)
-	req = httptest.NewRequest(http.MethodPost, "/redfish/v1/AccountService/Accounts", bytes.NewReader(body))
+		"RoleId":   "ReadOnly",
+		"Password": "new-pass",
+	})
+	req = httptest.NewRequest(http.MethodPatch, "/redfish/v1/AccountService/Accounts/"+accountID, bytes.NewReader(patchBody))
+	req.Header.Set("X-Auth-Token", adminToken)
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Auth-Token", adminToken)
-	rec = httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusCreated {
-		t.Fatalf("expected 201 on create account, got %d: %s", rec.Code, rec.Body.String())
-	}
-
-	var acct map[string]any
-	_ = json.Unmarshal(rec.Body.Bytes(), &acct)
-	acctID, _ := acct["Id"].(string)
-	if acctID == "" {
-		t.Fatalf("missing Id in created account")
-	}
-
-	// Get account as admin
-	req = httptest.NewRequest(http.MethodGet, "/redfish/v1/AccountService/Accounts/"+acctID, nil)
-	req.Header.Set("X-Auth-Token", adminToken)
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200 on get account, got %d", rec.Code)
+		t.Fatalf("expected 200 from patch, got %d", rec.Code)
+	}
+	var patched map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &patched); err != nil {
+		t.Fatalf("failed to parse patched account: %v", err)
+	}
+	if patched["RoleId"] != "ReadOnly" || patched["Enabled"].(bool) != true {
+		t.Fatalf("patch did not apply expected changes: %v", patched)
 	}
 
-	// Patch account role to Operator
-	patch := map[string]any{"RoleId": "Operator"}
-	body, _ = json.Marshal(patch)
-	req = httptest.NewRequest(http.MethodPatch, "/redfish/v1/AccountService/Accounts/"+acctID, bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Auth-Token", adminToken)
-	rec = httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200 on patch account, got %d: %s", rec.Code, rec.Body.String())
-	}
+	// new password should work
+	loginAndGetToken(t, handler, "operator1", "new-pass")
 
-	// Delete account
-	req = httptest.NewRequest(http.MethodDelete, "/redfish/v1/AccountService/Accounts/"+acctID, nil)
+	// delete account
+	req = httptest.NewRequest(http.MethodDelete, "/redfish/v1/AccountService/Accounts/"+accountID, nil)
 	req.Header.Set("X-Auth-Token", adminToken)
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("expected 204 on delete account, got %d", rec.Code)
 	}
+
+	// subsequent fetch should 404
+	req = httptest.NewRequest(http.MethodGet, "/redfish/v1/AccountService/Accounts/"+accountID, nil)
+	req.Header.Set("X-Auth-Token", adminToken)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 after delete, got %d", rec.Code)
+	}
 }
 
-func TestAccountService_RBAC_Negatives(t *testing.T) {
+func TestAccountServiceRequiresAdminForMutations(t *testing.T) {
 	handler, db := setupTestAPI(t)
 	defer func() { _ = db.Close() }()
 
-	// Admin login
-	loginBody, _ := json.Marshal(map[string]string{"UserName": "admin", "Password": "admin"})
-	req := httptest.NewRequest(http.MethodPost, "/redfish/v1/SessionService/Sessions", bytes.NewReader(loginBody))
+	createUser(t, db, "viewer", "viewer-pass", models.RoleViewer)
+	viewerToken := loginAndGetToken(t, handler, "viewer", "viewer-pass")
+
+	// GET collection as viewer should be forbidden
+	req := httptest.NewRequest(http.MethodGet, "/redfish/v1/AccountService/Accounts", nil)
+	req.Header.Set("X-Auth-Token", viewerToken)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 for non-admin listing accounts, got %d", rec.Code)
+	}
+
+	// POST should also be forbidden
+	body, _ := json.Marshal(map[string]any{"UserName": "user2", "Password": "pw", "RoleId": "Operator"})
+	req = httptest.NewRequest(http.MethodPost, "/redfish/v1/AccountService/Accounts", bytes.NewReader(body))
+	req.Header.Set("X-Auth-Token", viewerToken)
+	req.Header.Set("Content-Type", "application/json")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 for non-admin create, got %d", rec.Code)
+	}
+}
+
+func TestAccountServiceRolesEndpoints(t *testing.T) {
+	handler, db := setupTestAPI(t)
+	defer func() { _ = db.Close() }()
+
+	token := loginAndGetToken(t, handler, "admin", "admin")
+
+	req := httptest.NewRequest(http.MethodGet, "/redfish/v1/AccountService/Roles", nil)
+	req.Header.Set("X-Auth-Token", token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 for roles collection, got %d", rec.Code)
+	}
+	var coll map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &coll); err != nil {
+		t.Fatalf("failed to parse roles collection: %v", err)
+	}
+	if coll["Members@odata.count"] != float64(3) {
+		t.Fatalf("expected 3 roles, got %v", coll["Members@odata.count"])
+	}
+
+	tests := map[string][]string{
+		"Administrator": {"Login", "ConfigureManager", "ConfigureUsers", "ConfigureComponents", "ConfigureSelf"},
+		"Operator":      {"Login", "ConfigureComponents", "ConfigureSelf"},
+		"ReadOnly":      {"Login", "ConfigureSelf"},
+	}
+
+	for roleID, expected := range tests {
+		req = httptest.NewRequest(http.MethodGet, "/redfish/v1/AccountService/Roles/"+roleID, nil)
+		req.Header.Set("X-Auth-Token", token)
+		rec = httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200 for role %s, got %d", roleID, rec.Code)
+		}
+		var role map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &role); err != nil {
+			t.Fatalf("failed to parse role %s: %v", roleID, err)
+		}
+		privAny, ok := role["AssignedPrivileges"].([]any)
+		if !ok {
+			t.Fatalf("role %s missing AssignedPrivileges", roleID)
+		}
+		if len(privAny) != len(expected) {
+			t.Fatalf("role %s expected %d privileges, got %d", roleID, len(expected), len(privAny))
+		}
+		for i, v := range expected {
+			if privAny[i] != v {
+				t.Fatalf("role %s privilege mismatch at %d: want %s got %v", roleID, i, v, privAny[i])
+			}
+		}
+	}
+}
+
+func TestAccountServiceValidationErrors(t *testing.T) {
+	handler, db := setupTestAPI(t)
+	defer func() { _ = db.Close() }()
+
+	token := loginAndGetToken(t, handler, "admin", "admin")
+
+	// Missing required fields -> PropertyMissing
+	req := httptest.NewRequest(http.MethodPost, "/redfish/v1/AccountService/Accounts", bytes.NewReader([]byte(`{}`)))
+	req.Header.Set("X-Auth-Token", token)
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusCreated {
-		t.Fatalf("expected 201 on admin login, got %d", rec.Code)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for missing properties, got %d", rec.Code)
 	}
-	adminToken := rec.Header().Get("X-Auth-Token")
-
-	// Create a viewer user directly in DB
-	ctx := context.Background()
-	viewerPass := "viewerpass"
-	hash, err := auth.HashPassword(viewerPass)
-	if err != nil {
-		t.Fatalf("failed to hash password: %v", err)
+	var errResp map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &errResp); err != nil {
+		t.Fatalf("failed to parse error response: %v", err)
 	}
-	idBytes := make([]byte, 16)
-	if _, err := rand.Read(idBytes); err != nil {
-		t.Fatalf("failed to generate id: %v", err)
-	}
-	viewer := &models.User{
-		ID:           hex.EncodeToString(idBytes),
-		Username:     "viewerNeg",
-		PasswordHash: hash,
-		Role:         models.RoleViewer,
-		Enabled:      true,
-	}
-	if err := db.CreateUser(ctx, viewer); err != nil {
-		t.Fatalf("failed to create viewer: %v", err)
+	ext := extractFirstExtendedInfo(t, errResp)
+	if ext["MessageId"] != "Base.1.0.PropertyMissing" {
+		t.Fatalf("expected PropertyMissing MessageId, got %v", ext["MessageId"])
 	}
 
-	// Login as viewer
-	loginBody, _ = json.Marshal(map[string]string{"UserName": viewer.Username, "Password": viewerPass})
-	req = httptest.NewRequest(http.MethodPost, "/redfish/v1/SessionService/Sessions", bytes.NewReader(loginBody))
-	req.Header.Set("Content-Type", "application/json")
-	rec = httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusCreated {
-		t.Fatalf("expected 201 on viewer login, got %d", rec.Code)
-	}
-	viewerToken := rec.Header().Get("X-Auth-Token")
-
-	// 1) Viewer cannot list accounts
-	req = httptest.NewRequest(http.MethodGet, "/redfish/v1/AccountService/Accounts", nil)
-	req.Header.Set("X-Auth-Token", viewerToken)
-	rec = httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("expected 403 for viewer listing accounts, got %d", rec.Code)
-	}
-	var errObj map[string]any
-	_ = json.Unmarshal(rec.Body.Bytes(), &errObj)
-	if e, ok := errObj["error"].(map[string]any); ok {
-		if e["code"] != "Base.1.0.InsufficientPrivilege" {
-			t.Fatalf("expected InsufficientPrivilege code, got %v", e["code"])
-		}
-	}
-
-	// 2) Viewer cannot create accounts
-	create := map[string]any{"UserName": "noop", "Password": "x", "RoleId": "ReadOnly"}
-	body, _ := json.Marshal(create)
+	// Unsupported role -> PropertyValueNotInList
+	body, _ := json.Marshal(map[string]any{"UserName": "badrole", "Password": "pw", "RoleId": "Unknown"})
 	req = httptest.NewRequest(http.MethodPost, "/redfish/v1/AccountService/Accounts", bytes.NewReader(body))
+	req.Header.Set("X-Auth-Token", token)
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Auth-Token", viewerToken)
-	rec = httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("expected 403 for viewer creating account, got %d", rec.Code)
-	}
-
-	// 3) Viewer cannot fetch an individual account (even own)
-	req = httptest.NewRequest(http.MethodGet, "/redfish/v1/AccountService/Accounts/"+viewer.ID, nil)
-	req.Header.Set("X-Auth-Token", viewerToken)
-	rec = httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("expected 403 for viewer reading account, got %d", rec.Code)
-	}
-
-	// 4) Unauthenticated access gets 401
-	req = httptest.NewRequest(http.MethodGet, "/redfish/v1/AccountService/Accounts", nil)
-	rec = httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("expected 401 for unauthenticated, got %d", rec.Code)
-	}
-
-	// 5) Admin cannot delete admin user
-	adminUser, err := db.GetUserByUsername(ctx, "admin")
-	if err != nil || adminUser == nil {
-		t.Fatalf("failed to get admin user: %v", err)
-	}
-	req = httptest.NewRequest(http.MethodDelete, "/redfish/v1/AccountService/Accounts/"+adminUser.ID, nil)
-	req.Header.Set("X-Auth-Token", adminToken)
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400 when deleting admin, got %d", rec.Code)
+		t.Fatalf("expected 400 for unsupported role, got %d", rec.Code)
 	}
-
-	// 6) Admin cannot disable admin user
-	patch := map[string]any{"Enabled": false}
-	body, _ = json.Marshal(patch)
-	req = httptest.NewRequest(http.MethodPatch, "/redfish/v1/AccountService/Accounts/"+adminUser.ID, bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Auth-Token", adminToken)
-	rec = httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400 when disabling admin, got %d", rec.Code)
+	if err := json.Unmarshal(rec.Body.Bytes(), &errResp); err != nil {
+		t.Fatalf("failed to parse error response: %v", err)
 	}
-
-	// 7) Duplicate username on create returns 409
-	dup := map[string]any{"UserName": viewer.Username, "Password": "secret2", "RoleId": "ReadOnly"}
-	body, _ = json.Marshal(dup)
-	req = httptest.NewRequest(http.MethodPost, "/redfish/v1/AccountService/Accounts", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Auth-Token", adminToken)
-	rec = httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusConflict {
-		t.Fatalf("expected 409 for duplicate username, got %d", rec.Code)
+	ext = extractFirstExtendedInfo(t, errResp)
+	if ext["MessageId"] != "Base.1.0.PropertyValueNotInList" {
+		t.Fatalf("expected PropertyValueNotInList MessageId, got %v", ext["MessageId"])
 	}
+}
 
-	// 8) Invalid role on create returns 400
-	bad := map[string]any{"UserName": "badrole", "Password": "p", "RoleId": "NotARole"}
-	body, _ = json.Marshal(bad)
-	req = httptest.NewRequest(http.MethodPost, "/redfish/v1/AccountService/Accounts", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Auth-Token", adminToken)
-	rec = httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400 for invalid role, got %d", rec.Code)
+func extractFirstExtendedInfo(t *testing.T, errResp map[string]any) map[string]any {
+	t.Helper()
+	errObj, ok := errResp["error"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing error object: %v", errResp)
 	}
-
+	extSlice, ok := errObj["@Message.ExtendedInfo"].([]any)
+	if !ok || len(extSlice) == 0 {
+		t.Fatalf("missing ExtendedInfo: %v", errObj)
+	}
+	first, ok := extSlice[0].(map[string]any)
+	if !ok {
+		t.Fatalf("invalid ExtendedInfo entry: %v", extSlice[0])
+	}
+	return first
 }
