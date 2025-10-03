@@ -335,7 +335,7 @@ func (br *BuildRunner) RunTests(withCoverage bool) bool {
 				}
 
 				// Generate HTML coverage report
-				br.runCommand("go", []string{"tool", "cover", "-html=coverage.out", "-o", "coverage.html"}, "", false)
+				_, _, _, _ = br.runCommand("go", []string{"tool", "cover", "-html=coverage.out", "-o", "coverage.html"}, "", false)
 				if _, err := os.Stat(filepath.Join(br.rootDir, "coverage.html")); err == nil {
 					br.printSuccess("Coverage report generated: coverage.html")
 				}
@@ -604,7 +604,9 @@ func (br *BuildRunner) GenerateBuildInfo() *BuildInfo {
 	// Write build info to file
 	buildInfoPath := filepath.Join(br.buildDir, "build-info.json")
 	if data, err := json.MarshalIndent(buildInfo, "", "  "); err == nil {
-		os.WriteFile(buildInfoPath, data, 0644)
+		if err := os.WriteFile(buildInfoPath, data, 0644); err != nil {
+			br.printWarning(fmt.Sprintf("Failed to write build info: %v", err))
+		}
 	}
 
 	return buildInfo
