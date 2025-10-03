@@ -1,13 +1,13 @@
 # Use the official Golang image as a base image.
 # The version should ideally match the one used in the project.
-FROM golang:1.23
+FROM golang:1.25
 
 # Set up a non-root user for security.
 # The 'vscode' user is a standard for dev containers.
 RUN useradd -ms /bin/bash vscode
 
 # Install git, which is required for 'go mod' and other development tasks.
-RUN apt-get update && apt-get install -y --no-install-recommends git python3 && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
 
 # Switch to the non-root user.
 USER vscode

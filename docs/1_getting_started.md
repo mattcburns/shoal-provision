@@ -4,7 +4,7 @@ This guide covers how to build and run Shoal from source.
 
 ## Prerequisites
 
-- Go 1.23 or later
+- Go 1.25 or later
 - Network access to BMCs you want to manage
 
 ## Building

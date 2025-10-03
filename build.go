@@ -30,6 +30,7 @@ Usage:
     go run build.go deps              # Check and download dependencies
     go run build.go validate          # Full validation pipeline
     go run build.go build-all         # Build for all platforms
+    go run build.go install-tools     # Install golangci-lint and gosec
     go run build.go build --platform linux/amd64  # Build for specific platform
 */
 
@@ -469,6 +470,78 @@ func (br *BuildRunner) BuildAllPlatforms() bool {
 	return allOk
 }
 
+// InstallTools installs development tools (golangci-lint and gosec)
+func (br *BuildRunner) InstallTools() bool {
+	br.printHeader("Installing Development Tools")
+
+	tools := []struct {
+		name    string
+		pkg     string
+		version string
+		check   []string
+	}{
+		{
+			name:    "golangci-lint",
+			pkg:     "github.com/golangci/golangci-lint/cmd/golangci-lint",
+			version: "latest",
+			check:   []string{"golangci-lint", "--version"},
+		},
+		{
+			name:    "gosec",
+			pkg:     "github.com/securego/gosec/v2/cmd/gosec",
+			version: "latest",
+			check:   []string{"gosec", "-version"},
+		},
+	}
+
+	allOk := true
+	for _, tool := range tools {
+		br.printStep(fmt.Sprintf("Installing %s", tool.name))
+
+		// Check if already installed
+		exitCode, stdout, _, err := br.runCommand(tool.check[0], tool.check[1:], "", false)
+		if err == nil && exitCode == 0 {
+			version := strings.TrimSpace(strings.Split(stdout, "\n")[0])
+			br.printSuccess(fmt.Sprintf("%s already installed: %s", tool.name, version))
+			continue
+		}
+
+		// Install the tool
+		installPkg := fmt.Sprintf("%s@%s", tool.pkg, tool.version)
+		br.printStep(fmt.Sprintf("Running: go install %s", installPkg))
+
+		exitCode, _, stderr, _ := br.runCommand("go", []string{"install", installPkg}, "", false)
+		if exitCode != 0 {
+			br.printError(fmt.Sprintf("Failed to install %s", tool.name))
+			if stderr != "" {
+				fmt.Printf("Error: %s\n", stderr)
+			}
+			allOk = false
+			continue
+		}
+
+		// Verify installation
+		exitCode, stdout, _, err = br.runCommand(tool.check[0], tool.check[1:], "", false)
+		if err == nil && exitCode == 0 {
+			version := strings.TrimSpace(strings.Split(stdout, "\n")[0])
+			br.printSuccess(fmt.Sprintf("Successfully installed %s: %s", tool.name, version))
+		} else {
+			br.printWarning(fmt.Sprintf("%s installed but not found in PATH. You may need to add $GOPATH/bin or $HOME/go/bin to your PATH.", tool.name))
+			allOk = false
+		}
+	}
+
+	if allOk {
+		fmt.Println()
+		br.printSuccess("All development tools are installed and ready to use!")
+	} else {
+		fmt.Println()
+		br.printWarning("Some tools were not installed successfully. Check the output above for details.")
+	}
+
+	return allOk
+}
+
 // RunSecurityChecks runs security analysis if tools are available
 func (br *BuildRunner) RunSecurityChecks() bool {
 	br.printStep("Running security checks")
@@ -601,20 +674,21 @@ func main() {
 
 	// Validate command
 	validCommands := map[string]bool{
-		"build":     true,
-		"test":      true,
-		"clean":     true,
-		"fmt":       true,
-		"lint":      true,
-		"coverage":  true,
-		"deps":      true,
-		"validate":  true,
-		"build-all": true,
+		"build":         true,
+		"test":          true,
+		"clean":         true,
+		"fmt":           true,
+		"lint":          true,
+		"coverage":      true,
+		"deps":          true,
+		"validate":      true,
+		"build-all":     true,
+		"install-tools": true,
 	}
 
 	if !validCommands[command] {
 		fmt.Fprintf(os.Stderr, "Invalid command: %s\n", command)
-		fmt.Fprintf(os.Stderr, "Valid commands: build, test, clean, fmt, lint, coverage, deps, validate, build-all\n")
+		fmt.Fprintf(os.Stderr, "Valid commands: build, test, clean, fmt, lint, coverage, deps, validate, build-all, install-tools\n")
 		os.Exit(1)
 	}
 
@@ -672,6 +746,9 @@ func main() {
 		success = runner.CheckPrerequisites() &&
 			runner.DownloadDependencies() &&
 			runner.BuildAllPlatforms()
+
+	case "install-tools":
+		success = runner.CheckPrerequisites() && runner.InstallTools()
 
 	case "validate":
 		success = runner.Validate()
