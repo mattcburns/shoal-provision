@@ -70,5 +70,5 @@ This feature will be accessible from the BMC Details page, providing a direct an
 - Submitting the form with a new profile name successfully creates a new profile and a new version containing the snapshot.
 - Submitting the form with an existing profile selected successfully creates a new version for that profile.
 - The user receives clear success or error feedback after the operation.
-- All existing tests, including the `build.py validate` pipeline, must pass.
+- All existing tests, including the `go run build.go validate` pipeline, must pass.
 - New JavaScript behavior should be tested manually or with new end-to-end tests if the framework is available.

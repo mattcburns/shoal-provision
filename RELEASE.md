@@ -16,7 +16,12 @@ git push origin v1.0.0
 ## What Happens
 
 The release workflow will:
-- Run full validation (`python build.py validate`)
+## Pre-Release Checklist
+
+- Ensure all planned features are implemented
+- Update documentation (README.md, DEPLOYMENT.md, etc.)
+- Update version in relevant files
+- Run full validation (`go run build.go validate`)
 - Build binaries for all platforms
 - Generate SHA256 checksums
 - Create GitHub release with binaries and release notes

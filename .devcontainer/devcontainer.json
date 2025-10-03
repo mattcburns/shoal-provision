@@ -18,6 +18,9 @@
 		}
 	},
 	"forwardPorts": [8080],
-	"postCreateCommand": "python3 build.py deps",
-	"remoteUser": "vscode"
+	"postCreateCommand": "go run build.go deps",
+	"remoteUser": "vscode",
+	"remoteEnv": {
+		"GOTOOLCHAIN": "auto"
+	}
 }

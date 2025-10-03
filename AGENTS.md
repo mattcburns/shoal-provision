@@ -1,5 +1,10 @@
 # Agent Protocol: Shoal Repository
 
+3.  **Ensure All Tests Pass:** Before you consider your task complete, you MUST run the full validation pipeline and ensure all tests pass.
+    ```bash
+    go run build.go validate
+    ```y
+
 **ATTENTION AI AGENT:** This document contains the official operating protocol for all AI-assisted development in the `shoal` repository. You are required to read, understand, and strictly adhere to these rules at all times. Failure to comply with these directives will result in corrective action.
 
 ## 1. CRITICAL: Non-Negotiable Core Directives
@@ -137,24 +142,24 @@ You MUST verify the license of any new dependency before adding it.
 
 This section outlines the commands you will use for development. These are not just informational; this is the required workflow.
 
-### 3.1. The Primary Tool: `build.py`
+### 3.1. The Primary Tool: `build.go`
 
-All build, test, and validation tasks are executed through the Python-based automation script `build.py`. You MUST use `python3` to run this script.
+All build, test, and validation tasks are executed through the Go-based automation script `build.go`. You can run it with `go run build.go`.
 
 ### 3.2. Standard Development Commands
 
--   **`python3 build.py validate`**: **This is the main command for development.** It runs the full validation pipeline (format, lint, test, build). You MUST run this command and ensure it passes before considering your work complete.
--   **`python3 build.py test`**: Runs the test suite.
--   **`python3 build.py coverage`**: Runs tests and generates an HTML coverage report. Use this to verify your new tests are increasing coverage.
--   **`python3 build.py build`**: Compiles the Go binary.
--   **`python3 build.py fmt`**: Formats all Go code.
--   **`python3 build.py lint`**: Runs static analysis.
+-   **`go run build.go validate`**: **This is the main command for development.** It runs the full validation pipeline (format, lint, test, build). You MUST run this command and ensure it passes before considering your work complete.
+-   **`go run build.go test`**: Runs the test suite.
+-   **`go run build.go coverage`**: Runs tests and generates an HTML coverage report. Use this to verify your new tests are increasing coverage.
+-   **`go run build.go build`**: Compiles the Go binary.
+-   **`go run build.go fmt`**: Formats all Go code.
+-   **`go run build.go lint`**: Runs static analysis.
 
 ### 3.3. Running the Application
 
 1.  First, build the binary:
     ```bash
-    python3 build.py build
+    go run build.go build
     ```
 2.  Then, run the application:
     -   `./build/shoal` (default settings)
@@ -202,11 +207,11 @@ Removal / retention guidelines:
 When updating this allowlist:
 1. Trim items that gain real production call sites (they will disappear from the deadcode output).
 2. Add justification inline so future agents do not reintroduce churn.
-3. Re-run `python3 build.py test` after any removals.
+3. Re-run `go run build.go test` after any removals.
 
 PR checklist for dead code sweeps:
 - [ ] Run deadcode tool
 - [ ] Classify each item (remove / unexport / keep+doc)
 - [ ] Update or confirm allowlist section
-- [ ] Ensure tests still pass (`python3 build.py validate`)
+- [ ] Ensure tests still pass (`go run build.go validate`)
 - [ ] Summarize changes in PR description referencing this section

@@ -5,7 +5,7 @@ on:
   push:
     tags:
       - 'v*'
-  
+
   # Allow manual release creation for testing
   workflow_dispatch:
     inputs:
@@ -30,26 +30,21 @@ jobs:
         with:
           fetch-depth: 0  # Fetch full history for proper release notes
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.23'  # Updated to match project requirements
+          go-version: '1.25'  # Updated to match project requirements
 
       - name: Validate code quality
         run: |
           echo "🔍 Running full validation pipeline..."
-          python build.py validate
+          go run build.go validate
 
       - name: Build all platform binaries
         id: build
         run: |
           echo "🏗️ Building binaries for all supported platforms..."
-          python build.py build-all
+          go run build.go build-all
           echo "artifact_path=build" >> $GITHUB_OUTPUT
 
       - name: Generate checksums
@@ -64,7 +59,7 @@ jobs:
         id: release-type
         run: |
           VERSION="${{ github.event.inputs.version || github.ref_name }}"
-          
+
           # Determine if this should be a prerelease
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             # Manual dispatch - use the checkbox input
@@ -76,7 +71,7 @@ jobs:
             # Regular release tag
             PRERELEASE="false"
           fi
-          
+
           echo "prerelease=$PRERELEASE" >> $GITHUB_OUTPUT
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "Release version: $VERSION"
@@ -86,15 +81,15 @@ jobs:
         id: release-notes
         run: |
           VERSION="${{ steps.release-type.outputs.version }}"
-          
+
           # Create release notes
           cat << EOF > release_notes.md
           ## Shoal $VERSION
-          
+
           ### 📦 Pre-built Binaries
-          
+
           This release includes pre-built binaries for multiple platforms:
-          
+
           | Platform | Architecture | Binary |
           |----------|--------------|--------|
           | Linux | x86_64 | \`shoal-linux-amd64\` |
@@ -102,29 +97,29 @@ jobs:
           | macOS | x86_64 | \`shoal-darwin-amd64\` |
           | macOS | ARM64 | \`shoal-darwin-arm64\` |
           | Windows | x86_64 | \`shoal-windows-amd64.exe\` |
-          
+
           ### 🔐 Security
-          
+
           - **SHA256 Checksums**: All binaries include SHA256 checksums in \`SHA256SUMS\`
           - **Verify downloads**: \`sha256sum -c SHA256SUMS\` (Linux/macOS) or check manually
-          
+
           ### 🚀 Installation
-          
+
           1. Download the appropriate binary for your platform
           2. Verify the checksum (recommended)
           3. Make executable: \`chmod +x shoal-*\` (Linux/macOS)
           4. Run: \`./shoal-linux-amd64 -port 8080\`
-          
+
           ### 📖 Documentation
-          
+
           For usage instructions, configuration options, and API documentation, see the [README.md](https://github.com/mattcburns/shoal/blob/master/README.md).
-          
+
           ---
-          
-          **Built from**: \`${{ github.sha }}\`  
+
+          **Built from**: \`${{ github.sha }}\`
           **Build Date**: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
           EOF
-          
+
           echo "Generated release notes:"
           cat release_notes.md
 
@@ -139,7 +134,7 @@ jobs:
             build/shoal-*
             build/SHA256SUMS
           token: ${{ secrets.GITHUB_TOKEN }}
-          
+
       - name: Release Summary
         run: |
           echo "✅ Release created successfully!"

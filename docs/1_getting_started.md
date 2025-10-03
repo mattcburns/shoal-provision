@@ -4,13 +4,12 @@ This guide covers how to build and run Shoal from source.
 
 ## Prerequisites
 
-- Go 1.23 or later
-- Python 3.7 or later (for build automation)
+- Go 1.25 or later
 - Network access to BMCs you want to manage
 
 ## Building
 
-Shoal uses a Python-based build automation system (`build.py`) for cross-platform development.
+Shoal uses a Go-based build automation system (`build.go`) for development and builds.
 
 ```bash
 # Clone the repository
@@ -19,10 +18,10 @@ cd shoal
 
 # Build using the automated build system (recommended)
 # This creates an optimized binary in the `build/` directory.
-python3 build.py build
+go run build.go build
 
 # Or run the full validation pipeline (formats, lints, tests, and builds)
-python3 build.py validate
+go run build.go validate
 ```
 
 ## Running
@@ -46,22 +45,37 @@ After building, you can run the application from the `build/` directory.
 
 ## Build Automation
 
-The `build.py` script handles all development and build tasks.
+The `build.go` script handles all development and build tasks.
 
 ### Available Commands
 
 ```bash
 # Full validation pipeline (recommended for development)
-python3 build.py validate
+go run build.go validate
 
 # Individual commands
-python3 build.py build      # Build binary only
-python3 build.py test       # Run tests only
-python3 build.py coverage   # Run tests with coverage reporting
-python3 build.py fmt        # Format Go code
-python3 build.py lint       # Run linting/static analysis
-python3 build.py deps       # Download and verify dependencies
-python3 build.py clean      # Clean build artifacts
+go run build.go build      # Build binary only
+go run build.go test       # Run tests only
+go run build.go coverage   # Run tests with coverage reporting
+go run build.go fmt        # Format Go code
+go run build.go lint       # Run linting/static analysis
+go run build.go deps       # Download and verify dependencies
+go run build.go clean      # Clean build artifacts
+go run build.go build-all  # Build for all supported platforms
+```
+
+### Cross-Platform Builds
+
+To build for a specific platform:
+
+```bash
+# Build for a specific platform (must be run before the command)
+go run build.go -platform linux/amd64 build
+go run build.go -platform windows/amd64 build
+go run build.go -platform darwin/arm64 build
+
+# Or build for all platforms at once
+go run build.go build-all
 ```
 
 ### Development Workflow
@@ -81,6 +95,8 @@ The `validate` command runs the complete development pipeline:
 
 After building, you'll find:
 - `build/shoal` - Optimized binary for the current platform (Linux/macOS) or `build/shoal.exe` (Windows)
+- `build/shoal-{os}-{arch}` - Platform-specific binaries (when using build-all)
 - `build/build-info.json` - Build metadata with Git info and timestamps
 - `coverage.out` - Test coverage data (if coverage command was used)
 - `coverage.html` - HTML coverage report (if coverage command was used)
+

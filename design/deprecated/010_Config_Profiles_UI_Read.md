@@ -73,5 +73,5 @@ The existing API already implies that functions to fetch profiles and their sub-
 - The profile detail page correctly displays the versions for that profile.
 - Clicking a version number navigates to `/profiles/{id}/versions/{version}`.
 - The version detail page correctly displays the settings captured in that version.
-- All existing tests, including the `build.py validate` pipeline, must pass.
+- All existing tests, including the `go run build.go validate` pipeline, must pass.
 - New tests should be added to cover the new handlers.
