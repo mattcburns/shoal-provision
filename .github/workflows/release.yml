@@ -30,11 +30,6 @@ jobs:
         with:
           fetch-depth: 0  # Fetch full history for proper release notes
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
@@ -43,13 +38,13 @@ jobs:
       - name: Validate code quality
         run: |
           echo "🔍 Running full validation pipeline..."
-          python build.py validate
+          go run build.go validate
 
       - name: Build all platform binaries
         id: build
         run: |
           echo "🏗️ Building binaries for all supported platforms..."
-          python build.py build-all
+          go run build.go build-all
           echo "artifact_path=build" >> $GITHUB_OUTPUT
 
       - name: Generate checksums

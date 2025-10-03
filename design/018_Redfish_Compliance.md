@@ -277,4 +277,4 @@ Done when:
 - Registries are served and `@Message.ExtendedInfo` references resolve.
 - `OData-Version` header present in JSON responses.
 - AccountService implemented with passing tests.
-- Full repo validation passes: `python3 build.py validate`.
+- Full repo validation passes: `go run build.go validate`.

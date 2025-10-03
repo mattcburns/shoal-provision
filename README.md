@@ -24,7 +24,7 @@ Shoal is a Go-based Redfish aggregator that discovers and manages multiple Baseb
 # Build from source
 git clone https://github.com/mattcburns/shoal.git
 cd shoal
-python3 build.py validate
+go run build.go validate
 ./build/shoal
 ```
 

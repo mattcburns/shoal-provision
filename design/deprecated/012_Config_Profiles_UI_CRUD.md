@@ -22,5 +22,5 @@ Build on 010/011 by adding full CRUD for Configuration Profiles in the web UI. U
 ## 4. Acceptance Criteria
 
 - All actions available via UI with appropriate auth.
-- New tests for UI handlers/forms; `python3 build.py validate` passes.
+- New tests for UI handlers/forms; `go run build.go validate` passes.
 - No changes to existing APIs; UI-only in this milestone.
