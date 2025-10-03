@@ -1,4 +1,6 @@
-# Agent Protocol: Shoal Repos3.  **Ensure All Tests Pass:** Before you consider your task complete, you MUST run the full validation pipeline and ensure all tests pass.
+# Agent Protocol: Shoal Repository
+
+3.  **Ensure All Tests Pass:** Before you consider your task complete, you MUST run the full validation pipeline and ensure all tests pass.
     ```bash
     go run build.go validate
     ```y

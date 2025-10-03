@@ -31,7 +31,7 @@ Usage:
     go run build.go validate          # Full validation pipeline
     go run build.go build-all         # Build for all platforms
     go run build.go install-tools     # Install golangci-lint and gosec
-    go run build.go build --platform linux/amd64  # Build for specific platform
+    go run build.go --platform linux/amd64 build  # Build for specific platform
 */
 
 package main
@@ -491,6 +491,12 @@ func (br *BuildRunner) InstallTools() bool {
 			pkg:     "github.com/securego/gosec/v2/cmd/gosec",
 			version: "latest",
 			check:   []string{"gosec", "-version"},
+		},
+		{
+			name:    "deadcode",
+			pkg:     "github.com/remyoudompheng/go-misc/deadcode",
+			version: "latest",
+			check:   []string{"deadcode", "-help"},
 		},
 	}
 
