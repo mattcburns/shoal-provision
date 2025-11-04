@@ -365,48 +365,6 @@ func sha256Sum(b []byte) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-// handleServiceRoot returns the Redfish service root
-func (h *Handler) handleServiceRoot(w http.ResponseWriter, r *http.Request) {
-	if r.Method == http.MethodOptions {
-		h.writeAllow(w, http.MethodGet)
-		return
-	}
-	if r.Method != "GET" {
-		h.writeErrorResponse(w, http.StatusMethodNotAllowed, "Base.1.0.MethodNotAllowed", "Method not allowed")
-		return
-	}
-
-	// Fetch or generate a stable service UUID
-	uuid, _ := h.db.EnsureServiceUUID(r.Context())
-	serviceRoot := redfish.ServiceRoot{
-		ODataContext:   "/redfish/v1/$metadata#ServiceRoot.ServiceRoot",
-		ODataID:        "/redfish/v1/",
-		ODataType:      "#ServiceRoot.v1_5_0.ServiceRoot",
-		ID:             "RootService",
-		Name:           "Shoal Redfish Aggregator",
-		RedfishVersion: "1.6.0",
-		UUID:           uuid,
-		Links: redfish.ServiceRootLinks{
-			Sessions: redfish.ODataIDRef{ODataID: "/redfish/v1/SessionService/Sessions"},
-		},
-		Systems:            redfish.ODataIDRef{ODataID: "/redfish/v1/Systems"},
-		Managers:           redfish.ODataIDRef{ODataID: "/redfish/v1/Managers"},
-		SessionService:     redfish.ODataIDRef{ODataID: "/redfish/v1/SessionService"},
-		AggregationService: &redfish.ODataIDRef{ODataID: "/redfish/v1/AggregationService"},
-	}
-
-	// Add compliance navigation links (will be implemented in Phase 1)
-	serviceRoot.Registries = &redfish.ODataIDRef{ODataID: "/redfish/v1/Registries"}
-	serviceRoot.JsonSchemas = &redfish.ODataIDRef{ODataID: "/redfish/v1/SchemaStore"}
-	// Phase 2 link
-	serviceRoot.AccountService = &redfish.ODataIDRef{ODataID: "/redfish/v1/AccountService"}
-	// Phase 3 links (stubs)
-	serviceRoot.EventService = &redfish.ODataIDRef{ODataID: "/redfish/v1/EventService"}
-	serviceRoot.TaskService = &redfish.ODataIDRef{ODataID: "/redfish/v1/TaskService"}
-
-	h.writeJSONResponse(w, http.StatusOK, serviceRoot)
-}
-
 // handleLogin creates a new session
 func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" {
