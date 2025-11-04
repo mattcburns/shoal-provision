@@ -163,7 +163,7 @@ func (h *Handler) handleRedfish(w http.ResponseWriter, r *http.Request) {
 // handleMetadata serves the OData $metadata CSDL. For Phase 1, return a minimal static shell.
 func (h *Handler) handleMetadata(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodOptions {
-		h.writeAllow(w, http.MethodGet)
+		rfWriteAllow(w, http.MethodGet)
 		return
 	}
 	if r.Method != http.MethodGet {
@@ -175,8 +175,8 @@ func (h *Handler) handleMetadata(w http.ResponseWriter, r *http.Request) {
 	// Try to serve embedded metadata.xml from assets; fallback to minimal shell
 	staticFS := assets.GetStaticFS()
 	if data, err := fs.ReadFile(staticFS, "metadata.xml"); err == nil {
-		etag := computeETag(data)
-		if match := r.Header.Get("If-None-Match"); match != "" && ifNoneMatchMatches(match, etag) {
+		etag := rfComputeETag(data)
+		if match := r.Header.Get("If-None-Match"); match != "" && rfIfNoneMatchMatches(match, etag) {
 			w.Header().Set("ETag", etag)
 			w.WriteHeader(http.StatusNotModified)
 			return
@@ -203,8 +203,8 @@ func (h *Handler) handleMetadata(w http.ResponseWriter, r *http.Request) {
 </edmx:Edmx>`
 	// Fallback content also gets an ETag
 	fb := []byte(csdl)
-	etag := computeETag(fb)
-	if match := r.Header.Get("If-None-Match"); match != "" && ifNoneMatchMatches(match, etag) {
+	etag := rfComputeETag(fb)
+	if match := r.Header.Get("If-None-Match"); match != "" && rfIfNoneMatchMatches(match, etag) {
 		w.Header().Set("ETag", etag)
 		w.WriteHeader(http.StatusNotModified)
 		return
@@ -217,7 +217,7 @@ func (h *Handler) handleMetadata(w http.ResponseWriter, r *http.Request) {
 // handleRegistriesCollection lists available message registries (minimal: Base)
 func (h *Handler) handleRegistriesCollection(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodOptions {
-		h.writeAllow(w, http.MethodGet)
+		rfWriteAllow(w, http.MethodGet)
 		return
 	}
 	if r.Method != http.MethodGet {
@@ -260,7 +260,7 @@ func (h *Handler) handleRegistriesCollection(w http.ResponseWriter, r *http.Requ
 // handleRegistryFile serves individual registry; for now, return a small Base stub.
 func (h *Handler) handleRegistryFile(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodOptions {
-		h.writeAllow(w, http.MethodGet)
+		rfWriteAllow(w, http.MethodGet)
 		return
 	}
 	if r.Method != http.MethodGet {
@@ -279,34 +279,16 @@ func (h *Handler) handleRegistryFile(w http.ResponseWriter, r *http.Request) {
 	staticFS := assets.GetStaticFS()
 	data, err := fs.ReadFile(staticFS, filePath)
 	if err == nil {
-		etag := computeETag(data)
-		if match := r.Header.Get("If-None-Match"); match != "" && ifNoneMatchMatches(match, etag) {
-			w.Header().Set("ETag", etag)
-			w.WriteHeader(http.StatusNotModified)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("OData-Version", "4.0")
-		w.Header().Set("ETag", etag)
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(data)
+		etag := rfComputeETag(data)
+		rfWriteJSONResponseWithETag(w, r, http.StatusOK, json.RawMessage(data), etag)
 		return
 	}
 	// Support nested paths like /Registries/Base/Base.json
 	if strings.Contains(name, "/") {
 		p := "redfish/" + name
 		if d, err2 := fs.ReadFile(staticFS, p); err2 == nil {
-			etag := computeETag(d)
-			if match := r.Header.Get("If-None-Match"); match != "" && ifNoneMatchMatches(match, etag) {
-				w.Header().Set("ETag", etag)
-				w.WriteHeader(http.StatusNotModified)
-				return
-			}
-			w.Header().Set("Content-Type", "application/json")
-			w.Header().Set("OData-Version", "4.0")
-			w.Header().Set("ETag", etag)
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write(d)
+			etag := rfComputeETag(d)
+			rfWriteJSONResponseWithETag(w, r, http.StatusOK, json.RawMessage(d), etag)
 			return
 		}
 	}
@@ -316,7 +298,7 @@ func (h *Handler) handleRegistryFile(w http.ResponseWriter, r *http.Request) {
 // handleSchemaStoreRoot returns a placeholder SchemaStore collection
 func (h *Handler) handleSchemaStoreRoot(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodOptions {
-		h.writeAllow(w, http.MethodGet)
+		rfWriteAllow(w, http.MethodGet)
 		return
 	}
 	if r.Method != http.MethodGet {
@@ -356,7 +338,7 @@ func (h *Handler) handleSchemaStoreRoot(w http.ResponseWriter, r *http.Request) 
 // handleSchemaFile placeholder for individual schema files
 func (h *Handler) handleSchemaFile(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodOptions {
-		h.writeAllow(w, http.MethodGet)
+		rfWriteAllow(w, http.MethodGet)
 		return
 	}
 	if r.Method != http.MethodGet {
@@ -372,17 +354,8 @@ func (h *Handler) handleSchemaFile(w http.ResponseWriter, r *http.Request) {
 	p := "schemas/" + name
 	staticFS := assets.GetStaticFS()
 	if data, err := fs.ReadFile(staticFS, p); err == nil {
-		etag := computeETag(data)
-		if match := r.Header.Get("If-None-Match"); match != "" && ifNoneMatchMatches(match, etag) {
-			w.Header().Set("ETag", etag)
-			w.WriteHeader(http.StatusNotModified)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("OData-Version", "4.0")
-		w.Header().Set("ETag", etag)
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(data)
+		etag := rfComputeETag(data)
+		rfWriteJSONResponseWithETag(w, r, http.StatusOK, json.RawMessage(data), etag)
 		return
 	}
 	h.writeErrorResponse(w, http.StatusNotFound, "Base.1.0.ResourceNotFound", "Schema not found")
@@ -390,50 +363,20 @@ func (h *Handler) handleSchemaFile(w http.ResponseWriter, r *http.Request) {
 
 // computeETag returns a strong ETag value for the provided bytes (quoted per RFC 7232)
 func computeETag(b []byte) string {
-	// Strong ETag: sha256 hex
-	sum := sha256Sum(b)
-	return "\"sha256-" + sum + "\""
+	return rfComputeETag(b)
 }
 
 func weakETag(parts ...string) string {
-	if len(parts) == 0 {
-		return "W/\"sha256-" + sha256Sum(nil) + "\""
-	}
-	joined := strings.Join(parts, "\x1f")
-	return "W/\"sha256-" + sha256Sum([]byte(joined)) + "\""
+	return rfWeakETag(parts...)
 }
 
 func formatTimeForETag(t time.Time) string {
-	if t.IsZero() {
-		return "0"
-	}
-	return t.UTC().Format(time.RFC3339Nano)
+	return rfFormatTimeForETag(t)
 }
 
 // weakMatch compares If-None-Match header to a generated ETag, handling weak validators
 func ifNoneMatchMatches(ifNoneMatch, etag string) bool {
-	s := strings.TrimSpace(ifNoneMatch)
-	if s == "" {
-		return false
-	}
-	// Any current representation
-	if s == "*" {
-		return true
-	}
-	// Split on comma for multiple ETags
-	parts := strings.Split(s, ",")
-	for _, p := range parts {
-		v := strings.TrimSpace(p)
-		if v == etag {
-			return true
-		}
-		if strings.HasPrefix(v, "W/") {
-			if strings.TrimSpace(strings.TrimPrefix(v, "W/")) == etag {
-				return true
-			}
-		}
-	}
-	return false
+	return rfIfNoneMatchMatches(ifNoneMatch, etag)
 }
 
 // sha256Sum returns hex-encoded SHA-256 sum of the input
@@ -1262,43 +1205,17 @@ func (h *Handler) handleSystemsCollection(w http.ResponseWriter, r *http.Request
 
 // writeJSONResponse writes a JSON response
 func (h *Handler) writeJSONResponse(w http.ResponseWriter, status int, data interface{}) {
-	h.writeJSONResponseWithETag(w, status, data, "")
+	rfWriteJSONResponse(w, status, data)
 }
 
 // writeJSONResponseWithETag writes JSON while emitting an optional ETag header
 func (h *Handler) writeJSONResponseWithETag(w http.ResponseWriter, status int, data interface{}, etag string) {
-	body, err := json.Marshal(data)
-	if err != nil {
-		slog.Error("Failed to marshal JSON response", "error", err)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		return
-	}
-	if etag != "" {
-		w.Header().Set("ETag", etag)
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("OData-Version", "4.0")
-	w.WriteHeader(status)
-	if _, err := w.Write(body); err != nil {
-		slog.Warn("Failed to write JSON response body", "error", err)
-	}
+	rfWriteJSONResponseWithETag(w, nil, status, data, etag)
 }
 
 // writeAllow responds to an HTTP OPTIONS request by advertising allowed methods
 func (h *Handler) writeAllow(w http.ResponseWriter, methods ...string) {
-	// Deduplicate while preserving order
-	seen := make(map[string]bool)
-	ordered := make([]string, 0, len(methods))
-	for _, m := range methods {
-		if !seen[m] {
-			seen[m] = true
-			ordered = append(ordered, m)
-		}
-	}
-	w.Header().Set("Allow", strings.Join(ordered, ", "))
-	// Maintain OData header consistency even for 204
-	w.Header().Set("OData-Version", "4.0")
-	w.WriteHeader(http.StatusNoContent)
+	rfWriteAllow(w, methods...)
 }
 
 // (removed unused handleSessions)
@@ -1582,75 +1499,17 @@ func connectionMethodsCollectionETag(methods []models.ConnectionMethod) string {
 
 // writeErrorResponse writes a Redfish-compliant error response
 func (h *Handler) writeErrorResponse(w http.ResponseWriter, status int, code, message string) {
-	// Set WWW-Authenticate header for 401 responses
-	if status == http.StatusUnauthorized {
-		w.Header().Set("WWW-Authenticate", `Basic realm="Redfish"`)
-	}
-
-	// Map our code to a Base registry MessageId (best-effort)
-	messageID := "Base.1.0.GeneralError"
-	if _, ok := validMessageIDs[code]; ok {
-		messageID = code
-	}
-	errorResp := map[string]interface{}{
-		"error": map[string]interface{}{
-			"code":    code,
-			"message": message,
-			"@Message.ExtendedInfo": []map[string]interface{}{
-				{
-					"@odata.type": "#Message.v1_1_0.Message",
-					"MessageId":   messageID,
-					"Message":     message,
-					"Severity":    severityForStatus(status),
-					"Resolution":  resolutionForMessageID(messageID),
-				},
-			},
-		},
-	}
-
-	h.writeJSONResponse(w, status, errorResp)
+	rfWriteErrorResponse(w, status, code, message)
 }
 
 // severityForStatus maps HTTP status to a Redfish severity string
 func severityForStatus(status int) string {
-	switch {
-	case status >= 500:
-		return "Critical"
-	case status == http.StatusUnauthorized || status == http.StatusForbidden:
-		return "Critical"
-	case status == http.StatusNotFound || status == http.StatusMethodNotAllowed || status == http.StatusBadRequest:
-		return "Warning"
-	default:
-		return "OK"
-	}
+	return rfSeverityForStatus(status)
 }
 
 // resolutionForMessageID returns a generic resolution for known Base messages
 func resolutionForMessageID(msgID string) string {
-	switch msgID {
-	case "Base.1.0.ResourceNotFound":
-		return "Provide a valid resource identifier and resubmit the request."
-	case "Base.1.0.MethodNotAllowed":
-		return "Use an allowed HTTP method for the target resource and resubmit the request."
-	case "Base.1.0.Unauthorized":
-		return "Provide valid credentials and resubmit the request."
-	case "Base.1.0.InsufficientPrivilege":
-		return "Resubmit the request using an account with the required privileges."
-	case "Base.1.0.MalformedJSON":
-		return "Correct the JSON payload formatting and resubmit the request."
-	case "Base.1.0.PropertyMissing":
-		return "Include all required properties in the request and resubmit."
-	case "Base.1.0.PropertyValueNotInList":
-		return "Use a supported value for the property and resubmit the request."
-	case "Base.1.0.ResourceCannotBeCreated":
-		return "Verify the request data and permissions, correct any issues, and resubmit."
-	case "Base.1.0.NotImplemented":
-		return "Remove the unsupported operation from the request or await a future implementation."
-	case "Base.1.0.InternalError":
-		fallthrough
-	default:
-		return "Retry the operation; if the problem persists, contact the service provider."
-	}
+	return rfResolutionForMessageID(msgID)
 }
 
 // handleSessionService routes and implements SessionService endpoints
