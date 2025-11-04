@@ -177,7 +177,7 @@ Benefits:
 3. Split `internal/api/api.go` into modules, moving code verbatim; wire up `router.go` with the same `ServeMux` registrations currently in `New`.
 4. In `internal/bmc/service.go`, introduce micro-helpers and reduce duplication where safe (use `fetchRedfishResource` for collection fetches).
 5. Add DB helper methods for encrypt/decrypt; replace direct checks in DAO functions.
-6. Run full validation: `go run build.go validate`.
+6. Run full validation: `go run build.go validate`. All tests are expected to pass, as changes are intended to be behavior-preserving.
 7. If any failures, add minimal tests to ensure headers/errors stay identical and adjust code to preserve behavior.
 
 ## Validation
