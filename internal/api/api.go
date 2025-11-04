@@ -71,28 +71,7 @@ type Handler struct {
 
 // New creates a new API handler
 func New(db *database.DB) http.Handler {
-	h := &Handler{
-		db:     db,
-		auth:   auth.New(db),
-		bmcSvc: bmc.New(db),
-	}
-
-	mux := http.NewServeMux()
-
-	// Redfish service root
-	mux.HandleFunc("/redfish/", h.handleRedfish)
-
-	// $metadata and registries/schema store endpoints (Phase 1)
-	mux.HandleFunc("/redfish/v1/$metadata", h.handleMetadata)
-	mux.HandleFunc("/redfish/v1/Registries", h.auth.RequireAuth(http.HandlerFunc(h.handleRegistriesCollection)).ServeHTTP)
-	mux.HandleFunc("/redfish/v1/Registries/", h.auth.RequireAuth(http.HandlerFunc(h.handleRegistryFile)).ServeHTTP)
-	mux.HandleFunc("/redfish/v1/SchemaStore", h.auth.RequireAuth(http.HandlerFunc(h.handleSchemaStoreRoot)).ServeHTTP)
-	mux.HandleFunc("/redfish/v1/SchemaStore/", h.auth.RequireAuth(http.HandlerFunc(h.handleSchemaFile)).ServeHTTP)
-
-	// BMC management endpoints (aggregator-specific)
-	mux.HandleFunc("/redfish/v1/AggregationService/ManagedNodes/", h.auth.RequireAuth(http.HandlerFunc(h.handleManagedNodes)).ServeHTTP)
-
-	return mux
+	return NewRouter(db)
 }
 
 // handleRedfish routes Redfish API requests
