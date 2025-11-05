@@ -1,8 +1,8 @@
 # 020: Provisioner Architecture and Design Index
 
-Status: Proposed
+Status: In Progress (Phase 1 complete)
 Owners: Provisioning Working Group
-Last updated: 2025-11-03
+Last updated: 2025-11-05
 
 Summary
 

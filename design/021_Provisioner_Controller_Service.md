@@ -1,8 +1,8 @@
 # 021: Provisioner Controller Service
 
-Status: Proposed
+Status: In Progress (Phase 1 implemented)
 Owners: Provisioning Working Group
-Last updated: 2025-11-03
+Last updated: 2025-11-05
 
 Summary
 

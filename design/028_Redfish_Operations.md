@@ -1,10 +1,14 @@
 # 028: Redfish Operations — Virtual Media, Boot Override, Reboot, Vendor Notes
 
-Status: Proposed
+Status: In Progress
 Owners: Provisioning Working Group
 Last updated: 2025-11-05
 
 Summary
+
+Progress (2025-11-05)
+- Phase 1: A Redfish Noop client is implemented and used by the controller workers to simulate virtual media mount, one-time boot, and reboot. This unblocks end-to-end orchestration and testing without real BMCs.
+- Next phases: Implement the real Redfish client per this document (virtual media, boot override, power operations), add vendor capability profiles and retries/backoff, and replace the noop client in integration tests as hardware or mocks become available.
 
 This document defines the Redfish operations used by the Provisioner Controller to orchestrate bare‑metal provisioning via dual virtual media at Layer 3. It specifies how to reliably locate Redfish resources, insert/eject virtual media, set one‑time boot to CD, initiate a reboot, and perform cleanup. It also documents idempotency rules, timeouts/retries, polling heuristics, and vendor-specific observations (iDRAC, iLO, XCC, Supermicro) to maximize compatibility.
 

@@ -1,0 +1,194 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://shoal.example.com/schemas/recipe.schema.json",
+  "title": "Shoal Provisioner Recipe",
+  "description": "Recipe for Shoal Provisioner controller and dispatcher. Draft-07, v1. Fields support Linux, Windows, and ESXi workflows. Backward-compatible extensions should use non-required fields.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "description": "Logical recipe schema version. Must start with major version 1.",
+      "pattern": "^1(\\.[0-9]+)?$",
+      "default": "1"
+    },
+    "task_target": {
+      "type": "string",
+      "description": "Systemd target to start on the maintenance OS. For example: install-linux.target, install-windows.target, install-esxi.target",
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9_.-]+\\.target$",
+      "examples": ["install-linux.target", "install-windows.target"]
+    },
+    "target_disk": {
+      "type": "string",
+      "description": "Target disk device identifier. Examples: /dev/sda, /dev/nvme0n1, \\\\.\\PhysicalDrive0",
+      "minLength": 1,
+      "examples": ["/dev/sda", "/dev/nvme0n1", "\\\\.?\\PhysicalDrive0"]
+    },
+    "oci_url": {
+      "type": "string",
+      "description": "OCI artifact reference for rootfs or related images. If embedded registry is enabled, typically controller:port/repo:tag.",
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9._:-]+(/[A-Za-z0-9._-]+)*(?:@[A-Za-z0-9:+-=._/]+|:[A-Za-z0-9._-]+)?$",
+      "examples": [
+        "controller.internal:8080/os-images/ubuntu-rootfs:22.04",
+        "registry.local:5000/images/windows-wim:22H2"
+      ]
+    },
+    "firmware_url": {
+      "type": "string",
+      "description": "Optional firmware bundle URL to apply during provisioning.",
+      "format": "uri"
+    },
+    "partition_layout": {
+      "type": "array",
+      "description": "Partition layout for the target disk, ordered from start to end of disk.",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/partition" }
+    },
+    "user_data": {
+      "$ref": "#/$defs/payload",
+      "description": "cloud-init user-data for Linux installs."
+    },
+    "unattend_xml": {
+      "$ref": "#/$defs/payload",
+      "description": "Windows unattend.xml content."
+    },
+    "ks.cfg": {
+      "$ref": "#/$defs/payload",
+      "description": "Kickstart file for ESXi or Linux workflows that use kickstart."
+    },
+    "env": {
+      "type": "object",
+      "description": "Optional environment variables passed to tasks/containers.",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "notes": {
+      "type": "string",
+      "description": "Free-form notes or ticket/CMDB reference.",
+      "maxLength": 2000
+    }
+  },
+  "required": ["task_target", "target_disk"],
+  "$defs": {
+    "partition": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "size": {
+          "type": "string",
+          "description": "Partition size. Supports human-readable sizes or percentage of remaining: examples '512M', '1G', '100%'.",
+          "pattern": "^(100%|[1-9][0-9]*[KMGTP]i?B?|[1-9][0-9]*[KMGTP]|[1-9][0-9]*M|[1-9][0-9]*G)$",
+          "examples": ["512M", "1G", "100%"]
+        },
+        "type_guid": {
+          "type": "string",
+          "description": "GPT type GUID (e.g., EFI system partition) or short hex code (e.g., 'ef00').",
+          "pattern": "^([0-9A-Fa-f]{4}|[0-9A-Fa-f]{8}-([0-9A-Fa-f]{4}-){3}[0-9A-Fa-f]{12})$",
+          "examples": ["ef00", "0FC63DAF-8483-4772-8E79-3D69D8477DE4"]
+        },
+        "format": {
+          "type": "string",
+          "description": "Filesystem format for the partition. Use 'none' to leave unformatted.",
+          "enum": ["vfat", "ext4", "xfs", "ntfs", "swap", "none"],
+          "default": "none"
+        },
+        "label": {
+          "type": "string",
+          "description": "Filesystem label.",
+          "maxLength": 32
+        },
+        "mountpoint": {
+          "type": "string",
+          "description": "Desired mountpoint for Linux workflows. Example: '/', '/boot/efi'.",
+          "minLength": 1
+        },
+        "bootable": {
+          "type": "boolean",
+          "description": "Whether this partition should be marked bootable when applicable.",
+          "default": false
+        }
+      },
+      "required": ["size"]
+    },
+    "payload": {
+      "description": "Payload that can be provided inline as a string, or by URL/path indirection.",
+      "oneOf": [
+        {
+          "type": "string",
+          "description": "Inline content. May be plain text or base64-encoded if binary."
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "content": {
+              "type": "string",
+              "description": "Inline payload content. Prefer this over 'url' or 'path' when size is small."
+            }
+          },
+          "required": ["content"]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "url": {
+              "type": "string",
+              "format": "uri",
+              "description": "HTTP(S) URL the controller/dispatcher can fetch to obtain the payload."
+            }
+          },
+          "required": ["url"]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Local path in the maintenance OS image (advanced)."
+            }
+          },
+          "required": ["path"]
+        }
+      ]
+    }
+  },
+  "examples": [
+    {
+      "task_target": "install-linux.target",
+      "target_disk": "/dev/sda",
+      "oci_url": "controller.internal:8080/os-images/ubuntu-rootfs:22.04",
+      "partition_layout": [
+        { "size": "512M", "type_guid": "ef00", "format": "vfat", "label": "EFI", "mountpoint": "/boot/efi", "bootable": true },
+        { "size": "100%", "type_guid": "0FC63DAF-8483-4772-8E79-3D69D8477DE4", "format": "ext4", "label": "root", "mountpoint": "/" }
+      ],
+      "user_data": "#cloud-config\nhostname: demo\nssh_authorized_keys:\n  - ssh-ed25519 AAAA...",
+      "env": { "HTTP_PROXY": "http://proxy.local:3128" }
+    },
+    {
+      "task_target": "install-windows.target",
+      "target_disk": "\\\\.?\\PhysicalDrive0",
+      "oci_url": "controller.internal:8080/os-images/windows-wim:22H2",
+      "partition_layout": [
+        { "size": "500M", "type_guid": "ef00", "format": "vfat", "label": "EFI", "bootable": true },
+        { "size": "16M", "label": "MSR" },
+        { "size": "100%", "format": "ntfs", "label": "Windows" }
+      ],
+      "unattend_xml": { "content": "<unattend version=\"1.0\"></unattend>" }
+    },
+    {
+      "task_target": "install-esxi.target",
+      "target_disk": "/dev/sdb",
+      "firmware_url": "https://downloads.example/fw/bundle-1.2.3.tar",
+      "partition_layout": [
+        { "size": "4G", "label": "ESXi" },
+        { "size": "100%", "label": "DATA" }
+      ],
+      "ks.cfg": { "url": "https://controller.local/configs/esxi-ks.cfg" }
+    }
+  ]
+}
