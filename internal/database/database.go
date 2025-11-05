@@ -77,6 +77,39 @@ func (db *DB) Close() error {
 	return db.conn.Close()
 }
 
+// encryptIfConfigured encrypts plaintext when an encryptor is configured.
+// If the value appears already encrypted or encryption is not configured,
+// it returns the input unchanged.
+func (db *DB) encryptIfConfigured(plaintext string) (string, error) {
+	// No encryption configured or empty plaintext: return as-is
+	if db.encryptor == nil || plaintext == "" {
+		return plaintext, nil
+	}
+	// Avoid double-encryption
+	if crypto.IsEncrypted(plaintext) {
+		return plaintext, nil
+	}
+	encrypted, err := db.encryptor.Encrypt(plaintext)
+	if err != nil {
+		return "", err
+	}
+	return encrypted, nil
+}
+
+// decryptIfNeeded attempts to decrypt an encrypted value when an encryptor
+// is configured. On failure or when not encrypted, it returns the input.
+func (db *DB) decryptIfNeeded(s string) string {
+	if db.encryptor == nil || s == "" || !crypto.IsEncrypted(s) {
+		return s
+	}
+	decrypted, err := db.encryptor.Decrypt(s)
+	if err != nil {
+		slog.Error("Failed to decrypt value", "error", err)
+		return s
+	}
+	return decrypted
+}
+
 // Migrate runs database migrations
 func (db *DB) Migrate(ctx context.Context) error {
 	slog.Info("Running database migrations")
@@ -548,16 +581,8 @@ func (db *DB) GetBMCs(ctx context.Context) ([]models.BMC, error) {
 			return nil, fmt.Errorf("failed to scan BMC: %w", err)
 		}
 
-		// Decrypt password if encryptor is available
-		if db.encryptor != nil && crypto.IsEncrypted(bmc.Password) {
-			decrypted, err := db.encryptor.Decrypt(bmc.Password)
-			if err != nil {
-				slog.Error("Failed to decrypt BMC password", "bmc", bmc.Name, "error", err)
-				// Keep encrypted password if decryption fails
-			} else {
-				bmc.Password = decrypted
-			}
-		}
+		// Decrypt password if needed
+		bmc.Password = db.decryptIfNeeded(bmc.Password)
 
 		bmcs = append(bmcs, bmc)
 	}
@@ -581,16 +606,8 @@ func (db *DB) GetBMC(ctx context.Context, id int64) (*models.BMC, error) {
 		return nil, fmt.Errorf("failed to get BMC: %w", err)
 	}
 
-	// Decrypt password if encryptor is available
-	if db.encryptor != nil && crypto.IsEncrypted(bmc.Password) {
-		decrypted, err := db.encryptor.Decrypt(bmc.Password)
-		if err != nil {
-			slog.Error("Failed to decrypt BMC password", "bmc", bmc.Name, "error", err)
-			// Keep encrypted password if decryption fails
-		} else {
-			bmc.Password = decrypted
-		}
-	}
+	// Decrypt password if needed
+	bmc.Password = db.decryptIfNeeded(bmc.Password)
 
 	return &bmc, nil
 }
@@ -611,16 +628,8 @@ func (db *DB) GetBMCByName(ctx context.Context, name string) (*models.BMC, error
 		return nil, fmt.Errorf("failed to get BMC by name: %w", err)
 	}
 
-	// Decrypt password if encryptor is available
-	if db.encryptor != nil && crypto.IsEncrypted(bmc.Password) {
-		decrypted, err := db.encryptor.Decrypt(bmc.Password)
-		if err != nil {
-			slog.Error("Failed to decrypt BMC password", "bmc", bmc.Name, "error", err)
-			// Keep encrypted password if decryption fails
-		} else {
-			bmc.Password = decrypted
-		}
-	}
+	// Decrypt password if needed
+	bmc.Password = db.decryptIfNeeded(bmc.Password)
 
 	return &bmc, nil
 }
@@ -629,14 +638,10 @@ func (db *DB) GetBMCByName(ctx context.Context, name string) (*models.BMC, error
 func (db *DB) CreateBMC(ctx context.Context, bmc *models.BMC) error {
 	query := `INSERT INTO bmcs (name, address, username, password, description, enabled) VALUES (?, ?, ?, ?, ?, ?)`
 
-	// Encrypt password if encryptor is available
-	password := bmc.Password
-	if db.encryptor != nil && password != "" {
-		encrypted, err := db.encryptor.Encrypt(password)
-		if err != nil {
-			return fmt.Errorf("failed to encrypt password: %w", err)
-		}
-		password = encrypted
+	// Encrypt password if configured
+	password, err := db.encryptIfConfigured(bmc.Password)
+	if err != nil {
+		return fmt.Errorf("failed to encrypt password: %w", err)
 	}
 
 	result, err := db.conn.ExecContext(ctx, query, bmc.Name, bmc.Address, bmc.Username, password, bmc.Description, bmc.Enabled)
@@ -660,20 +665,13 @@ func (db *DB) CreateBMC(ctx context.Context, bmc *models.BMC) error {
 func (db *DB) UpdateBMC(ctx context.Context, bmc *models.BMC) error {
 	query := `UPDATE bmcs SET name = ?, address = ?, username = ?, password = ?, description = ?, enabled = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
 
-	// Encrypt password if encryptor is available
-	password := bmc.Password
-	if db.encryptor != nil && password != "" {
-		// Only encrypt if it's not already encrypted
-		if !crypto.IsEncrypted(password) {
-			encrypted, err := db.encryptor.Encrypt(password)
-			if err != nil {
-				return fmt.Errorf("failed to encrypt password: %w", err)
-			}
-			password = encrypted
-		}
+	// Encrypt password if configured
+	password, err := db.encryptIfConfigured(bmc.Password)
+	if err != nil {
+		return fmt.Errorf("failed to encrypt password: %w", err)
 	}
 
-	_, err := db.conn.ExecContext(ctx, query, bmc.Name, bmc.Address, bmc.Username, password, bmc.Description, bmc.Enabled, bmc.ID)
+	_, err = db.conn.ExecContext(ctx, query, bmc.Name, bmc.Address, bmc.Username, password, bmc.Description, bmc.Enabled, bmc.ID)
 	if err != nil {
 		return fmt.Errorf("failed to update BMC: %w", err)
 	}
@@ -954,15 +952,8 @@ func (db *DB) GetConnectionMethods(ctx context.Context) ([]models.ConnectionMeth
 			return nil, fmt.Errorf("failed to scan connection method: %w", err)
 		}
 
-		// Decrypt password if encryptor is available
-		if db.encryptor != nil && crypto.IsEncrypted(method.Password) {
-			decrypted, err := db.encryptor.Decrypt(method.Password)
-			if err != nil {
-				slog.Error("Failed to decrypt connection method password", "method", method.Name, "error", err)
-			} else {
-				method.Password = decrypted
-			}
-		}
+		// Decrypt password if needed
+		method.Password = db.decryptIfNeeded(method.Password)
 
 		methods = append(methods, method)
 	}
@@ -986,34 +977,23 @@ func (db *DB) GetConnectionMethod(ctx context.Context, id string) (*models.Conne
 		return nil, fmt.Errorf("failed to get connection method: %w", err)
 	}
 
-	// Decrypt password if encryptor is available
-	if db.encryptor != nil && crypto.IsEncrypted(method.Password) {
-		decrypted, err := db.encryptor.Decrypt(method.Password)
-		if err != nil {
-			slog.Error("Failed to decrypt connection method password", "method", method.Name, "error", err)
-		} else {
-			method.Password = decrypted
-		}
-	}
+	// Decrypt password if needed
+	method.Password = db.decryptIfNeeded(method.Password)
 
 	return &method, nil
 }
 
 // CreateConnectionMethod creates a new connection method
 func (db *DB) CreateConnectionMethod(ctx context.Context, method *models.ConnectionMethod) error {
-	// Encrypt password if encryptor is available
-	password := method.Password
-	if db.encryptor != nil {
-		encrypted, err := db.encryptor.Encrypt(password)
-		if err != nil {
-			return fmt.Errorf("failed to encrypt connection method password: %w", err)
-		}
-		password = encrypted
+	// Encrypt password if configured
+	password, err := db.encryptIfConfigured(method.Password)
+	if err != nil {
+		return fmt.Errorf("failed to encrypt connection method password: %w", err)
 	}
 
 	query := `INSERT INTO connection_methods (id, name, connection_type, address, username, password, enabled, aggregated_managers, aggregated_systems) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
-	_, err := db.conn.ExecContext(ctx, query, method.ID, method.Name, method.ConnectionMethodType, method.Address, method.Username, password, method.Enabled, method.AggregatedManagers, method.AggregatedSystems)
+	_, err = db.conn.ExecContext(ctx, query, method.ID, method.Name, method.ConnectionMethodType, method.Address, method.Username, password, method.Enabled, method.AggregatedManagers, method.AggregatedSystems)
 	if err != nil {
 		return fmt.Errorf("failed to create connection method: %w", err)
 	}
