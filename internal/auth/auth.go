@@ -142,11 +142,12 @@ func (a *Authenticator) RequireAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		user, err := a.AuthenticateRequest(r)
 		if err != nil {
-			// Return Redfish-compliant error response
+			// Return Redfish-compliant error response aligned with centralized helper
 			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("OData-Version", "4.0")
 			w.Header().Set("WWW-Authenticate", "Basic realm=\"Redfish\"")
 			w.WriteHeader(http.StatusUnauthorized)
-			_, _ = w.Write([]byte(`{"error": {"code": "Base.1.0.Unauthorized", "message": "Authentication required"}}`))
+			_, _ = w.Write([]byte(`{"error":{"code":"Base.1.0.Unauthorized","message":"Authentication required","@Message.ExtendedInfo":[{"@odata.type":"#Message.v1_1_0.Message","MessageId":"Base.1.0.Unauthorized","Message":"Authentication required","Severity":"Critical","Resolution":"Provide valid credentials and resubmit the request."}]}}`))
 			return
 		}
 

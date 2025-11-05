@@ -671,7 +671,7 @@ func (db *DB) UpdateBMC(ctx context.Context, bmc *models.BMC) error {
 		return fmt.Errorf("failed to encrypt password: %w", err)
 	}
 
-	_, err := db.conn.ExecContext(ctx, query, bmc.Name, bmc.Address, bmc.Username, password, bmc.Description, bmc.Enabled, bmc.ID)
+	_, err = db.conn.ExecContext(ctx, query, bmc.Name, bmc.Address, bmc.Username, password, bmc.Description, bmc.Enabled, bmc.ID)
 	if err != nil {
 		return fmt.Errorf("failed to update BMC: %w", err)
 	}
@@ -993,7 +993,7 @@ func (db *DB) CreateConnectionMethod(ctx context.Context, method *models.Connect
 
 	query := `INSERT INTO connection_methods (id, name, connection_type, address, username, password, enabled, aggregated_managers, aggregated_systems) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
-	_, err := db.conn.ExecContext(ctx, query, method.ID, method.Name, method.ConnectionMethodType, method.Address, method.Username, password, method.Enabled, method.AggregatedManagers, method.AggregatedSystems)
+	_, err = db.conn.ExecContext(ctx, query, method.ID, method.Name, method.ConnectionMethodType, method.Address, method.Username, password, method.Enabled, method.AggregatedManagers, method.AggregatedSystems)
 	if err != nil {
 		return fmt.Errorf("failed to create connection method: %w", err)
 	}
