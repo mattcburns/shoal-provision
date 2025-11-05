@@ -1,5 +1,17 @@
 # 028: Redfish Operations — Virtual Media, Boot Override, Reboot, Vendor Notes
 
+Note for implementers (vendor constants):
+- VENDOR_IDRAC = "iDRAC" — Dell iDRAC controllers
+- VENDOR_ILO = "iLO" — HPE iLO controllers
+- VENDOR_SUPERMICRO = "Supermicro" — Supermicro BMCs
+
+Guidance:
+- Use these string constants when mapping configuration/vendor hints in code.
+- When the exact vendor string is not provided, tolerate common variations (e.g., case-insensitive matches, substrings like "dell", "hpe"/"hp", "supermicro") for pragmatic detection.
+- Boot override: prefer adding Boot.BootSourceOverrideMode="UEFI" for iDRAC and iLO; omit for Supermicro unless required by a specific firmware.
+- InsertMedia: include Inserted:true and TransferProtocolType:"URI" for iDRAC/iLO; WriteProtected:true is recommended across vendors.
+
+
 Status: In Progress
 Owners: Provisioning Working Group
 Last updated: 2025-11-05

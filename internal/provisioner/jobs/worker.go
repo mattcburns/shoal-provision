@@ -359,3 +359,32 @@ func minDur(a, b time.Duration) time.Duration {
 	}
 	return b
 }
+
+// awaitBMCReady polls the Redfish service using Client.Ping until it becomes reachable
+// or the provided deadline is exceeded. This scaffolds the ESXi flow where we need to
+// detect BMC/API readiness after a reset without relying on a webhook.
+func (w *Worker) awaitBMCReady(ctx context.Context, rf redfish.Client, deadline time.Time) error {
+	backoff := 200 * time.Millisecond
+	for {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if time.Now().After(deadline) {
+			return errors.New("esxi: bmc not ready before deadline")
+		}
+		if err := rf.Ping(ctx); err == nil {
+			return nil
+		}
+		time.Sleep(backoff)
+		if backoff < 5*time.Second {
+			backoff *= 2
+		}
+	}
+}
+
+// pollPowerStatePlaceholder is a scaffold for ESXi flow power-state based detection.
+// TODO(phase2): Implement power/state transitions and stabilization heuristics per 028.
+// For now it reuses awaitBMCReady as a placeholder.
+func (w *Worker) pollPowerStatePlaceholder(ctx context.Context, rf redfish.Client, deadline time.Time) error {
+	return w.awaitBMCReady(ctx, rf, deadline)
+}

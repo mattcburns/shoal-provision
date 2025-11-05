@@ -48,14 +48,20 @@ const (
 )
 
 // Client is the interface used by the controller workers to perform the
-// minimal Redfish operations required for provisioning.
+// minimal Redfish operations required for provisioning, plus a basic liveness
+// check for readiness gating.
 //
 // Implementations should be idempotent where feasible:
 // - MountVirtualMedia should tolerate already-mounted media of the same URL.
 // - SetOneTimeBoot should set boot to the requested device even if already set.
 // - Reboot should attempt a graceful reset and fallback to force if safe.
 // - UnmountVirtualMedia should succeed if media is already absent.
+// - Ping should be safe to call frequently and quickly indicate service health.
 type Client interface {
+	// Ping performs a lightweight liveness check against the Redfish service.
+	// Implementations should not log secrets and should return promptly.
+	Ping(ctx context.Context) error
+
 	// MountVirtualMedia mounts an ISO URL as virtual media on a specific CD slot
 	// (e.g., 1 for maintenance.iso, 2 for task.iso).
 	MountVirtualMedia(ctx context.Context, cd int, isoURL string) error
@@ -87,6 +93,8 @@ type Config struct {
 	Timeout time.Duration
 	// Logger is optional; if nil, logging is suppressed.
 	Logger *log.Logger
+	// InsecureTLS, if true, disables TLS certificate verification (useful for lab BMCs).
+	InsecureTLS bool
 }
 
 // NoopClient is a Phase 1 stub that logs operations and returns success.
@@ -207,6 +215,15 @@ func (c *NoopClient) UnmountVirtualMedia(ctx context.Context, cd int) error {
 // Close is a no-op for the stub. Real implementations would release sessions.
 func (c *NoopClient) Close() error { return nil }
 
+// Ping validates configuration and simulates a fast liveness check.
+func (c *NoopClient) Ping(ctx context.Context) error {
+	if err := c.validateEndpoint(); err != nil {
+		return err
+	}
+	c.logf("Ping: endpoint=%s user=%s", c.cfg.Endpoint, c.cfg.Username)
+	return c.sleepOrContext(ctx)
+}
+
 // RedactPassword returns a redacted version of a secret for logs.
 func RedactPassword(s string) string {
 	if s == "" {
@@ -216,4 +233,26 @@ func RedactPassword(s string) string {
 		return "****"
 	}
 	return s[:2] + "****" + s[len(s)-2:]
+}
+
+// NewClient returns a Redfish client implementation based on mode.
+// mode:
+//   - "http": real Redfish over HTTP(S)
+//   - "noop": in-memory stub used for tests and dry runs
+//
+// Any other value results in error. When mode is empty, it defaults to "http".
+func NewClient(cfg Config, mode string, delay time.Duration) (Client, error) {
+	if mode == "noop" {
+		return NewNoopClient(cfg, delay), nil
+	}
+	if mode == "" || mode == "http" {
+		return NewHTTPClient(cfg)
+	}
+	return nil, fmt.Errorf("unsupported redfish client mode %q", mode)
+}
+
+// Ping issues a lightweight GET to the Redfish ServiceRoot to verify liveness.
+func (c *httpClient) Ping(ctx context.Context) error {
+	var root map[string]any
+	return c.getJSON(ctx, "/redfish/v1/", &root)
 }

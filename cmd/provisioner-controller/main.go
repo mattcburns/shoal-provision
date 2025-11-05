@@ -44,41 +44,45 @@ import (
 // Values can be provided via environment variables and/or flags.
 // Flags take precedence over environment variables.
 type Config struct {
-	HTTPAddr          string        // CONTROLLER_HTTP_ADDR
-	DBPath            string        // DB_PATH
-	StorageRoot       string        // STORAGE_ROOT
-	TaskISODir        string        // TASK_ISO_DIR
-	MaintenanceISOURL string        // MAINTENANCE_ISO_URL
-	EnableRegistry    bool          // ENABLE_REGISTRY
-	RegistryStorage   string        // REGISTRY_STORAGE
-	AuthMode          string        // AUTH_MODE: basic|jwt|none
-	WebhookSecret     string        // WEBHOOK_SECRET (do not log value)
-	WorkerConcurrency int           // WORKER_CONCURRENCY
-	RedfishTimeout    time.Duration // REDFISH_TIMEOUT
-	RedfishRetries    int           // REDFISH_RETRIES
-	JobLeaseTTL       time.Duration // JOB_LEASE_TTL
-	JobStuckTimeout   time.Duration // JOB_STUCK_TIMEOUT
-	LogLevel          string        // LOG_LEVEL: info|debug
+	HTTPAddr           string        // CONTROLLER_HTTP_ADDR
+	DBPath             string        // DB_PATH
+	StorageRoot        string        // STORAGE_ROOT
+	TaskISODir         string        // TASK_ISO_DIR
+	MaintenanceISOURL  string        // MAINTENANCE_ISO_URL
+	EnableRegistry     bool          // ENABLE_REGISTRY
+	RegistryStorage    string        // REGISTRY_STORAGE
+	AuthMode           string        // AUTH_MODE: basic|jwt|none
+	WebhookSecret      string        // WEBHOOK_SECRET (do not log value)
+	WorkerConcurrency  int           // WORKER_CONCURRENCY
+	RedfishTimeout     time.Duration // REDFISH_TIMEOUT
+	RedfishRetries     int           // REDFISH_RETRIES
+	RedfishMode        string        // REDFISH_MODE: http|noop
+	RedfishInsecureTLS bool          // REDFISH_INSECURE_TLS
+	JobLeaseTTL        time.Duration // JOB_LEASE_TTL
+	JobStuckTimeout    time.Duration // JOB_STUCK_TIMEOUT
+	LogLevel           string        // LOG_LEVEL: info|debug
 }
 
 // defaultConfig returns sane defaults aligned with the design docs.
 func defaultConfig() Config {
 	return Config{
-		HTTPAddr:          ":8080",
-		DBPath:            "./provisioner.db",
-		StorageRoot:       "./var/shoal",
-		TaskISODir:        "./var/shoal/task-isos",
-		MaintenanceISOURL: "http://localhost:8080/media/isos/bootc-maintenance.iso",
-		EnableRegistry:    false,
-		RegistryStorage:   "./var/shoal/oci",
-		AuthMode:          "none",
-		WebhookSecret:     "",
-		WorkerConcurrency: 2,
-		RedfishTimeout:    30 * time.Second,
-		RedfishRetries:    5,
-		JobLeaseTTL:       10 * time.Minute,
-		JobStuckTimeout:   4 * time.Hour,
-		LogLevel:          "info",
+		HTTPAddr:           ":8080",
+		DBPath:             "./provisioner.db",
+		StorageRoot:        "./var/shoal",
+		TaskISODir:         "./var/shoal/task-isos",
+		MaintenanceISOURL:  "http://localhost:8080/media/isos/bootc-maintenance.iso",
+		EnableRegistry:     false,
+		RegistryStorage:    "./var/shoal/oci",
+		AuthMode:           "none",
+		WebhookSecret:      "",
+		WorkerConcurrency:  2,
+		RedfishTimeout:     30 * time.Second,
+		RedfishRetries:     5,
+		RedfishMode:        "noop",
+		RedfishInsecureTLS: false,
+		JobLeaseTTL:        10 * time.Minute,
+		JobStuckTimeout:    4 * time.Hour,
+		LogLevel:           "info",
 	}
 }
 
@@ -132,21 +136,23 @@ func parseConfig() Config {
 
 	// Seed from env
 	cfg := Config{
-		HTTPAddr:          getenv("CONTROLLER_HTTP_ADDR", def.HTTPAddr),
-		DBPath:            getenv("DB_PATH", def.DBPath),
-		StorageRoot:       getenv("STORAGE_ROOT", def.StorageRoot),
-		TaskISODir:        getenv("TASK_ISO_DIR", def.TaskISODir),
-		MaintenanceISOURL: getenv("MAINTENANCE_ISO_URL", def.MaintenanceISOURL),
-		EnableRegistry:    getenvBool("ENABLE_REGISTRY", def.EnableRegistry),
-		RegistryStorage:   getenv("REGISTRY_STORAGE", def.RegistryStorage),
-		AuthMode:          getenv("AUTH_MODE", def.AuthMode),
-		WebhookSecret:     getenv("WEBHOOK_SECRET", def.WebhookSecret),
-		WorkerConcurrency: getenvInt("WORKER_CONCURRENCY", def.WorkerConcurrency),
-		RedfishTimeout:    getenvDuration("REDFISH_TIMEOUT", def.RedfishTimeout),
-		RedfishRetries:    getenvInt("REDFISH_RETRIES", def.RedfishRetries),
-		JobLeaseTTL:       getenvDuration("JOB_LEASE_TTL", def.JobLeaseTTL),
-		JobStuckTimeout:   getenvDuration("JOB_STUCK_TIMEOUT", def.JobStuckTimeout),
-		LogLevel:          getenv("LOG_LEVEL", def.LogLevel),
+		HTTPAddr:           getenv("CONTROLLER_HTTP_ADDR", def.HTTPAddr),
+		DBPath:             getenv("DB_PATH", def.DBPath),
+		StorageRoot:        getenv("STORAGE_ROOT", def.StorageRoot),
+		TaskISODir:         getenv("TASK_ISO_DIR", def.TaskISODir),
+		MaintenanceISOURL:  getenv("MAINTENANCE_ISO_URL", def.MaintenanceISOURL),
+		EnableRegistry:     getenvBool("ENABLE_REGISTRY", def.EnableRegistry),
+		RegistryStorage:    getenv("REGISTRY_STORAGE", def.RegistryStorage),
+		AuthMode:           getenv("AUTH_MODE", def.AuthMode),
+		WebhookSecret:      getenv("WEBHOOK_SECRET", def.WebhookSecret),
+		WorkerConcurrency:  getenvInt("WORKER_CONCURRENCY", def.WorkerConcurrency),
+		RedfishTimeout:     getenvDuration("REDFISH_TIMEOUT", def.RedfishTimeout),
+		RedfishRetries:     getenvInt("REDFISH_RETRIES", def.RedfishRetries),
+		RedfishMode:        getenv("REDFISH_MODE", def.RedfishMode),
+		RedfishInsecureTLS: getenvBool("REDFISH_INSECURE_TLS", def.RedfishInsecureTLS),
+		JobLeaseTTL:        getenvDuration("JOB_LEASE_TTL", def.JobLeaseTTL),
+		JobStuckTimeout:    getenvDuration("JOB_STUCK_TIMEOUT", def.JobStuckTimeout),
+		LogLevel:           getenv("LOG_LEVEL", def.LogLevel),
 	}
 
 	// Flags (override env if provided)
@@ -162,6 +168,8 @@ func parseConfig() Config {
 	flag.IntVar(&cfg.WorkerConcurrency, "workers", cfg.WorkerConcurrency, "Worker concurrency (env WORKER_CONCURRENCY)")
 	flag.DurationVar(&cfg.RedfishTimeout, "redfish-timeout", cfg.RedfishTimeout, "Redfish request timeout (env REDFISH_TIMEOUT)")
 	flag.IntVar(&cfg.RedfishRetries, "redfish-retries", cfg.RedfishRetries, "Redfish retry count (env REDFISH_RETRIES)")
+	flag.StringVar(&cfg.RedfishMode, "redfish-mode", cfg.RedfishMode, "Redfish client mode: http|noop (env REDFISH_MODE)")
+	flag.BoolVar(&cfg.RedfishInsecureTLS, "redfish-insecure-tls", cfg.RedfishInsecureTLS, "Disable TLS verification for BMC connections (env REDFISH_INSECURE_TLS)")
 	flag.DurationVar(&cfg.JobLeaseTTL, "job-lease-ttl", cfg.JobLeaseTTL, "Job lease TTL (env JOB_LEASE_TTL)")
 	flag.DurationVar(&cfg.JobStuckTimeout, "job-stuck-timeout", cfg.JobStuckTimeout, "Job stuck timeout (env JOB_STUCK_TIMEOUT)")
 	flag.StringVar(&cfg.LogLevel, "log-level", cfg.LogLevel, "Log level: info|debug (env LOG_LEVEL)")
@@ -289,6 +297,8 @@ func logConfig(cfg Config) {
 	log.Printf("  workers=%d", cfg.WorkerConcurrency)
 	log.Printf("  redfish_timeout=%s", cfg.RedfishTimeout)
 	log.Printf("  redfish_retries=%d", cfg.RedfishRetries)
+	log.Printf("  redfish_mode=%s", cfg.RedfishMode)
+	log.Printf("  redfish_insecure_tls=%v", cfg.RedfishInsecureTLS)
 	log.Printf("  job_lease_ttl=%s", cfg.JobLeaseTTL)
 	log.Printf("  job_stuck_timeout=%s", cfg.JobStuckTimeout)
 	log.Printf("  log_level=%s", cfg.LogLevel)
@@ -383,15 +393,20 @@ func main() {
 	builder := iso.NewFileBuilder(cfg.TaskISODir)
 	rfFactory := func(ctx context.Context, server *provisioner.Server) (redfish.Client, error) {
 		rfcfg := redfish.Config{
-			Endpoint: server.BMCAddress,
-			Username: server.BMCUser,
-			Password: server.BMCPass,
-			Vendor:   server.Vendor,
-			Timeout:  cfg.RedfishTimeout,
-			Logger:   log.Default(),
+			Endpoint:    server.BMCAddress,
+			Username:    server.BMCUser,
+			Password:    server.BMCPass,
+			Vendor:      server.Vendor,
+			Timeout:     cfg.RedfishTimeout,
+			Logger:      log.Default(),
+			InsecureTLS: cfg.RedfishInsecureTLS,
 		}
-		// add a small artificial delay to simulate I/O
-		return redfish.NewNoopClient(rfcfg, 200*time.Millisecond), nil
+		// Default to a small artificial delay only in noop mode
+		delay := time.Duration(0)
+		if strings.EqualFold(cfg.RedfishMode, "noop") {
+			delay = 200 * time.Millisecond
+		}
+		return redfish.NewClient(rfcfg, cfg.RedfishMode, delay)
 	}
 	for i := 0; i < cfg.WorkerConcurrency; i++ {
 		wcfg := jobs.WorkerConfig{
