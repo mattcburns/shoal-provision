@@ -36,6 +36,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"shoal/internal/provisioner/store"
 	"shoal/pkg/provisioner"
 )
 
@@ -300,22 +301,7 @@ func writeError(w http.ResponseWriter, err error, notFoundMsgFmt string, args ..
 }
 
 func isNotFound(err error) bool {
-	// Allow both sentinel errors and wrapped variants.
-	return errors.Is(err, errors.New("not found")) ||
+	// Prefer the store sentinel error; retain string fallback for safety.
+	return errors.Is(err, store.ErrNotFound) ||
 		strings.Contains(strings.ToLower(err.Error()), "not found")
-}
-
-// validateRecipeStub is a temporary placeholder for schema validation per 022.
-// It performs only very rudimentary checks to guard obviously invalid inputs.
-func validateRecipeStub(raw json.RawMessage) error {
-	trim := strings.TrimSpace(string(raw))
-	if trim == "" || trim == "null" {
-		return errors.New("recipe must be a non-empty JSON object")
-	}
-	// Basic object check: should start with { and end with } for now.
-	if !(strings.HasPrefix(trim, "{") && strings.HasSuffix(trim, "}")) {
-		return errors.New("recipe must be a JSON object")
-	}
-	// No further validation yet.
-	return nil
 }
