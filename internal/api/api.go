@@ -17,22 +17,18 @@
 package api
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
 	"shoal/internal/auth"
 	"shoal/internal/bmc"
-	"shoal/internal/ctxkeys"
 	"shoal/internal/database"
 	"shoal/pkg/models"
 	"shoal/pkg/redfish"
@@ -220,95 +216,8 @@ func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleBMCProxy proxies requests to managed BMCs
-func (h *Handler) handleBMCProxy(w http.ResponseWriter, r *http.Request, path string) {
-	// Extract BMC name from path (e.g., /v1/Managers/bmc1/...)
-	parts := strings.Split(strings.Trim(path, "/"), "/")
-	if len(parts) < 3 {
-		h.writeErrorResponse(w, http.StatusNotFound, "Base.1.0.ResourceNotFound", "Resource not found")
-		return
-	}
-
-	var bmcName string
-	var bmcPath string
-
-	// Handle different proxy patterns
-	if parts[1] == "Managers" && len(parts) >= 3 {
-		bmcName = parts[2]
-		// Get the actual manager ID from the BMC
-		managerID, err := h.bmcSvc.GetFirstManagerID(r.Context(), bmcName)
-		if err != nil {
-			slog.Error("Failed to get manager ID", "bmc", bmcName, "error", err)
-			// Fall back to common defaults
-			managerID = "1" // Common default
-		}
-
-		if len(parts) == 3 {
-			// Request for the manager root
-			bmcPath = fmt.Sprintf("/redfish/v1/Managers/%s", managerID)
-		} else {
-			// Sub-resource request
-			bmcPath = fmt.Sprintf("/redfish/v1/Managers/%s/%s", managerID, strings.Join(parts[3:], "/"))
-		}
-	} else if parts[1] == "Systems" && len(parts) >= 3 {
-		// Extract BMC name and system path
-		bmcName = parts[2]
-		// Get the actual system ID from the BMC
-		systemID, err := h.bmcSvc.GetFirstSystemID(r.Context(), bmcName)
-		if err != nil {
-			slog.Error("Failed to get system ID", "bmc", bmcName, "error", err)
-			// Fall back to common defaults
-			systemID = "1" // Common default
-		}
-
-		if len(parts) == 3 {
-			// Request for the system root
-			bmcPath = fmt.Sprintf("/redfish/v1/Systems/%s", systemID)
-		} else {
-			// Sub-resource request
-			bmcPath = fmt.Sprintf("/redfish/v1/Systems/%s/%s", systemID, strings.Join(parts[3:], "/"))
-		}
-	} else {
-		h.writeErrorResponse(w, http.StatusNotFound, "Base.1.0.ResourceNotFound", "Resource not found")
-		return
-	}
-
-	// Ensure authenticated user is present in context so audits can include it
-	user, _ := h.auth.AuthenticateRequest(r)
-	ctx := r.Context()
-	if user != nil {
-		ctx = context.WithValue(ctx, ctxkeys.User, user)
-	}
-	// Proxy request to BMC
-	resp, err := h.bmcSvc.ProxyRequest(ctx, bmcName, bmcPath, r)
-	if err != nil {
-		slog.Error("Failed to proxy request to BMC", "bmc", bmcName, "path", bmcPath, "error", err)
-		h.writeErrorResponse(w, http.StatusBadGateway, "Base.1.0.InternalError", fmt.Sprintf("Failed to communicate with BMC: %v", err))
-		return
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	// Copy response headers
-	for key, values := range resp.Header {
-		for _, value := range values {
-			w.Header().Add(key, value)
-		}
-	}
-
-	// Copy status code and body
-	w.WriteHeader(resp.StatusCode)
-	if _, cerr := io.Copy(w, resp.Body); cerr != nil {
-		slog.Warn("proxy response copy error", "error", cerr)
-	}
-}
 
 // isBMCProxyRequest checks if the request should be proxied to a BMC
-func (h *Handler) isBMCProxyRequest(path string) bool {
-	// Proxy requests for Managers and Systems endpoints with BMC names
-	managerPattern := regexp.MustCompile(`^/v1/Managers/[^/]+(/.*)?$`)
-	systemPattern := regexp.MustCompile(`^/v1/Systems/[^/]+(/.*)?$`)
-
-	return managerPattern.MatchString(path) || systemPattern.MatchString(path)
-}
 
 // handleAggregatorEndpoints handles aggregator-specific endpoints
 func (h *Handler) handleAggregatorEndpoints(w http.ResponseWriter, r *http.Request, path string, user *models.User) {
@@ -459,140 +368,6 @@ func modelsRoleFromRedfish(roleID string) (string, bool) {
 	default:
 		return "", false
 	}
-}
-
-// handleManagersCollection returns the list of managed BMCs as managers
-func (h *Handler) handleManagersCollection(w http.ResponseWriter, r *http.Request) {
-	if r.Method == http.MethodOptions {
-		h.writeAllow(w, http.MethodGet)
-		return
-	}
-	if r.Method != "GET" {
-		h.writeErrorResponse(w, http.StatusMethodNotAllowed, "Base.1.0.MethodNotAllowed", "Method not allowed")
-		return
-	}
-
-	// Get both regular BMCs and ConnectionMethods
-	bmcs, err := h.db.GetBMCs(r.Context())
-	if err != nil {
-		slog.Error("Failed to get BMCs", "error", err)
-		h.writeErrorResponse(w, http.StatusInternalServerError, "Base.1.0.InternalError", "Failed to retrieve BMCs")
-		return
-	}
-
-	methods, err := h.bmcSvc.GetConnectionMethods(r.Context())
-	if err != nil {
-		slog.Error("Failed to get connection methods", "error", err)
-		// Don't fail entirely if we can't get connection methods
-	}
-
-	var members []redfish.ODataIDRef
-
-	// Add regular BMCs
-	for _, bmc := range bmcs {
-		if bmc.Enabled {
-			members = append(members, redfish.ODataIDRef{
-				ODataID: fmt.Sprintf("/redfish/v1/Managers/%s", bmc.Name),
-			})
-		}
-	}
-
-	// Add aggregated managers from ConnectionMethods
-	for _, method := range methods {
-		if method.Enabled && method.AggregatedManagers != "" {
-			// Parse the aggregated managers JSON
-			var managers []map[string]interface{}
-			if err := json.Unmarshal([]byte(method.AggregatedManagers), &managers); err == nil {
-				for _, manager := range managers {
-					if odataID, ok := manager["@odata.id"].(string); ok {
-						// Prefix with the connection method ID to make it unique
-						modifiedID := fmt.Sprintf("/redfish/v1/Managers/%s%s", method.ID, odataID)
-						members = append(members, redfish.ODataIDRef{
-							ODataID: modifiedID,
-						})
-					}
-				}
-			}
-		}
-	}
-
-	collection := redfish.Collection{
-		ODataContext: "/redfish/v1/$metadata#ManagerCollection.ManagerCollection",
-		ODataID:      "/redfish/v1/Managers",
-		ODataType:    "#ManagerCollection.ManagerCollection",
-		Name:         "Manager Collection",
-		Members:      members,
-		MembersCount: len(members),
-	}
-
-	h.writeJSONResponse(w, http.StatusOK, collection)
-}
-
-// handleSystemsCollection returns the list of systems from managed BMCs
-func (h *Handler) handleSystemsCollection(w http.ResponseWriter, r *http.Request) {
-	if r.Method == http.MethodOptions {
-		h.writeAllow(w, http.MethodGet)
-		return
-	}
-	if r.Method != "GET" {
-		h.writeErrorResponse(w, http.StatusMethodNotAllowed, "Base.1.0.MethodNotAllowed", "Method not allowed")
-		return
-	}
-
-	// Get both regular BMCs and ConnectionMethods
-	bmcs, err := h.db.GetBMCs(r.Context())
-	if err != nil {
-		slog.Error("Failed to get BMCs", "error", err)
-		h.writeErrorResponse(w, http.StatusInternalServerError, "Base.1.0.InternalError", "Failed to retrieve BMCs")
-		return
-	}
-
-	methods, err := h.bmcSvc.GetConnectionMethods(r.Context())
-	if err != nil {
-		slog.Error("Failed to get connection methods", "error", err)
-		// Don't fail entirely if we can't get connection methods
-	}
-
-	var members []redfish.ODataIDRef
-
-	// Add regular BMCs
-	for _, bmc := range bmcs {
-		if bmc.Enabled {
-			members = append(members, redfish.ODataIDRef{
-				ODataID: fmt.Sprintf("/redfish/v1/Systems/%s", bmc.Name),
-			})
-		}
-	}
-
-	// Add aggregated systems from ConnectionMethods
-	for _, method := range methods {
-		if method.Enabled && method.AggregatedSystems != "" {
-			// Parse the aggregated systems JSON
-			var systems []map[string]interface{}
-			if err := json.Unmarshal([]byte(method.AggregatedSystems), &systems); err == nil {
-				for _, system := range systems {
-					if odataID, ok := system["@odata.id"].(string); ok {
-						// Prefix with the connection method ID to make it unique
-						modifiedID := fmt.Sprintf("/redfish/v1/Systems/%s%s", method.ID, odataID)
-						members = append(members, redfish.ODataIDRef{
-							ODataID: modifiedID,
-						})
-					}
-				}
-			}
-		}
-	}
-
-	collection := redfish.Collection{
-		ODataContext: "/redfish/v1/$metadata#ComputerSystemCollection.ComputerSystemCollection",
-		ODataID:      "/redfish/v1/Systems",
-		ODataType:    "#ComputerSystemCollection.ComputerSystemCollection",
-		Name:         "Computer System Collection",
-		Members:      members,
-		MembersCount: len(members),
-	}
-
-	h.writeJSONResponse(w, http.StatusOK, collection)
 }
 
 // writeJSONResponse writes a JSON response
