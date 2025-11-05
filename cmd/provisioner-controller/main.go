@@ -315,10 +315,26 @@ func newMux(cfg Config, ap *api.API, webhook http.Handler) *http.ServeMux {
 	mux.HandleFunc("/healthz", healthHandler)
 	mux.HandleFunc("/readyz", readyHandler)
 
-	// API endpoints
+	// Protected Jobs API (auth: basic|jwt|none via cfg.AuthMode)
 	if ap != nil {
-		ap.Register(mux)
+		protected := http.NewServeMux()
+		ap.Register(protected)
+
+		authCfg := api.AuthConfig{
+			Mode:          cfg.AuthMode,
+			BasicUsername: getenv("BASIC_USER", ""),
+			BasicPassword: getenv("BASIC_PASS", ""),
+			JWTSecret:     []byte(getenv("JWT_SECRET", "")),
+			JWTAudience:   getenv("JWT_AUDIENCE", ""),
+			JWTIssuer:     getenv("JWT_ISSUER", ""),
+			Header:        "Authorization",
+		}
+		wrapped := api.AuthMiddleware(authCfg, log.Default())(protected)
+		mux.Handle("/api/v1/jobs", wrapped)
+		mux.Handle("/api/v1/jobs/", wrapped)
 	}
+
+	// Webhook (separate auth via shared secret)
 	mux.Handle("/api/v1/status-webhook/", webhook)
 
 	// Media serving (task ISO)
