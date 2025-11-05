@@ -1,5 +1,9 @@
 # 035: Test Strategy
 
+Progress (2025-11-05)
+- Implemented Phase 1 provisioner tests: store (migrations/CRUD/leasing), API (jobs/webhook), validator (022), worker (awaitWebhook/lease heartbeats), ISO placeholder determinism, and end-to-end integration (success, failure, timeout).
+- Validation pipeline passes and repo coverage increased; see build output for current percentage.
+
 Status: Proposed
 Owners: Provisioning Working Group
 Last updated: 2025-11-05

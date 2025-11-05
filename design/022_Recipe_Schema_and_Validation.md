@@ -1,8 +1,8 @@
 # 022: Recipe Schema and Validation
 
-Status: Proposed
+Status: In Progress (Controller validation implemented)
 Owners: Provisioning Working Group
-Last updated: 2025-11-03
+Last updated: 2025-11-05
 
 Summary
 

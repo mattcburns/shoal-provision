@@ -1,10 +1,13 @@
 # 023: Task ISO Builder — Deterministic ISO Generation and Serving
 
-Status: Proposed
+Status: In Progress (Phase 1 placeholder implemented)
 Owners: Provisioning Working Group
-Last updated: 2025-11-03
+Last updated: 2025-11-05
 
 Summary
+
+Progress (2025-11-05)
+- Phase 1: Implemented a deterministic placeholder Task ISO builder (non-bootable) to unblock orchestration, media serving, and testing. Full ISO build per this document will follow in subsequent phases.
 
 This document defines the design for generating the per‑job task ISO (“task.iso”) and serving it to BMCs as virtual media. The task.iso is a small, deterministic ISO9660 image that contains the user’s recipe and any auxiliary assets (schema, cloud-init user-data, Windows unattend.xml, ESXi ks.cfg). The controller builds this ISO, stores it under a configured directory, serves it via HTTP with Range support, and manages its lifecycle. Determinism ensures identical inputs yield bit-for-bit identical outputs, which simplifies caching, integrity, and debugging.
 

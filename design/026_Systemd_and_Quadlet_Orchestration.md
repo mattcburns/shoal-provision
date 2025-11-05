@@ -1,5 +1,9 @@
 # 026: Systemd and Quadlet Orchestration
 
+Progress (2025-11-05)
+- Phase 1 (controller) is complete; Systemd/Quadlet orchestration will land in Phase 2 alongside the maintenance OS and dispatcher.
+- This document remains in progress; concrete unit graphs and Quadlet definitions will be finalized with the dispatcher tasks.
+
 Status: Proposed
 Owners: Provisioning Working Group
 Last updated: 2025-11-03
