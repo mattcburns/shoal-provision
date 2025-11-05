@@ -166,7 +166,14 @@ func (s *Service) GetFirstManagerID(ctx context.Context, bmcName string) (string
 	if !ok {
 		return "", fmt.Errorf("invalid managers payload")
 	}
-	oid, _ := first["@odata.id"].(string)
+	oidVal, ok := first["@odata.id"]
+	if !ok {
+		return "", fmt.Errorf("missing @odata.id field in manager member")
+	}
+	oid, ok := oidVal.(string)
+	if !ok || oid == "" {
+		return "", fmt.Errorf("missing or invalid @odata.id in manager member: %v", oidVal)
+	}
 
 	// Extract manager ID from the first member's OData ID
 	// Format is typically /redfish/v1/Managers/{ManagerId}
@@ -186,7 +193,7 @@ func (s *Service) GetFirstManagerID(ctx context.Context, bmcName string) (string
 		return managerID, nil
 	}
 
-	return "", fmt.Errorf("unable to parse manager ID from %s", oid)
+	return "", fmt.Errorf("unable to parse manager ID from @odata.id: %q", oid)
 }
 
 // GetFirstSystemID discovers the first system ID from a BMC
@@ -225,7 +232,14 @@ func (s *Service) GetFirstSystemID(ctx context.Context, bmcName string) (string,
 	if !ok {
 		return "", fmt.Errorf("invalid systems payload")
 	}
-	oid, _ := first["@odata.id"].(string)
+	oidVal, ok := first["@odata.id"]
+	if !ok {
+		return "", fmt.Errorf("missing @odata.id field in system member")
+	}
+	oid, ok := oidVal.(string)
+	if !ok || oid == "" {
+		return "", fmt.Errorf("missing or invalid @odata.id in system member: %v", oidVal)
+	}
 
 	// Extract system ID from the first member's OData ID
 	// Format is typically /redfish/v1/Systems/{SystemId}
@@ -245,7 +259,7 @@ func (s *Service) GetFirstSystemID(ctx context.Context, bmcName string) (string,
 		return systemID, nil
 	}
 
-	return "", fmt.Errorf("unable to parse system ID from %s", oid)
+	return "", fmt.Errorf("unable to parse system ID from @odata.id: %q", oid)
 }
 
 // PowerControl executes a power control action on a BMC
@@ -1285,17 +1299,10 @@ func (s *Service) FetchAggregatedData(ctx context.Context, bmc *models.BMC) ([]m
 
 // fetchRedfishResource fetches a single Redfish resource
 func (s *Service) fetchRedfishResource(ctx context.Context, bmc *models.BMC, path string) (map[string]interface{}, error) {
-	targetURL, err := s.buildBMCURL(bmc, path)
-	if err != nil {
-		return nil, fmt.Errorf("failed to build resource URL: %w", err)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, "GET", targetURL, nil)
+	req, err := s.newAuthedGET(ctx, bmc, path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create resource request: %w", err)
 	}
-	req.SetBasicAuth(bmc.Username, bmc.Password)
-	req.Header.Set("Accept", "application/json")
 
 	resp, err := s.client.Do(req)
 	if err != nil {
