@@ -1,7 +1,7 @@
 # 019: Codebase Simplification and Refactor Plan (No Behavioral Changes)
 
 Author: Matthew Burns  
-Status: Proposed  
+Status: Implemented  
 Date: 2025-11-04
 
 ## Summary
@@ -193,14 +193,14 @@ Benefits:
 
 ## Work Items
 
-- [ ] Extract `respond.go`, `etag.go` and adjust imports
-- [ ] Extract `errors.go` and update all call sites (including `auth.RequireAuth`)
-- [ ] Split API modules: `service_root.go`, `session_service.go`, `account_service.go`, `aggregation_service.go`, `metadata.go`, `proxy.go`, `router.go`
-- [ ] `bmc/service.go`: add micro-helpers; reduce duplication in ID discovery and connection tests
-- [ ] `database`: add `encryptIfConfigured` and `decryptIfNeeded`; refactor DAO methods to use them
-- [ ] Confirm OPTIONS handling unchanged across endpoints
-- [ ] Run validation pipeline and update/augment tests only if needed to capture preserved behavior
-- [ ] PR summary detailing that the refactor is behavior-preserving and mapping files before/after
+- [x] Extract `respond.go`, `etag.go` and adjust imports
+- [x] Extract `errors.go` and update all call sites (including `auth.RequireAuth`)
+- [x] Split API modules: `service_root.go`, `session_service.go`, `account_service.go`, `aggregation_service.go`, `metadata.go`, `proxy.go`, `router.go`
+- [x] `bmc/service.go`: add micro-helpers; reduce duplication in ID discovery and connection tests
+- [x] `database`: add `encryptIfConfigured` and `decryptIfNeeded`; refactor DAO methods to use them
+- [x] Confirm OPTIONS handling unchanged across endpoints
+- [x] Run validation pipeline and update/augment tests only if needed to capture preserved behavior
+- [x] PR summary detailing that the refactor is behavior-preserving and mapping files before/after
 
 ## Appendix A: File map (proposed)
 
