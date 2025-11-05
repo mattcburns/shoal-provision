@@ -139,7 +139,7 @@ func TestCreateJobAndGet(t *testing.T) {
 	// Create job
 	reqBody := map[string]any{
 		"server_serial": "SER-1",
-		"recipe":        map[string]any{"task_target": "install-linux.target"},
+		"recipe":        map[string]any{"task_target": "install-linux.target", "target_disk": "/dev/sda"},
 	}
 	resp, data := doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/api/v1/jobs", reqBody, nil)
 	if resp.StatusCode != http.StatusAccepted {
@@ -224,7 +224,7 @@ func TestWebhook_AuthAndTransitions(t *testing.T) {
 	// Create job (queued)
 	reqBody := map[string]any{
 		"server_serial": "SER-WH",
-		"recipe":        map[string]any{"task_target": "install-linux.target"},
+		"recipe":        map[string]any{"task_target": "install-linux.target", "target_disk": "/dev/sda"},
 	}
 	resp, data := doJSON(t, client, http.MethodPost, srv.URL+"/api/v1/jobs", reqBody, nil)
 	if resp.StatusCode != http.StatusAccepted {

@@ -121,8 +121,9 @@ type JobEventDTO struct {
 
 // jsonError is a simple error envelope for API responses.
 type jsonError struct {
-	Error   string `json:"error"`
-	Message string `json:"message,omitempty"`
+	Error   string            `json:"error"`
+	Message string            `json:"message,omitempty"`
+	Details []ValidationError `json:"details,omitempty"`
 }
 
 func (a *API) logf(format string, args ...any) {
@@ -190,11 +191,18 @@ func (a *API) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Stubbed recipe validation: to be replaced by schema validation (022).
-	if err := validateRecipeStub(req.Recipe); err != nil {
+	// Real recipe validation per 022 (schema-backed)
+	if verrs, verr := ValidateRecipe(req.Recipe); verr != nil {
 		writeJSON(w, http.StatusBadRequest, jsonError{
 			Error:   "invalid_recipe",
-			Message: err.Error(),
+			Message: "failed to validate recipe",
+		})
+		return
+	} else if len(verrs) > 0 {
+		writeJSON(w, http.StatusBadRequest, jsonError{
+			Error:   "invalid_recipe",
+			Message: "recipe does not conform to schema",
+			Details: verrs,
 		})
 		return
 	}

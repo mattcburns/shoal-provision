@@ -273,7 +273,7 @@ func TestIntegration_EndToEndPhase1Failed(t *testing.T) {
 	client := srv.Client()
 	cj, jobID := postCreateJob(t, client, srv.URL, map[string]any{
 		"server_serial": serial,
-		"recipe":        map[string]any{"task_target": "install-linux.target"},
+		"recipe":        map[string]any{"task_target": "install-linux.target", "target_disk": "/dev/sda"},
 	})
 	if cj.JobID == "" {
 		t.Fatalf("create job failed: %+v", cj)
@@ -395,7 +395,7 @@ func TestIntegration_EndToEndPhase1TimeoutFailure(t *testing.T) {
 	client := srv.Client()
 	_, jobID := postCreateJob(t, client, srv.URL, map[string]any{
 		"server_serial": serial,
-		"recipe":        map[string]any{"task_target": "install-linux.target"},
+		"recipe":        map[string]any{"task_target": "install-linux.target", "target_disk": "/dev/sda"},
 	})
 
 	// Wait for completion due to webhook timeout path
