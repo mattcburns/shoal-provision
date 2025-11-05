@@ -152,47 +152,25 @@ func (s *Service) GetFirstManagerID(ctx context.Context, bmcName string) (string
 		return "", fmt.Errorf("BMC not found: %s", bmcName)
 	}
 
-	// Get managers collection
-	managersURL, err := s.buildBMCURL(bmc, "/redfish/v1/Managers")
-	if err != nil {
-		return "", fmt.Errorf("failed to build managers URL: %w", err)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, "GET", managersURL, nil)
-	if err != nil {
-		return "", fmt.Errorf("failed to create request: %w", err)
-	}
-	req.SetBasicAuth(bmc.Username, bmc.Password)
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := s.client.Do(req)
+	// Fetch managers collection via common Redfish helper
+	data, err := s.fetchRedfishResource(ctx, bmc, "/redfish/v1/Managers")
 	if err != nil {
 		return "", fmt.Errorf("failed to get managers: %w", err)
 	}
-	defer func() { _ = resp.Body.Close() }()
 
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("failed to get managers collection: status %d", resp.StatusCode)
-	}
-
-	// Parse managers collection
-	var collection struct {
-		Members []struct {
-			ODataID string `json:"@odata.id"`
-		} `json:"Members"`
-	}
-
-	if err := json.NewDecoder(resp.Body).Decode(&collection); err != nil {
-		return "", fmt.Errorf("failed to parse managers collection: %w", err)
-	}
-
-	if len(collection.Members) == 0 {
+	membersAny, ok := data["Members"].([]interface{})
+	if !ok || len(membersAny) == 0 {
 		return "", fmt.Errorf("no managers found on BMC")
 	}
+	first, ok := membersAny[0].(map[string]interface{})
+	if !ok {
+		return "", fmt.Errorf("invalid managers payload")
+	}
+	oid, _ := first["@odata.id"].(string)
 
 	// Extract manager ID from the first member's OData ID
 	// Format is typically /redfish/v1/Managers/{ManagerId}
-	parts := strings.Split(collection.Members[0].ODataID, "/")
+	parts := strings.Split(oid, "/")
 	if len(parts) >= 5 {
 		managerID := parts[4]
 
@@ -208,7 +186,7 @@ func (s *Service) GetFirstManagerID(ctx context.Context, bmcName string) (string
 		return managerID, nil
 	}
 
-	return "", fmt.Errorf("unable to parse manager ID from %s", collection.Members[0].ODataID)
+	return "", fmt.Errorf("unable to parse manager ID from %s", oid)
 }
 
 // GetFirstSystemID discovers the first system ID from a BMC
@@ -233,47 +211,25 @@ func (s *Service) GetFirstSystemID(ctx context.Context, bmcName string) (string,
 		return "", fmt.Errorf("BMC not found: %s", bmcName)
 	}
 
-	// Get systems collection
-	systemsURL, err := s.buildBMCURL(bmc, "/redfish/v1/Systems")
-	if err != nil {
-		return "", fmt.Errorf("failed to build systems URL: %w", err)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, "GET", systemsURL, nil)
-	if err != nil {
-		return "", fmt.Errorf("failed to create request: %w", err)
-	}
-	req.SetBasicAuth(bmc.Username, bmc.Password)
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := s.client.Do(req)
+	// Fetch systems collection via common Redfish helper
+	data, err := s.fetchRedfishResource(ctx, bmc, "/redfish/v1/Systems")
 	if err != nil {
 		return "", fmt.Errorf("failed to get systems: %w", err)
 	}
-	defer func() { _ = resp.Body.Close() }()
 
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("failed to get systems collection: status %d", resp.StatusCode)
-	}
-
-	// Parse systems collection
-	var collection struct {
-		Members []struct {
-			ODataID string `json:"@odata.id"`
-		} `json:"Members"`
-	}
-
-	if err := json.NewDecoder(resp.Body).Decode(&collection); err != nil {
-		return "", fmt.Errorf("failed to parse systems collection: %w", err)
-	}
-
-	if len(collection.Members) == 0 {
+	membersAny, ok := data["Members"].([]interface{})
+	if !ok || len(membersAny) == 0 {
 		return "", fmt.Errorf("no systems found on BMC")
 	}
+	first, ok := membersAny[0].(map[string]interface{})
+	if !ok {
+		return "", fmt.Errorf("invalid systems payload")
+	}
+	oid, _ := first["@odata.id"].(string)
 
 	// Extract system ID from the first member's OData ID
 	// Format is typically /redfish/v1/Systems/{SystemId}
-	parts := strings.Split(collection.Members[0].ODataID, "/")
+	parts := strings.Split(oid, "/")
 	if len(parts) >= 5 {
 		systemID := parts[4]
 
@@ -289,7 +245,7 @@ func (s *Service) GetFirstSystemID(ctx context.Context, bmcName string) (string,
 		return systemID, nil
 	}
 
-	return "", fmt.Errorf("unable to parse system ID from %s", collection.Members[0].ODataID)
+	return "", fmt.Errorf("unable to parse system ID from %s", oid)
 }
 
 // PowerControl executes a power control action on a BMC
@@ -561,6 +517,21 @@ func (s *Service) createProxyRequest(r *http.Request, targetURL string, bmc *mod
 	proxyReq.SetBasicAuth(bmc.Username, bmc.Password)
 
 	return proxyReq, nil
+}
+
+// newAuthedGET creates an authenticated HTTP GET request for a BMC.
+func (s *Service) newAuthedGET(ctx context.Context, bmc *models.BMC, path string) (*http.Request, error) {
+	targetURL, err := s.buildBMCURL(bmc, path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build BMC URL: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, targetURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	req.SetBasicAuth(bmc.Username, bmc.Password)
+	req.Header.Set("Accept", "application/json")
+	return req, nil
 }
 
 // DiscoverSettings enumerates configurable settings using @Redfish.Settings and common endpoints
