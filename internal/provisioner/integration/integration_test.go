@@ -202,6 +202,226 @@ func TestIntegration_EndToEndPhase1Success(t *testing.T) {
 	}
 }
 
+func TestIntegration_EndToEndPhase1Failed(t *testing.T) {
+	// Store and server seed
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	t.Cleanup(cancel)
+	st, err := store.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	serial := "SER-INTEG-FAIL"
+	if err := st.UpsertServer(ctx, provisioner.Server{
+		Serial:     serial,
+		BMCAddress: "https://bmc.example",
+		BMCUser:    "root",
+		BMCPass:    "pw",
+	}); err != nil {
+		t.Fatalf("seed server: %v", err)
+	}
+
+	taskRoot := t.TempDir()
+	builder := iso.NewFileBuilder(taskRoot)
+
+	mux := http.NewServeMux()
+	ap := api.New(st, "http://localhost/isos/bootc-maintenance.iso", nil)
+	ap.Register(mux)
+	webhookSecret := "testsecret"
+	wh := api.NewWebhookHandler(st, webhookSecret, nil, func() time.Time { return time.Now().UTC() })
+	mux.Handle("/api/v1/status-webhook/", wh)
+	mux.HandleFunc("/media/tasks/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.NotFound(w, r)
+			return
+		}
+		trim := strings.TrimPrefix(r.URL.Path, "/media/tasks/")
+		parts := strings.Split(trim, "/")
+		if len(parts) != 2 || parts[0] == "" || parts[1] != "task.iso" {
+			http.NotFound(w, r)
+			return
+		}
+		jobID := parts[0]
+		http.ServeFile(w, r, filepath.Join(taskRoot, jobID, "task.iso"))
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	ap.MaintenanceISOURL = srv.URL + "/isos/bootc-maintenance.iso"
+
+	workerCtx, workerCancel := context.WithCancel(context.Background())
+	t.Cleanup(workerCancel)
+	rfFactory := func(ctx context.Context, s *provisioner.Server) (redfish.Client, error) {
+		return redfish.NewNoopClient(redfish.Config{
+			Endpoint: s.BMCAddress,
+			Username: s.BMCUser,
+			Password: s.BMCPass,
+			Timeout:  2 * time.Second,
+		}, 25*time.Millisecond), nil
+	}
+	w := jobs.NewWorker(st, builder, rfFactory, jobs.WorkerConfig{
+		WorkerID:         "wf1",
+		PollInterval:     10 * time.Millisecond,
+		LeaseTTL:         500 * time.Millisecond,
+		ExtendLeaseEvery: 200 * time.Millisecond,
+		JobStuckTimeout:  5 * time.Second,
+		RedfishTimeout:   500 * time.Millisecond,
+		TaskISOMediaBase: srv.URL + "/media/tasks",
+	}, nil)
+	go w.Run(workerCtx)
+
+	client := srv.Client()
+	cj, jobID := postCreateJob(t, client, srv.URL, map[string]any{
+		"server_serial": serial,
+		"recipe":        map[string]any{"task_target": "install-linux.target"},
+	})
+	if cj.JobID == "" {
+		t.Fatalf("create job failed: %+v", cj)
+	}
+
+	// Wait for provisioning and task.iso existence
+	waitUntil(t, 3*time.Second, 10*time.Millisecond, func() bool {
+		j, err := st.GetJobByID(ctx, jobID)
+		if err != nil {
+			return false
+		}
+		if j.Status != provisioner.JobStatusProvisioning || j.TaskISOPath == nil {
+			return false
+		}
+		_, err = os.Stat(*j.TaskISOPath)
+		return err == nil
+	})
+
+	// Send failed webhook with a failed_step
+	headers := map[string]string{"X-Webhook-Secret": webhookSecret}
+	failStep := "bootloader-linux.service"
+	doJSON(t, client, http.MethodPost, fmt.Sprintf("%s/api/v1/status-webhook/%s", srv.URL, serial), map[string]any{
+		"status":      "failed",
+		"failed_step": failStep,
+	}, headers)
+
+	// Wait for completion
+	waitUntil(t, 4*time.Second, 20*time.Millisecond, func() bool {
+		j, err := st.GetJobByID(ctx, jobID)
+		return err == nil && j.Status == provisioner.JobStatusComplete
+	})
+
+	// Verify failure event recorded
+	evs, err := st.ListJobEvents(ctx, jobID, 0)
+	if err != nil {
+		t.Fatalf("ListJobEvents: %v", err)
+	}
+	found := false
+	for _, e := range evs {
+		if strings.Contains(strings.ToLower(e.Message), "webhook reported failure") &&
+			(failStep == "" || (e.Step != nil && *e.Step == failStep)) {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected failure event mentioning step %q", failStep)
+	}
+}
+
+func TestIntegration_EndToEndPhase1TimeoutFailure(t *testing.T) {
+	// Store and server seed
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	t.Cleanup(cancel)
+	st, err := store.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	serial := "SER-INTEG-TIMEOUT"
+	if err := st.UpsertServer(ctx, provisioner.Server{
+		Serial:     serial,
+		BMCAddress: "https://bmc.example",
+		BMCUser:    "root",
+		BMCPass:    "pw",
+	}); err != nil {
+		t.Fatalf("seed server: %v", err)
+	}
+
+	taskRoot := t.TempDir()
+	builder := iso.NewFileBuilder(taskRoot)
+
+	mux := http.NewServeMux()
+	ap := api.New(st, "http://localhost/isos/bootc-maintenance.iso", nil)
+	ap.Register(mux)
+	// Webhook registered but we won't call it to force timeout
+	mux.Handle("/api/v1/status-webhook/", api.NewWebhookHandler(st, "secret", nil, func() time.Time { return time.Now().UTC() }))
+	mux.HandleFunc("/media/tasks/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.NotFound(w, r)
+			return
+		}
+		trim := strings.TrimPrefix(r.URL.Path, "/media/tasks/")
+		parts := strings.Split(trim, "/")
+		if len(parts) != 2 || parts[0] == "" || parts[1] != "task.iso" {
+			http.NotFound(w, r)
+			return
+		}
+		jobID := parts[0]
+		http.ServeFile(w, r, filepath.Join(taskRoot, jobID, "task.iso"))
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	ap.MaintenanceISOURL = srv.URL + "/isos/bootc-maintenance.iso"
+
+	workerCtx, workerCancel := context.WithCancel(context.Background())
+	t.Cleanup(workerCancel)
+	rfFactory := func(ctx context.Context, s *provisioner.Server) (redfish.Client, error) {
+		return redfish.NewNoopClient(redfish.Config{
+			Endpoint: s.BMCAddress,
+			Username: s.BMCUser,
+			Password: s.BMCPass,
+			Timeout:  2 * time.Second,
+		}, 10*time.Millisecond), nil
+	}
+	// Use small JobStuckTimeout to keep test fast
+	w := jobs.NewWorker(st, builder, rfFactory, jobs.WorkerConfig{
+		WorkerID:         "wt1",
+		PollInterval:     10 * time.Millisecond,
+		LeaseTTL:         200 * time.Millisecond,
+		ExtendLeaseEvery: 50 * time.Millisecond,
+		JobStuckTimeout:  250 * time.Millisecond,
+		RedfishTimeout:   100 * time.Millisecond,
+		TaskISOMediaBase: srv.URL + "/media/tasks",
+	}, nil)
+	go w.Run(workerCtx)
+
+	client := srv.Client()
+	_, jobID := postCreateJob(t, client, srv.URL, map[string]any{
+		"server_serial": serial,
+		"recipe":        map[string]any{"task_target": "install-linux.target"},
+	})
+
+	// Wait for completion due to webhook timeout path
+	waitUntil(t, 5*time.Second, 20*time.Millisecond, func() bool {
+		j, err := st.GetJobByID(ctx, jobID)
+		return err == nil && j.Status == provisioner.JobStatusComplete
+	})
+
+	// Verify an event indicates webhook timeout/failure
+	evs, err := st.ListJobEvents(ctx, jobID, 0)
+	if err != nil {
+		t.Fatalf("ListJobEvents: %v", err)
+	}
+	found := false
+	for _, e := range evs {
+		if strings.Contains(strings.ToLower(e.Message), "await webhook error") ||
+			strings.Contains(strings.ToLower(e.Message), "webhook wait timeout") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected an event indicating webhook timeout/failure, got %d events", len(evs))
+	}
+}
+
 // Helpers
 
 type createJobResp struct {
