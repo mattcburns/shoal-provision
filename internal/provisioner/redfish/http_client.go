@@ -29,8 +29,11 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
+
+	"shoal/internal/provisioner/metrics"
 )
 
 // httpClient is a real Redfish over HTTP(S) client that implements the
@@ -57,16 +60,44 @@ type httpClient struct {
 	logger  *log.Logger
 
 	// Session token (if SessionService succeeded)
-	token string
+	token       string
+	sessionPath string // absolute path of session resource for DELETE on Close()
 
 	// Retry policy
-	retryMax int
+	retryMax  int
+	retryBase time.Duration
+	retryCap  time.Duration
 
 	// Discovered/cached paths
 	systemPath   string   // /redfish/v1/Systems/{id}
 	managerPath  string   // /redfish/v1/Managers/{id}
 	vmCDPaths    []string // VirtualMedia instance paths for CD/DVD slots (stable ordering)
 	discoveredAt time.Time
+}
+
+type vendorProfile struct {
+	retryMax  int
+	retryBase time.Duration
+	retryCap  time.Duration
+}
+
+func profileForVendor(vendor string) vendorProfile {
+	profile := vendorProfile{
+		retryMax:  5,
+		retryBase: 200 * time.Millisecond,
+		retryCap:  8 * time.Second,
+	}
+	switch {
+	case isIDRAC(vendor):
+		profile.retryMax = 7
+		profile.retryCap = 15 * time.Second
+	case isILO(vendor):
+		profile.retryMax = 6
+		profile.retryCap = 12 * time.Second
+	case isSupermicro(vendor):
+		profile.retryCap = 10 * time.Second
+	}
+	return profile
 }
 
 // Ensure httpClient implements Client.
@@ -98,13 +129,19 @@ func NewHTTPClient(cfg Config) (*httpClient, error) {
 		Transport: transport,
 	}
 
+	profile := profileForVendor(cfg.Vendor)
 	cl := &httpClient{
-		cfg:      cfg,
-		hc:       hc,
-		baseURL:  u,
-		logger:   cfg.Logger,
-		token:    "",
-		retryMax: 5,
+		cfg:       cfg,
+		hc:        hc,
+		baseURL:   u,
+		logger:    cfg.Logger,
+		token:     "",
+		retryMax:  profile.retryMax,
+		retryBase: profile.retryBase,
+		retryCap:  profile.retryCap,
+	}
+	if cfg.Retries > 0 {
+		cl.retryMax = cfg.Retries
 	}
 	return cl, nil
 }
@@ -116,7 +153,15 @@ func (c *httpClient) logf(format string, args ...any) {
 }
 
 func (c *httpClient) Close() error {
-	// No persistent resources yet (sessions can be added later).
+	// Best-effort session logout
+	if c.sessionPath != "" && c.token != "" {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		// Fire-and-forget; ignore error
+		_, _, _ = c.do(ctx, metrics.OpSessionLogout, http.MethodDelete, c.sessionPath, nil, false)
+		c.sessionPath = ""
+		c.token = ""
+	}
 	return nil
 }
 
@@ -138,10 +183,14 @@ func (c *httpClient) MountVirtualMedia(ctx context.Context, cd int, isoURL strin
 		return fmt.Errorf("redfish: virtual media CD%d slot not discovered", cd)
 	}
 	vmPath := c.vmCDPaths[cd-1]
+	op := metrics.OpMountMaintenance
+	if cd == 2 {
+		op = metrics.OpMountTask
+	}
 
 	// Idempotency check: if already inserted with identical Image, skip.
 	var vm virtualMedia
-	if err := c.getJSON(ctx, vmPath, &vm); err != nil {
+	if err := c.getJSON(ctx, op, vmPath, &vm); err != nil {
 		return fmt.Errorf("virtualmedia get (cd%d): %w", cd, err)
 	}
 	if strings.EqualFold(vm.Image, isoURL) && vm.Inserted {
@@ -150,7 +199,7 @@ func (c *httpClient) MountVirtualMedia(ctx context.Context, cd int, isoURL strin
 	}
 	// If another image is present, eject it.
 	if vm.Inserted && !strings.EqualFold(vm.Image, isoURL) {
-		if err := c.postJSON(ctx, joinPath(vmPath, "Actions/VirtualMedia.EjectMedia"), emptyJSON(), nil); err != nil {
+		if err := c.postJSON(ctx, op, joinPath(vmPath, "Actions/VirtualMedia.EjectMedia"), emptyJSON(), nil); err != nil {
 			return fmt.Errorf("virtualmedia eject (cd%d): %w", cd, err)
 		}
 	}
@@ -166,7 +215,7 @@ func (c *httpClient) MountVirtualMedia(ctx context.Context, cd int, isoURL strin
 	// Vendors like iDRAC/iLO sometimes accept (or ignore) user/pass fields.
 	// We avoid sending credentials unless policy demands; keep payload minimal and portable.
 
-	if err := c.postJSON(ctx, joinPath(vmPath, "Actions/VirtualMedia.InsertMedia"), payload, nil); err != nil {
+	if err := c.postJSON(ctx, op, joinPath(vmPath, "Actions/VirtualMedia.InsertMedia"), payload, nil); err != nil {
 		return fmt.Errorf("virtualmedia insert (cd%d): %w", cd, err)
 	}
 	c.logf("MountVirtualMedia: cd%d inserted image=%s", cd, isoURL)
@@ -185,7 +234,11 @@ func (c *httpClient) UnmountVirtualMedia(ctx context.Context, cd int) error {
 		return fmt.Errorf("redfish: virtual media CD%d slot not discovered", cd)
 	}
 	vmPath := c.vmCDPaths[cd-1]
-	if err := c.postJSON(ctx, joinPath(vmPath, "Actions/VirtualMedia.EjectMedia"), emptyJSON(), nil); err != nil {
+	op := metrics.OpCleanupUnmountMaint
+	if cd == 2 {
+		op = metrics.OpCleanupUnmountTask
+	}
+	if err := c.postJSON(ctx, op, joinPath(vmPath, "Actions/VirtualMedia.EjectMedia"), emptyJSON(), nil); err != nil {
 		return fmt.Errorf("virtualmedia eject (cd%d): %w", cd, err)
 	}
 	c.logf("UnmountVirtualMedia: cd%d ejected", cd)
@@ -210,7 +263,7 @@ func (c *httpClient) SetOneTimeBoot(ctx context.Context, device BootDevice) erro
 		boot["BootSourceOverrideMode"] = "UEFI"
 	}
 	body := map[string]any{"Boot": boot}
-	if err := c.patchJSON(ctx, c.systemPath, body, nil); err != nil {
+	if err := c.patchJSON(ctx, metrics.OpBootOverride, c.systemPath, body, nil); err != nil {
 		return fmt.Errorf("set one-time boot: %w", err)
 	}
 	c.logf("SetOneTimeBoot: target=%s", target)
@@ -229,18 +282,18 @@ func (c *httpClient) Reboot(ctx context.Context, mode RebootMode) error {
 	resetPath := joinPath(c.systemPath, "Actions/ComputerSystem.Reset")
 
 	// Preferred
-	if err := c.postJSON(ctx, resetPath, map[string]any{"ResetType": "GracefulRestart"}, nil); err == nil {
+	if err := c.postJSON(ctx, metrics.OpResetGraceful, resetPath, map[string]any{"ResetType": "GracefulRestart"}, nil); err == nil {
 		c.logf("Reboot: ResetType=GracefulRestart")
 		return nil
 	} else {
 		// Fallbacks
 		c.logf("Reboot: GracefulRestart failed; attempting ForceRestart: %v", err)
-		if err2 := c.postJSON(ctx, resetPath, map[string]any{"ResetType": "ForceRestart"}, nil); err2 == nil {
+		if err2 := c.postJSON(ctx, metrics.OpResetGraceful, resetPath, map[string]any{"ResetType": "ForceRestart"}, nil); err2 == nil {
 			c.logf("Reboot: ResetType=ForceRestart")
 			return nil
 		} else {
 			c.logf("Reboot: ForceRestart failed; attempting PowerCycle: %v", err2)
-			if err3 := c.postJSON(ctx, resetPath, map[string]any{"ResetType": "PowerCycle"}, nil); err3 == nil {
+			if err3 := c.postJSON(ctx, metrics.OpResetGraceful, resetPath, map[string]any{"ResetType": "PowerCycle"}, nil); err3 == nil {
 				c.logf("Reboot: ResetType=PowerCycle")
 				return nil
 			}
@@ -256,10 +309,11 @@ func (c *httpClient) ensureDiscovery(ctx context.Context) error {
 	if !c.discoveredAt.IsZero() && time.Since(c.discoveredAt) < 2*time.Minute {
 		return nil
 	}
+	op := metrics.OpDiscover
 
 	// 1) ServiceRoot
 	var root serviceRoot
-	if err := c.getJSON(ctx, "/redfish/v1/", &root); err != nil {
+	if err := c.getJSON(ctx, op, "/redfish/v1/", &root); err != nil {
 		return fmt.Errorf("discover service root: %w", err)
 	}
 
@@ -269,7 +323,7 @@ func (c *httpClient) ensureDiscovery(ctx context.Context) error {
 		return errors.New("discover: ServiceRoot.Systems missing")
 	}
 	var sysColl collection
-	if err := c.getJSON(ctx, sysCollPath, &sysColl); err != nil {
+	if err := c.getJSON(ctx, op, sysCollPath, &sysColl); err != nil {
 		return fmt.Errorf("discover systems: %w", err)
 	}
 	if len(sysColl.Members) == 0 {
@@ -282,7 +336,7 @@ func (c *httpClient) ensureDiscovery(ctx context.Context) error {
 
 	// 3) Manager: prefer System.Links.ManagedBy if present; else ServiceRoot.Managers
 	var sys system
-	if err := c.getJSON(ctx, systemPath, &sys); err != nil {
+	if err := c.getJSON(ctx, op, systemPath, &sys); err != nil {
 		return fmt.Errorf("discover system resource: %w", err)
 	}
 	managerPath := ""
@@ -295,7 +349,7 @@ func (c *httpClient) ensureDiscovery(ctx context.Context) error {
 			return errors.New("discover: neither ManagedBy nor ServiceRoot.Managers present")
 		}
 		var mgrColl collection
-		if err := c.getJSON(ctx, mgrCollPath, &mgrColl); err != nil {
+		if err := c.getJSON(ctx, op, mgrCollPath, &mgrColl); err != nil {
 			return fmt.Errorf("discover managers: %w", err)
 		}
 		if len(mgrColl.Members) == 0 {
@@ -306,7 +360,7 @@ func (c *httpClient) ensureDiscovery(ctx context.Context) error {
 
 	// 4) Manager.VirtualMedia
 	var mgr manager
-	if err := c.getJSON(ctx, managerPath, &mgr); err != nil {
+	if err := c.getJSON(ctx, op, managerPath, &mgr); err != nil {
 		return fmt.Errorf("discover manager resource: %w", err)
 	}
 	vmCollPath := mgr.VirtualMedia.OdataID
@@ -319,7 +373,7 @@ func (c *httpClient) ensureDiscovery(ctx context.Context) error {
 		}
 	}
 	var vmColl collection
-	if err := c.getJSON(ctx, vmCollPath, &vmColl); err != nil {
+	if err := c.getJSON(ctx, op, vmCollPath, &vmColl); err != nil {
 		return fmt.Errorf("discover virtual media collection: %w", err)
 	}
 	if len(vmColl.Members) == 0 {
@@ -338,7 +392,7 @@ func (c *httpClient) ensureDiscovery(ctx context.Context) error {
 			continue
 		}
 		var vmi virtualMedia
-		if err := c.getJSON(ctx, m.OdataID, &vmi); err != nil {
+		if err := c.getJSON(ctx, op, m.OdataID, &vmi); err != nil {
 			// Skip instances we can't read
 			continue
 		}
@@ -411,14 +465,14 @@ func (c *httpClient) buildURL(rel string) string {
 	return u
 }
 
-func (c *httpClient) do(ctx context.Context, method, rel string, body any, expectJSON bool) (*http.Response, []byte, error) {
-	var rdr io.Reader
+func (c *httpClient) do(ctx context.Context, op, method, rel string, body any, expectJSON bool) (*http.Response, []byte, error) {
+	var payload []byte
 	if body != nil {
 		b, err := json.Marshal(body)
 		if err != nil {
 			return nil, nil, fmt.Errorf("marshal request json: %w", err)
 		}
-		rdr = bytes.NewReader(b)
+		payload = b
 	}
 
 	var lastErr error
@@ -431,6 +485,11 @@ func (c *httpClient) do(ctx context.Context, method, rel string, body any, expec
 	}
 
 	for attempt := 1; attempt <= attempts; attempt++ {
+		var rdr io.Reader
+		if len(payload) > 0 {
+			rdr = bytes.NewReader(payload)
+		}
+
 		req, err := http.NewRequestWithContext(ctx, method, c.buildURL(rel), rdr)
 		if err != nil {
 			return nil, nil, err
@@ -438,8 +497,11 @@ func (c *httpClient) do(ctx context.Context, method, rel string, body any, expec
 		if expectJSON {
 			req.Header.Set("Accept", "application/json")
 		}
-		if body != nil {
+		if len(payload) > 0 {
 			req.Header.Set("Content-Type", "application/json")
+			req.GetBody = func() (io.ReadCloser, error) {
+				return io.NopCloser(bytes.NewReader(payload)), nil
+			}
 		}
 		// Prefer X-Auth-Token if available; otherwise fallback to Basic
 		if c.token != "" {
@@ -448,63 +510,68 @@ func (c *httpClient) do(ctx context.Context, method, rel string, body any, expec
 			req.Header.Set("Authorization", c.authHeader())
 		}
 
+		start := time.Now()
 		resp, err := c.hc.Do(req)
+		duration := time.Since(start)
 		if err != nil {
+			metrics.ObserveRedfishRequest(op, c.cfg.Vendor, -1, duration)
 			lastErr = err
-			// Retry on transport errors
 			if attempt < attempts {
-				time.Sleep(expBackoff(attempt))
+				metrics.IncRedfishRetry(op, c.cfg.Vendor)
+				time.Sleep(c.backoff(attempt))
 				continue
 			}
 			return nil, nil, err
 		}
-		// Read body for status evaluation
 		data, _ := io.ReadAll(resp.Body)
-		// Reuse connection by draining a small amount then closing
 		io.CopyN(io.Discard, resp.Body, 512)
 		resp.Body.Close()
+		metrics.ObserveRedfishRequest(op, c.cfg.Vendor, resp.StatusCode, duration)
 
-		// Handle 401: try SessionService once if creds present and no token yet
-		if resp.StatusCode == http.StatusUnauthorized && c.token == "" && (c.cfg.Username != "" || c.cfg.Password != "") {
+		if resp.StatusCode == http.StatusUnauthorized && (c.cfg.Username != "" || c.cfg.Password != "") {
+			c.token = ""
+			c.sessionPath = ""
 			if serr := c.startSession(ctx); serr == nil {
-				// Retry this request immediately with token
 				lastErr = fmt.Errorf("retry after session login")
 				if attempt < attempts {
-					time.Sleep(expBackoff(attempt))
+					metrics.IncRedfishRetry(op, c.cfg.Vendor)
 					continue
 				}
 			}
 		}
 
-		// Successful 2xx
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 			return resp, data, nil
 		}
 
-		// Retry on 5xx or 429
 		if (resp.StatusCode >= 500 && resp.StatusCode <= 599) || resp.StatusCode == http.StatusTooManyRequests {
 			lastErr = fmt.Errorf("http %s %s: status=%d body=%s", method, rel, resp.StatusCode, truncate(string(data), 512))
 			lastResp = resp
 			lastBody = data
 			if attempt < attempts {
-				time.Sleep(expBackoff(attempt))
+				metrics.IncRedfishRetry(op, c.cfg.Vendor)
+				sleep := c.backoff(attempt)
+				if resp.StatusCode == http.StatusTooManyRequests {
+					if ra, ok := parseRetryAfter(resp.Header.Get("Retry-After"), time.Now()); ok && ra > sleep {
+						sleep = ra
+					}
+				}
+				time.Sleep(sleep)
 				continue
 			}
 		} else {
-			// Non-retryable codes
 			return resp, data, fmt.Errorf("http %s %s: status=%d body=%s", method, rel, resp.StatusCode, truncate(string(data), 512))
 		}
 	}
 
-	// Exhausted retries
 	if lastResp != nil && lastBody != nil {
 		return lastResp, lastBody, lastErr
 	}
 	return nil, nil, lastErr
 }
 
-func (c *httpClient) getJSON(ctx context.Context, rel string, out any) error {
-	_, data, err := c.do(ctx, http.MethodGet, rel, nil, true)
+func (c *httpClient) getJSON(ctx context.Context, op, rel string, out any) error {
+	_, data, err := c.do(ctx, op, http.MethodGet, rel, nil, true)
 	if err != nil {
 		return err
 	}
@@ -516,8 +583,8 @@ func (c *httpClient) getJSON(ctx context.Context, rel string, out any) error {
 	return nil
 }
 
-func (c *httpClient) postJSON(ctx context.Context, rel string, body any, out any) error {
-	_, data, err := c.do(ctx, http.MethodPost, rel, body, true)
+func (c *httpClient) postJSON(ctx context.Context, op, rel string, body any, out any) error {
+	_, data, err := c.do(ctx, op, http.MethodPost, rel, body, true)
 	if err != nil {
 		return err
 	}
@@ -529,8 +596,8 @@ func (c *httpClient) postJSON(ctx context.Context, rel string, body any, out any
 	return nil
 }
 
-func (c *httpClient) patchJSON(ctx context.Context, rel string, body any, out any) error {
-	_, data, err := c.do(ctx, http.MethodPatch, rel, body, true)
+func (c *httpClient) patchJSON(ctx context.Context, op, rel string, body any, out any) error {
+	_, data, err := c.do(ctx, op, http.MethodPatch, rel, body, true)
 	if err != nil {
 		return err
 	}
@@ -558,9 +625,10 @@ type serviceRoot struct {
 }
 
 type system struct {
-	ID    string `json:"Id"`
-	Name  string `json:"Name"`
-	Links struct {
+	ID         string `json:"Id"`
+	Name       string `json:"Name"`
+	PowerState string `json:"PowerState"`
+	Links      struct {
 		ManagedBy []odataID `json:"ManagedBy"`
 	} `json:"Links"`
 	// Some vendors expose VirtualMedia here
@@ -626,6 +694,50 @@ func maxDur(a, b time.Duration) time.Duration {
 
 func emptyJSON() map[string]any { return map[string]any{} }
 
+func (c *httpClient) backoff(attempt int) time.Duration {
+	if attempt < 1 {
+		attempt = 1
+	}
+	base := c.retryBase
+	if base <= 0 {
+		base = 200 * time.Millisecond
+	}
+	cap := c.retryCap
+	if cap <= 0 {
+		cap = 8 * time.Second
+	}
+	d := base << (attempt - 1)
+	if d > cap {
+		d = cap
+	}
+	jitterRange := int64(d) / 5
+	if jitterRange > 0 {
+		jitter := time.Duration(time.Now().UnixNano() % jitterRange)
+		d += jitter
+	}
+	return d
+}
+
+func parseRetryAfter(header string, now time.Time) (time.Duration, bool) {
+	val := strings.TrimSpace(header)
+	if val == "" {
+		return 0, false
+	}
+	if secs, err := strconv.Atoi(val); err == nil {
+		if secs <= 0 {
+			return 0, true
+		}
+		return time.Duration(secs) * time.Second, true
+	}
+	if when, err := http.ParseTime(val); err == nil {
+		if when.After(now) {
+			return when.Sub(now), true
+		}
+		return 0, true
+	}
+	return 0, false
+}
+
 // -------- Vendor detection helpers (pragmatic) --------
 
 func isIDRAC(vendor string) bool {
@@ -641,6 +753,30 @@ func isILO(vendor string) bool {
 func isSupermicro(vendor string) bool {
 	v := strings.ToLower(strings.TrimSpace(vendor))
 	return strings.Contains(v, "supermicro")
+}
+
+func normalizePowerState(raw string) PowerState {
+	v := strings.ToLower(strings.TrimSpace(raw))
+	v = strings.ReplaceAll(v, " ", "")
+	v = strings.ReplaceAll(v, "-", "")
+	switch v {
+	case "on":
+		return PowerStateOn
+	case "off":
+		return PowerStateOff
+	case "poweringon":
+		return PowerStatePoweringOn
+	case "poweringoff":
+		return PowerStatePoweringOff
+	case "resetting", "reset":
+		return PowerStateResetting
+	case "standby", "standbyoffline", "standbyspare":
+		return PowerStateStandby
+	case "unknown":
+		return PowerStateUnknown
+	default:
+		return PowerStateUnknown
+	}
 }
 
 // startSession attempts to create a Redfish session and stores the X-Auth-Token.
@@ -693,33 +829,24 @@ func (c *httpClient) startSession(ctx context.Context) error {
 		return fmt.Errorf("session create failed: status=%d body=%s", resp.StatusCode, truncate(string(data), 512))
 	}
 
+	// Capture session resource for logout if provided
+	if loc := resp.Header.Get("Location"); loc != "" {
+		// Expect absolute path under Redfish root
+		if strings.HasPrefix(loc, "/") {
+			c.sessionPath = loc
+		} else {
+			// Some implementations may return a full URL; extract path portion
+			if u, err := url.Parse(loc); err == nil && u.Path != "" {
+				c.sessionPath = u.Path
+			}
+		}
+	}
+
 	// Token typically in X-Auth-Token header
 	if tok := resp.Header.Get("X-Auth-Token"); tok != "" {
 		c.token = tok
 		return nil
 	}
-	// Some return Location for the session resource; we could GET it to retrieve token if needed.
-	// For now, treat missing token as a failure to avoid spinning.
+	// If token missing but session path exists, some implementations require subsequent GET; treat as failure for now.
 	return errors.New("session token not provided")
-}
-
-// expBackoff returns a simple exponential backoff with jitter.
-func expBackoff(attempt int) time.Duration {
-	if attempt < 1 {
-		attempt = 1
-	}
-	base := 200 * time.Millisecond
-	max := 8 * time.Second
-	d := base << (attempt - 1)
-	if d > max {
-		d = max
-	}
-	// Jitter: +/- 20%
-	j := int64(d) / 5
-	now := time.Now().UnixNano()
-	sign := int64(1)
-	if now&1 == 0 {
-		sign = -1
-	}
-	return d + time.Duration(sign*(now%j))
 }

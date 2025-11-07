@@ -3,7 +3,7 @@
 3.  **Ensure All Tests Pass:** Before you consider your task complete, you MUST run the full validation pipeline and ensure all tests pass.
     ```bash
     go run build.go validate
-    ```y
+    ```
 
 **ATTENTION AI AGENT:** This document contains the official operating protocol for all AI-assisted development in the `shoal` repository. You are required to read, understand, and strictly adhere to these rules at all times. Failure to comply with these directives will result in corrective action.
 
@@ -34,7 +34,7 @@ These are the most important rules. They are not suggestions. You MUST follow th
 1.  **Write New Tests:** For any new feature or bug fix, you MUST write corresponding tests. This is not optional.
 2.  **Ensure All Tests Pass:** Before you consider your task complete, you MUST run the full validation pipeline and ensure all tests pass.
     ```bash
-    python3 build.py validate
+    go run build.go validate
     ```
 3.  **Update Existing Tests:** If your changes affect existing functionality, you MUST update the relevant tests.
 
@@ -145,6 +145,8 @@ This section outlines the commands you will use for development. These are not j
 ### 3.1. The Primary Tool: `build.go`
 
 All build, test, and validation tasks are executed through the Go-based automation script `build.go`. You can run it with `go run build.go`.
+
+> NOTE: `build.go` is the single source of truth for building, testing, and validation. Ignore any references to Python build scripts or environments; those are historical and not part of the required workflow. Python is only used for optional utilities under `scripts/` when explicitly called out. Always use `go run build.go validate` for the full pipeline.
 
 ### 3.2. Standard Development Commands
 

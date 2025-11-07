@@ -21,7 +21,8 @@ This document summarizes the current status of Provisioner Phase 2 work, what’
 - Phase 2 (in-progress):
   - New Redfish HTTP client (real implementation) with discovery and core ops.
   - Vendor-aware adaptations for iDRAC, iLO, Supermicro.
-  - Resilience features: session auth (X-Auth-Token), retries/backoff, TLS policy toggle.
+  - Vendor-specific retry profiles with Retry-After honoring for rate limits.
+  - Resilience features: session auth (X-Auth-Token) with refresh on 401 and optional logout, retries/backoff, TLS policy toggle.
   - ESXi no-webhook flow: worker scaffolding for BMC readiness (Ping) and placeholder for power-state polling.
   - Controller flag/env wiring to switch between noop and real clients (default remains noop for Phase 1 compatibility).
 
@@ -71,15 +72,20 @@ All repository tests pass:
   - Session auth
     - On 401, POST SessionService/Sessions, read X-Auth-Token, retry original request once
   - Retries/backoff
-    - Exponential backoff with jitter for 5xx/429 and transport errors (bounded attempts)
+    - Vendor-specific retry counts/backoff ceilings with optional override via Config.Retries
+    - Exponential backoff with jitter for 5xx/transport errors and Retry-After honoring for 429
   - TLS policy
     - Optional InsecureSkipVerify for lab BMCs (configurable)
   - Liveness
     - Client.Ping() → GET /redfish/v1/
 
-- Worker scaffolding for ESXi
-  - awaitBMCReady(ctx, client, deadline): ping loop until BMC/API responsiveness after reset
-  - pollPowerStatePlaceholder(...): placeholder to be replaced with real power-state heuristics
+- Worker ESXi flow (no webhook)
+  - awaitBMCReady(ctx, job, client, deadline): ping loop until BMC/API responsiveness after reset with structured op events
+  - pollESXiPowerState(...): monitors power transitions and waits for a stable "On" window before marking success (records op telemetry)
+  - Worker config exposes ESXi-specific polling tunables (install timeout, stable window, poll intervals)
+- Controller restart reconciliation
+  - On startup, provisioning jobs are re-queued for the new worker pool and annotated with a reconciliation event
+  - Job leases/worker ownership fields are cleared to avoid orphaned work after crashes
 
 - Controller configuration (cmd/provisioner-controller/main.go)
   - REDFISH_MODE=http|noop (default: noop)
@@ -93,6 +99,7 @@ All repository tests pass:
   - Idempotency (insert skip when same Image)
   - Session retry on 401
   - Retry/backoff on transient 5xx
+  - Rate limiting (429) honoring Retry-After delay
   - Vendor mode behavior: UEFI for iDRAC/iLO; none for Supermicro
 
 ---
@@ -138,39 +145,32 @@ Note: Vendor detection is pragmatic: case-insensitive checks against provided Se
 
 ## 6) Phase 2 Roadmap (Prioritized Next Steps)
 
-1) ESXi workflow (no webhook)
-- Implement power-state/API-up polling per design/028:
-  - Poll ServiceRoot readiness, then Systems endpoints
-  - Observe power state transitions (On → cycling → On) with stabilization window
-  - Cleanup: eject media and perform final reset
-- Add contract tests to simulate API downtime and transitions
+1) Vendor profile expansion
+  - Consider InsertMedia credentials fields if a target vendor requires them (keep default off)
+  - Capture additional vendor-specific quirks (payload overrides, manager resets) as hardware coverage expands
 
-2) Controller reconciliation on restart
-- On startup, scan jobs in provisioning state
-- Re-discover and resume: extend leases, continue wait/cleanup
-- Tests for restart mid-provision and proper recovery
+2) Session auth hardening
+  - DONE: Token refresh on 401 with session re-login and immediate retry
+  - DONE: Optional logout (DELETE session) on client Close()
 
-3) Vendor profile expansion
-- Add per-vendor retry tuning, rate-limit handling (429 with Retry-After)
-- Consider InsertMedia credentials fields if a target vendor requires them (keep default off)
+3) Observability & metrics
+  - Structured job events for each Redfish op (op, status, elapsed, attempts)
+  - Export basic metrics counters/histograms where appropriate
+  - Redact all secrets (passwords, tokens, Authorization headers)
 
-4) Session auth hardening
-- Token refresh if expired
-- Optional logout on cleanup (if beneficial and safe)
+4) Dispatcher and Maintenance OS (025–026)
+  - Quadlet/systemd targets per workflows (Linux, Windows, ESXi)
+  - Dispatcher (Go) validates task ISO, reads recipe, starts target, posts webhook status
+  - Integration tests spanning controller → dispatcher path
 
-5) Observability & metrics
-- Structured job events for each Redfish op (op, status, elapsed, attempts)
-- Export basic metrics counters/histograms where appropriate
-- Redact all secrets (passwords, tokens, Authorization headers)
+5) Security & artifact delivery
+  - Optional signed URLs for task.iso
+  - Tighten media serving access (time-limited tokens or BMC-scoped access)
 
-6) Dispatcher and Maintenance OS (025–026)
-- Quadlet/systemd targets per workflows (Linux, Windows, ESXi)
-- Dispatcher (Go) validates task ISO, reads recipe, starts target, posts webhook status
-- Integration tests spanning controller → dispatcher path
 
-7) Security & artifact delivery
-- Optional signed URLs for task.iso
-- Tighten media serving access (time-limited tokens or BMC-scoped access)
+
+
+
 
 ---
 
@@ -233,27 +233,19 @@ Note: Vendor detection is pragmatic: case-insensitive checks against provided Se
 
 ## 10) How Another Agent Should Proceed
 
-1) Implement ESXi power-state polling and stabilization in worker:
-   - Replace `pollPowerStatePlaceholder()` with real logic per design/028.
-   - Add unit tests that simulate API downtime and recovery windows.
-
-2) Add reconciliation on restart:
-   - New controller startup routine to rehydrate provisioning jobs and resume orchestration.
-   - Unit/integration tests for mid-flight restarts.
-
-3) Expand vendor profiles:
+1) Expand vendor profiles:
    - Add capability flags and more granular retry/backoff per vendor.
    - Confirm Boot override behavior with/without explicit UEFI.
 
-4) Improve session lifecycle:
+2) Improve session lifecycle:
    - Token expiry detection and refresh.
    - Optional session teardown in cleanup (only if beneficial).
 
-5) Observability:
+3) Observability:
    - Emit job events with op names (discover, mount.maintenance, mount.task, boot-override, reset, cleanup.*)
    - Integrate simple metrics counters (if repository policy allows; otherwise focus on events/logs).
 
-6) Keep tests green:
+4) Keep tests green:
    - Always run `go run build.go validate` before concluding work.
    - Maintain license headers and update docs where behavior changes (README, DEPLOYMENT, design docs).
 

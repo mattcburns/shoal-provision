@@ -35,6 +35,7 @@ import (
 	"shoal/internal/provisioner/api"
 	"shoal/internal/provisioner/iso"
 	"shoal/internal/provisioner/jobs"
+	"shoal/internal/provisioner/metrics"
 	"shoal/internal/provisioner/redfish"
 	"shoal/internal/provisioner/store"
 	"shoal/pkg/provisioner"
@@ -324,6 +325,7 @@ func newMux(cfg Config, ap *api.API, webhook http.Handler) *http.ServeMux {
 	// Health/ready
 	mux.HandleFunc("/healthz", healthHandler)
 	mux.HandleFunc("/readyz", readyHandler)
+	mux.Handle("/metrics", metrics.Handler())
 
 	// Protected Jobs API (auth: basic|jwt|none via cfg.AuthMode)
 	if ap != nil {
@@ -368,6 +370,36 @@ func newMux(cfg Config, ap *api.API, webhook http.Handler) *http.ServeMux {
 	return mux
 }
 
+func reconcileProvisioningJobs(ctx context.Context, st *store.Store, logger *log.Logger) error {
+	jobs, err := st.ListJobsByStatus(ctx, provisioner.JobStatusProvisioning)
+	if err != nil {
+		return fmt.Errorf("list provisioning jobs: %w", err)
+	}
+	if len(jobs) == 0 {
+		return nil
+	}
+	for _, job := range jobs {
+		if err := st.RequeueProvisioningJob(ctx, job.ID); err != nil {
+			return fmt.Errorf("requeue job %s: %w", job.ID, err)
+		}
+		if logger != nil {
+			logger.Printf("re-queued provisioning job id=%s serial=%s for reconciliation", job.ID, job.ServerSerial)
+		}
+		step := "reconcile"
+		ev := provisioner.JobEvent{
+			JobID:   job.ID,
+			Time:    time.Now().UTC(),
+			Level:   provisioner.EventLevelInfo,
+			Message: "Controller restart detected active provisioning job; re-queued for reconciliation",
+			Step:    &step,
+		}
+		if err := st.AppendJobEvent(ctx, ev); err != nil && logger != nil {
+			logger.Printf("append reconciliation event for job %s failed: %v", job.ID, err)
+		}
+	}
+	return nil
+}
+
 func main() {
 	log.SetFlags(log.LstdFlags | log.LUTC | log.Lmsgprefix)
 	log.SetPrefix("[provisioner-controller] ")
@@ -385,6 +417,9 @@ func main() {
 
 	ap := api.New(st, cfg.MaintenanceISOURL, log.Default())
 	wbh := api.NewWebhookHandler(st, cfg.WebhookSecret, log.Default(), nil)
+	if err := reconcileProvisioningJobs(context.Background(), st, log.Default()); err != nil {
+		log.Printf("reconcile provisioning jobs: %v", err)
+	}
 	// Ensure task ISO directory exists
 	_ = os.MkdirAll(cfg.TaskISODir, 0o755)
 	// Start workers
@@ -397,6 +432,7 @@ func main() {
 			Username:    server.BMCUser,
 			Password:    server.BMCPass,
 			Vendor:      server.Vendor,
+			Retries:     cfg.RedfishRetries,
 			Timeout:     cfg.RedfishTimeout,
 			Logger:      log.Default(),
 			InsecureTLS: cfg.RedfishInsecureTLS,

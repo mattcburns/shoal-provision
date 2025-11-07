@@ -21,6 +21,7 @@ package jobs
 // in Phase 1), logs events, and waits for a webhook-driven completion.
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -30,6 +31,7 @@ import (
 	"time"
 
 	"shoal/internal/provisioner/iso"
+	"shoal/internal/provisioner/metrics"
 	"shoal/internal/provisioner/redfish"
 	"shoal/pkg/provisioner"
 )
@@ -67,6 +69,12 @@ type WorkerConfig struct {
 	RedfishTimeout    time.Duration
 	TaskISOMediaBase  string // e.g., "http://controller.internal:8080/media/tasks"
 	LogEveryHeartbeat bool
+
+	// ESXi workflow tuning
+	ESXIInstallTimeout    time.Duration
+	ESXIStableWindow      time.Duration
+	ESXIPollIntervalStart time.Duration
+	ESXIPollIntervalMax   time.Duration
 }
 
 // Worker performs job orchestration per the design documents.
@@ -79,6 +87,20 @@ type Worker struct {
 	now          func() time.Time
 	assetsSchema []byte // optional recipe.schema.json (future 022 integration)
 }
+
+const esxiInstallTarget = "install-esxi.target"
+
+const (
+	opMountMaintenance      = metrics.OpMountMaintenance
+	opMountTask             = metrics.OpMountTask
+	opBootOverride          = metrics.OpBootOverride
+	opResetGracefulFallback = metrics.OpResetGraceful
+	opCleanupUnmountTask    = metrics.OpCleanupUnmountTask
+	opCleanupUnmountMaint   = metrics.OpCleanupUnmountMaint
+	opCleanupReset          = metrics.OpCleanupReset
+	opESXIAwaitBMC          = metrics.OpESXIAwaitBMC
+	opESXIPollPower         = metrics.OpESXIPollPower
+)
 
 // NewWorker constructs a new Worker.
 func NewWorker(store Store, isoBuilder iso.Builder, newRF RFClientFactory, cfg WorkerConfig, logger *log.Logger) *Worker {
@@ -97,6 +119,18 @@ func NewWorker(store Store, isoBuilder iso.Builder, newRF RFClientFactory, cfg W
 	if cfg.RedfishTimeout <= 0 {
 		cfg.RedfishTimeout = 30 * time.Second
 	}
+	if cfg.ESXIInstallTimeout <= 0 {
+		cfg.ESXIInstallTimeout = 90 * time.Minute
+	}
+	if cfg.ESXIStableWindow <= 0 {
+		cfg.ESXIStableWindow = 90 * time.Second
+	}
+	if cfg.ESXIPollIntervalStart <= 0 {
+		cfg.ESXIPollIntervalStart = time.Second
+	}
+	if cfg.ESXIPollIntervalMax <= 0 || cfg.ESXIPollIntervalMax < cfg.ESXIPollIntervalStart {
+		cfg.ESXIPollIntervalMax = 15 * time.Second
+	}
 	return &Worker{
 		store:       store,
 		isoBuilder:  isoBuilder,
@@ -111,6 +145,41 @@ func (w *Worker) logf(format string, args ...any) {
 	if w.logger != nil {
 		w.logger.Printf("[worker %s] %s", w.cfg.WorkerID, fmt.Sprintf(format, args...))
 	}
+}
+
+func (w *Worker) runRedfishOp(ctx context.Context, job *provisioner.Job, step, op string, fn func(context.Context) error) error {
+	start := w.now()
+	err := w.withTimeout(ctx, w.cfg.RedfishTimeout, fn)
+	dur := w.now().Sub(start)
+	metrics.ObserveProvisioningPhase(op, dur)
+	w.recordOpEvent(ctx, job.ID, step, op, 1, start, err)
+	return err
+}
+
+func (w *Worker) recordOpEvent(ctx context.Context, jobID, step, op string, attempts int, start time.Time, err error) {
+	elapsed := w.now().Sub(start)
+	status := "success"
+	level := provisioner.EventLevelInfo
+	if err != nil {
+		status = "error"
+		level = provisioner.EventLevelError
+	}
+	dur := displayDuration(elapsed)
+	msg := fmt.Sprintf("op=%s status=%s attempts=%d duration=%s", op, status, attempts, dur)
+	if err != nil {
+		msg += fmt.Sprintf(" error=%s", truncate(err.Error(), 256))
+	}
+	_ = w.appendEvent(ctx, jobID, level, msg, &step)
+}
+
+func displayDuration(d time.Duration) time.Duration {
+	if d <= 0 {
+		return 0
+	}
+	if d < time.Millisecond {
+		return d
+	}
+	return d.Round(time.Millisecond)
 }
 
 // Run starts the worker loop that acquires and processes jobs until ctx is canceled.
@@ -150,6 +219,9 @@ func (w *Worker) processJob(ctx context.Context, job *provisioner.Job) error {
 	step := "start"
 	_ = w.appendEvent(ctx, job.ID, provisioner.EventLevelInfo, "Starting provisioning orchestration", &step)
 
+	taskTarget := taskTargetFromRecipe(job.Recipe)
+	isESXi := strings.EqualFold(taskTarget, esxiInstallTarget)
+
 	// Resolve server
 	srv, err := w.store.GetServerBySerial(ctx, job.ServerSerial)
 	if err != nil {
@@ -185,14 +257,12 @@ func (w *Worker) processJob(ctx context.Context, job *provisioner.Job) error {
 	// Orchestration
 	// 1) Mount maintenance.iso (CD1)
 	step = "mount-maintenance"
-	if err := w.withTimeout(ctx, w.cfg.RedfishTimeout, func(c context.Context) error {
+	if err := w.runRedfishOp(ctx, job, step, opMountMaintenance, func(c context.Context) error {
 		return rf.MountVirtualMedia(c, 1, job.MaintenanceISOURL)
 	}); err != nil {
-		_ = w.appendEvent(ctx, job.ID, provisioner.EventLevelError, fmt.Sprintf("Mount maintenance ISO failed: %v", err), &step)
 		_ = w.store.MarkJobStatus(ctx, job.ID, provisioner.JobStatusFailed, &step)
 		return fmt.Errorf("mount maintenance: %w", err)
 	}
-	_ = w.appendEvent(ctx, job.ID, provisioner.EventLevelInfo, "Mounted maintenance ISO (CD1)", &step)
 
 	// 2) Mount task.iso (CD2) using controller media URL base
 	taskURL, err := w.composeTaskMediaURL(job.ID)
@@ -203,54 +273,70 @@ func (w *Worker) processJob(ctx context.Context, job *provisioner.Job) error {
 		return fmt.Errorf("compose task url: %w", err)
 	}
 	step = "mount-task"
-	if err := w.withTimeout(ctx, w.cfg.RedfishTimeout, func(c context.Context) error {
+	if err := w.runRedfishOp(ctx, job, step, opMountTask, func(c context.Context) error {
 		return rf.MountVirtualMedia(c, 2, taskURL)
 	}); err != nil {
-		_ = w.appendEvent(ctx, job.ID, provisioner.EventLevelError, fmt.Sprintf("Mount task ISO failed: %v", err), &step)
 		_ = w.store.MarkJobStatus(ctx, job.ID, provisioner.JobStatusFailed, &step)
 		return fmt.Errorf("mount task: %w", err)
 	}
-	_ = w.appendEvent(ctx, job.ID, provisioner.EventLevelInfo, "Mounted task ISO (CD2)", &step)
 
 	// 3) Set one-time boot to CD
-	step = "set-boot-cd"
-	if err := w.withTimeout(ctx, w.cfg.RedfishTimeout, func(c context.Context) error {
+	step = "boot-override"
+	if err := w.runRedfishOp(ctx, job, step, opBootOverride, func(c context.Context) error {
 		return rf.SetOneTimeBoot(c, redfish.BootDeviceCD)
 	}); err != nil {
-		_ = w.appendEvent(ctx, job.ID, provisioner.EventLevelError, fmt.Sprintf("Set one-time boot failed: %v", err), &step)
 		_ = w.store.MarkJobStatus(ctx, job.ID, provisioner.JobStatusFailed, &step)
 		return fmt.Errorf("set boot: %w", err)
 	}
-	_ = w.appendEvent(ctx, job.ID, provisioner.EventLevelInfo, "Set one-time boot device to CD", &step)
 
 	// 4) Reboot
-	step = "reboot"
-	if err := w.withTimeout(ctx, w.cfg.RedfishTimeout, func(c context.Context) error {
+	step = "reset"
+	if err := w.runRedfishOp(ctx, job, step, opResetGracefulFallback, func(c context.Context) error {
 		return rf.Reboot(c, redfish.RebootGracefulWithFallback)
 	}); err != nil {
-		_ = w.appendEvent(ctx, job.ID, provisioner.EventLevelError, fmt.Sprintf("Reboot failed: %v", err), &step)
 		_ = w.store.MarkJobStatus(ctx, job.ID, provisioner.JobStatusFailed, &step)
 		return fmt.Errorf("reboot: %w", err)
 	}
-	_ = w.appendEvent(ctx, job.ID, provisioner.EventLevelInfo, "Reboot triggered", &step)
 
-	// Wait for webhook: status should transition provisioning -> succeeded|failed
-	waitStep := "await-webhook"
-	_ = w.appendEvent(ctx, job.ID, provisioner.EventLevelInfo, "Awaiting webhook status update from maintenance OS", &waitStep)
-	finalStatus, err := w.awaitWebhook(ctx, job)
-	if err != nil {
-		// Mark failed due to timeout or internal error
-		failStep := "webhook-timeout"
-		_ = w.appendEvent(ctx, job.ID, provisioner.EventLevelError, fmt.Sprintf("Await webhook error: %v", err), &failStep)
-		_ = w.store.MarkJobStatus(ctx, job.ID, provisioner.JobStatusFailed, &failStep)
+	finalStatus := provisioner.JobStatus("")
+	if isESXi {
+		status, esxiErr := w.runESXiCompletion(ctx, job, rf)
+		finalStatus = status
+		if esxiErr != nil {
+			w.logf("job %s: ESXi completion error: %v", job.ID, esxiErr)
+		}
+	} else {
+		// Wait for webhook: status should transition provisioning -> succeeded|failed
+		waitStep := "await-webhook"
+		_ = w.appendEvent(ctx, job.ID, provisioner.EventLevelInfo, "Awaiting webhook status update from maintenance OS", &waitStep)
+		status, err := w.awaitWebhook(ctx, job)
+		finalStatus = status
+		if err != nil {
+			// Mark failed due to timeout or internal error
+			failStep := "webhook-timeout"
+			_ = w.appendEvent(ctx, job.ID, provisioner.EventLevelError, fmt.Sprintf("Await webhook error: %v", err), &failStep)
+			_ = w.store.MarkJobStatus(ctx, job.ID, provisioner.JobStatusFailed, &failStep)
+		}
 	}
 
 	// Cleanup: unmount media and reboot to final OS (best effort)
 	cleanupStep := "cleanup"
 	_ = w.appendEvent(ctx, job.ID, provisioner.EventLevelInfo, "Cleanup: unmounting virtual media", &cleanupStep)
-	_ = w.withTimeout(ctx, w.cfg.RedfishTimeout, func(c context.Context) error { return rf.UnmountVirtualMedia(c, 2) })
-	_ = w.withTimeout(ctx, w.cfg.RedfishTimeout, func(c context.Context) error { return rf.UnmountVirtualMedia(c, 1) })
-	_ = w.withTimeout(ctx, w.cfg.RedfishTimeout, func(c context.Context) error { return rf.Reboot(c, redfish.RebootGracefulWithFallback) })
+	if err := w.runRedfishOp(ctx, job, opCleanupUnmountTask, opCleanupUnmountTask, func(c context.Context) error {
+		return rf.UnmountVirtualMedia(c, 2)
+	}); err != nil {
+		w.logf("job %s: cleanup unmount task ISO error: %v", job.ID, err)
+	}
+	if err := w.runRedfishOp(ctx, job, opCleanupUnmountMaint, opCleanupUnmountMaint, func(c context.Context) error {
+		return rf.UnmountVirtualMedia(c, 1)
+	}); err != nil {
+		w.logf("job %s: cleanup unmount maintenance ISO error: %v", job.ID, err)
+	}
+	if err := w.runRedfishOp(ctx, job, opCleanupReset, opCleanupReset, func(c context.Context) error {
+		return rf.Reboot(c, redfish.RebootGracefulWithFallback)
+	}); err != nil {
+		w.logf("job %s: cleanup reboot error: %v", job.ID, err)
+	}
 	_ = w.appendEvent(ctx, job.ID, provisioner.EventLevelInfo, "Cleanup complete", &cleanupStep)
 
 	// Mark complete (even if earlier status was failed)
@@ -361,30 +447,215 @@ func minDur(a, b time.Duration) time.Duration {
 }
 
 // awaitBMCReady polls the Redfish service using Client.Ping until it becomes reachable
-// or the provided deadline is exceeded. This scaffolds the ESXi flow where we need to
+// or the provided deadline is exceeded. This supports the ESXi flow where we need to
 // detect BMC/API readiness after a reset without relying on a webhook.
-func (w *Worker) awaitBMCReady(ctx context.Context, rf redfish.Client, deadline time.Time) error {
+func (w *Worker) awaitBMCReady(ctx context.Context, job *provisioner.Job, rf redfish.Client, deadline time.Time) error {
 	backoff := 200 * time.Millisecond
+	maxBackoff := 5 * time.Second
+	start := w.now()
+	attempts := 0
 	for {
-		if ctx.Err() != nil {
-			return ctx.Err()
+		if w.now().After(deadline) {
+			err := errors.New("esxi: bmc not ready before deadline")
+			if attempts == 0 {
+				attempts = 1
+			}
+			w.recordOpEvent(ctx, job.ID, opESXIAwaitBMC, opESXIAwaitBMC, attempts, start, err)
+			metrics.ObserveProvisioningPhase(opESXIAwaitBMC, w.now().Sub(start))
+			return err
 		}
-		if time.Now().After(deadline) {
-			return errors.New("esxi: bmc not ready before deadline")
-		}
+
+		attempts++
 		if err := rf.Ping(ctx); err == nil {
+			w.recordOpEvent(ctx, job.ID, opESXIAwaitBMC, opESXIAwaitBMC, attempts, start, nil)
+			metrics.ObserveProvisioningPhase(opESXIAwaitBMC, w.now().Sub(start))
 			return nil
 		}
-		time.Sleep(backoff)
-		if backoff < 5*time.Second {
-			backoff *= 2
+
+		select {
+		case <-ctx.Done():
+			err := ctx.Err()
+			w.recordOpEvent(ctx, job.ID, opESXIAwaitBMC, opESXIAwaitBMC, attempts, start, err)
+			metrics.ObserveProvisioningPhase(opESXIAwaitBMC, w.now().Sub(start))
+			return err
+		case <-time.After(backoff):
+		}
+
+		if backoff < maxBackoff {
+			backoff = minDur(backoff*2, maxBackoff)
 		}
 	}
 }
 
-// pollPowerStatePlaceholder is a scaffold for ESXi flow power-state based detection.
-// TODO(phase2): Implement power/state transitions and stabilization heuristics per 028.
-// For now it reuses awaitBMCReady as a placeholder.
-func (w *Worker) pollPowerStatePlaceholder(ctx context.Context, rf redfish.Client, deadline time.Time) error {
-	return w.awaitBMCReady(ctx, rf, deadline)
+// runESXiCompletion coordinates the post-reset polling flow for ESXi installations,
+// updating job status and events as milestones are reached or deadlines expire.
+func (w *Worker) runESXiCompletion(ctx context.Context, job *provisioner.Job, rf redfish.Client) (provisioner.JobStatus, error) {
+	step := strPtr("redfish.poll")
+	deadline := w.now().Add(w.cfg.ESXIInstallTimeout)
+	timeoutDisplay := w.cfg.ESXIInstallTimeout
+	if timeoutDisplay < time.Minute {
+		timeoutDisplay = timeoutDisplay.Round(time.Second)
+	} else {
+		timeoutDisplay = timeoutDisplay.Round(time.Minute)
+	}
+	_ = w.appendEvent(ctx, job.ID, provisioner.EventLevelInfo,
+		fmt.Sprintf("ESXi workflow: monitoring BMC for installer completion (timeout %s)", timeoutDisplay), step)
+
+	if err := w.awaitBMCReady(ctx, job, rf, deadline); err != nil {
+		err = fmt.Errorf("esxi: bmc not reachable after reset: %w", err)
+		_ = w.appendEvent(ctx, job.ID, provisioner.EventLevelError, err.Error(), step)
+		_ = w.store.MarkJobStatus(ctx, job.ID, provisioner.JobStatusFailed, step)
+		return provisioner.JobStatusFailed, err
+	}
+
+	_ = w.appendEvent(ctx, job.ID, provisioner.EventLevelInfo,
+		"ESXi workflow: BMC reachable; observing power state transitions", step)
+
+	if err := w.pollESXiPowerState(ctx, job.ID, rf, deadline); err != nil {
+		err = fmt.Errorf("esxi: power state monitoring failed: %w", err)
+		_ = w.appendEvent(ctx, job.ID, provisioner.EventLevelError, err.Error(), step)
+		_ = w.store.MarkJobStatus(ctx, job.ID, provisioner.JobStatusFailed, step)
+		return provisioner.JobStatusFailed, err
+	}
+
+	stableDisplay := w.cfg.ESXIStableWindow
+	if stableDisplay <= 0 {
+		stableDisplay = 90 * time.Second
+	}
+	if stableDisplay < time.Millisecond {
+		stableDisplay = time.Millisecond
+	}
+	if stableDisplay < time.Second {
+		stableDisplay = stableDisplay.Round(time.Millisecond)
+	} else {
+		stableDisplay = stableDisplay.Round(time.Second)
+	}
+	_ = w.appendEvent(ctx, job.ID, provisioner.EventLevelInfo,
+		fmt.Sprintf("ESXi workflow: power state 'On' stable for %s; assuming install complete", stableDisplay), step)
+
+	if err := w.store.MarkJobStatus(ctx, job.ID, provisioner.JobStatusSucceeded, nil); err != nil {
+		w.logf("job %s: failed to mark succeeded: %v", job.ID, err)
+	}
+	return provisioner.JobStatusSucceeded, nil
+}
+
+func (w *Worker) pollESXiPowerState(ctx context.Context, jobID string, rf redfish.Client, deadline time.Time) error {
+	minInterval := w.cfg.ESXIPollIntervalStart
+	maxInterval := w.cfg.ESXIPollIntervalMax
+	stableWindow := w.cfg.ESXIStableWindow
+	if minInterval <= 0 {
+		minInterval = time.Second
+	}
+	if maxInterval <= 0 || maxInterval < minInterval {
+		maxInterval = minInterval
+	}
+	if stableWindow <= 0 {
+		stableWindow = 90 * time.Second
+	}
+
+	interval := minInterval
+	stableSince := time.Time{}
+	lastState := redfish.PowerStateUnknown
+	start := w.now()
+	attempts := 0
+
+	for {
+		if ctx.Err() != nil {
+			err := ctx.Err()
+			if attempts == 0 {
+				attempts = 1
+			}
+			w.recordOpEvent(ctx, jobID, opESXIPollPower, opESXIPollPower, attempts, start, err)
+			metrics.ObserveProvisioningPhase(opESXIPollPower, w.now().Sub(start))
+			return err
+		}
+		now := w.now()
+		if now.After(deadline) {
+			err := fmt.Errorf("install deadline exceeded waiting for stable power state (last=%s)", lastState)
+			if attempts == 0 {
+				attempts = 1
+			}
+			w.recordOpEvent(ctx, jobID, opESXIPollPower, opESXIPollPower, attempts, start, err)
+			metrics.ObserveProvisioningPhase(opESXIPollPower, w.now().Sub(start))
+			return err
+		}
+
+		attempts++
+		state, err := rf.SystemPowerState(ctx)
+		resetInterval := false
+		if err != nil {
+			stableSince = time.Time{}
+			resetInterval = true
+			lastState = redfish.PowerStateUnknown
+		} else {
+			if state != lastState {
+				w.logf("job %s: ESXi power state %s", jobID, state)
+			}
+			lastState = state
+			switch state {
+			case redfish.PowerStateOn:
+				if stableSince.IsZero() {
+					stableSince = now
+				}
+				if now.Sub(stableSince) >= stableWindow {
+					w.recordOpEvent(ctx, jobID, opESXIPollPower, opESXIPollPower, attempts, start, nil)
+					metrics.ObserveProvisioningPhase(opESXIPollPower, w.now().Sub(start))
+					return nil
+				}
+				resetInterval = true
+			case redfish.PowerStateOff,
+				redfish.PowerStatePoweringOn,
+				redfish.PowerStatePoweringOff,
+				redfish.PowerStateResetting,
+				redfish.PowerStateStandby,
+				redfish.PowerStateUnknown:
+				stableSince = time.Time{}
+				resetInterval = true
+			default:
+				stableSince = time.Time{}
+				resetInterval = true
+			}
+		}
+
+		sleep := interval
+		if sleep > maxInterval {
+			sleep = maxInterval
+		}
+
+		select {
+		case <-ctx.Done():
+			err := ctx.Err()
+			if attempts == 0 {
+				attempts = 1
+			}
+			w.recordOpEvent(ctx, jobID, opESXIPollPower, opESXIPollPower, attempts, start, err)
+			metrics.ObserveProvisioningPhase(opESXIPollPower, w.now().Sub(start))
+			return err
+		case <-time.After(sleep):
+		}
+
+		if resetInterval {
+			interval = minInterval
+		} else if interval < maxInterval {
+			next := interval * 2
+			if next > maxInterval {
+				interval = maxInterval
+			} else {
+				interval = next
+			}
+		}
+	}
+}
+
+func taskTargetFromRecipe(recipe json.RawMessage) string {
+	if len(recipe) == 0 {
+		return ""
+	}
+	var payload struct {
+		TaskTarget string `json:"task_target"`
+	}
+	if err := json.Unmarshal(recipe, &payload); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(payload.TaskTarget)
 }

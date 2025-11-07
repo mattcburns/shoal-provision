@@ -28,6 +28,8 @@ import (
 	"log"
 	"net/url"
 	"time"
+
+	"shoal/internal/provisioner/metrics"
 )
 
 // BootDevice represents a one-time boot target.
@@ -37,6 +39,21 @@ const (
 	BootDeviceCD  BootDevice = "cd"
 	BootDevicePXE BootDevice = "pxe"
 	BootDeviceHDD BootDevice = "hdd"
+)
+
+// PowerState reflects the Redfish ComputerSystem power state values that we
+// care about for provisioning workflows. Additional vendor-specific values are
+// normalized to the closest standard representation or treated as unknown.
+type PowerState string
+
+const (
+	PowerStateOn          PowerState = "On"
+	PowerStateOff         PowerState = "Off"
+	PowerStatePoweringOn  PowerState = "PoweringOn"
+	PowerStatePoweringOff PowerState = "PoweringOff"
+	PowerStateResetting   PowerState = "Resetting"
+	PowerStateStandby     PowerState = "Standby"
+	PowerStateUnknown     PowerState = "Unknown"
 )
 
 // RebootMode expresses a reboot strategy. Phase 1 exposes one option
@@ -61,6 +78,11 @@ type Client interface {
 	// Ping performs a lightweight liveness check against the Redfish service.
 	// Implementations should not log secrets and should return promptly.
 	Ping(ctx context.Context) error
+
+	// SystemPowerState returns the current ComputerSystem power state. The
+	// result is normalized to a well-known subset of Redfish values so callers
+	// can make vendor-agnostic decisions.
+	SystemPowerState(ctx context.Context) (PowerState, error)
 
 	// MountVirtualMedia mounts an ISO URL as virtual media on a specific CD slot
 	// (e.g., 1 for maintenance.iso, 2 for task.iso).
@@ -89,6 +111,8 @@ type Config struct {
 	Password string
 	// Vendor is an optional hint used for capability/quirk handling.
 	Vendor string
+	// Retries overrides the default retry count when positive.
+	Retries int
 	// Timeout is the per-request timeout; workers also use higher-level timeouts.
 	Timeout time.Duration
 	// Logger is optional; if nil, logging is suppressed.
@@ -224,6 +248,18 @@ func (c *NoopClient) Ping(ctx context.Context) error {
 	return c.sleepOrContext(ctx)
 }
 
+// SystemPowerState reports a fixed "On" state for the noop client, allowing
+// controller logic to exercise ESXi workflows without real hardware.
+func (c *NoopClient) SystemPowerState(ctx context.Context) (PowerState, error) {
+	if err := c.validateEndpoint(); err != nil {
+		return PowerStateUnknown, err
+	}
+	if err := c.sleepOrContext(ctx); err != nil {
+		return PowerStateUnknown, err
+	}
+	return PowerStateOn, nil
+}
+
 // RedactPassword returns a redacted version of a secret for logs.
 func RedactPassword(s string) string {
 	if s == "" {
@@ -254,5 +290,16 @@ func NewClient(cfg Config, mode string, delay time.Duration) (Client, error) {
 // Ping issues a lightweight GET to the Redfish ServiceRoot to verify liveness.
 func (c *httpClient) Ping(ctx context.Context) error {
 	var root map[string]any
-	return c.getJSON(ctx, "/redfish/v1/", &root)
+	return c.getJSON(ctx, metrics.OpPing, "/redfish/v1/", &root)
+}
+
+func (c *httpClient) SystemPowerState(ctx context.Context) (PowerState, error) {
+	if err := c.ensureDiscovery(ctx); err != nil {
+		return PowerStateUnknown, err
+	}
+	var sys system
+	if err := c.getJSON(ctx, metrics.OpSystemPower, c.systemPath, &sys); err != nil {
+		return PowerStateUnknown, err
+	}
+	return normalizePowerState(sys.PowerState), nil
 }
