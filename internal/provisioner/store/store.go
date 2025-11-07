@@ -470,6 +470,76 @@ func (s *Store) MarkJobStatus(ctx context.Context, id string, status provisioner
 	return err
 }
 
+// ListJobsByStatus returns jobs matching the provided status ordered by creation time.
+func (s *Store) ListJobsByStatus(ctx context.Context, status provisioner.JobStatus) ([]*provisioner.Job, error) {
+	if !status.Valid() {
+		return nil, fmt.Errorf("invalid status: %s", status)
+	}
+	const q = `SELECT id, server_serial, status, failed_step, recipe_json, created_at, updated_at, picked_at, worker_id, lease_expires_at, task_iso_path, maintenance_iso_url
+FROM jobs WHERE status=? ORDER BY created_at ASC`
+	rows, err := s.db.QueryContext(ctx, q, status.String())
+	if err != nil {
+		return nil, fmt.Errorf("list jobs by status: %w", err)
+	}
+	defer rows.Close()
+
+	var out []*provisioner.Job
+	for rows.Next() {
+		var row struct {
+			id, serial, status, recipeJSON, maintURL string
+			failedStep                               sql.NullString
+			createdAt, updatedAt                     time.Time
+			pickedAt                                 sql.NullTime
+			workerID                                 sql.NullString
+			leaseExpiresAt                           sql.NullTime
+			taskISOPath                              sql.NullString
+		}
+		if err := rows.Scan(
+			&row.id, &row.serial, &row.status, &row.failedStep, &row.recipeJSON,
+			&row.createdAt, &row.updatedAt, &row.pickedAt, &row.workerID, &row.leaseExpiresAt, &row.taskISOPath, &row.maintURL,
+		); err != nil {
+			return nil, fmt.Errorf("scan job: %w", err)
+		}
+		job := &provisioner.Job{
+			ID:                row.id,
+			ServerSerial:      row.serial,
+			Status:            provisioner.JobStatus(row.status),
+			FailedStep:        fromNullStringPtr(row.failedStep),
+			Recipe:            []byte(row.recipeJSON),
+			CreatedAt:         row.createdAt.UTC(),
+			UpdatedAt:         row.updatedAt.UTC(),
+			PickedAt:          fromNullTimePtr(row.pickedAt),
+			WorkerID:          fromNullStringPtr(row.workerID),
+			LeaseExpiresAt:    fromNullTimePtr(row.leaseExpiresAt),
+			TaskISOPath:       fromNullStringPtr(row.taskISOPath),
+			MaintenanceISOURL: row.maintURL,
+		}
+		out = append(out, job)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate jobs: %w", err)
+	}
+	return out, nil
+}
+
+// RequeueProvisioningJob resets a provisioning job back to queued so that the worker
+// loop can safely reprocess it (e.g., after controller restart). Returns ErrNotFound
+// if the job is not currently in provisioning state.
+func (s *Store) RequeueProvisioningJob(ctx context.Context, id string) error {
+	const upd = `UPDATE jobs
+SET status='queued', failed_step=NULL, worker_id=NULL, picked_at=NULL, lease_expires_at=NULL, task_iso_path=NULL, updated_at=?
+WHERE id=? AND status='provisioning'`
+	res, err := s.db.ExecContext(ctx, upd, time.Now().UTC(), id)
+	if err != nil {
+		return fmt.Errorf("requeue provisioning job: %w", err)
+	}
+	affected, _ := res.RowsAffected()
+	if affected == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // --------------- Leasing helpers ---------------
 
 // AcquireQueuedJob tries to atomically lease the next queued job, transitioning it

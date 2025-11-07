@@ -247,6 +247,66 @@ func TestGetActiveProvisioningJobBySerial_OrderAndNotFound(t *testing.T) {
 	}
 }
 
+func TestListJobsByStatusAndRequeueProvisioning(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	ser := provisioner.Server{
+		Serial:     "SER-RECQ",
+		BMCAddress: "https://bmc.requeue",
+		BMCUser:    "root",
+		BMCPass:    "pw",
+	}
+	if err := s.UpsertServer(ctx, ser); err != nil {
+		t.Fatalf("UpsertServer failed: %v", err)
+	}
+
+	provisioning := provisioner.NewJob(ser.Serial, json.RawMessage(`{"task_target":"install-linux.target"}`), "http://controller/maint.iso")
+	provisioning.ID = "job-prov"
+	if err := s.InsertJob(ctx, &provisioning); err != nil {
+		t.Fatalf("InsertJob provisioning failed: %v", err)
+	}
+	if _, err := s.AcquireQueuedJob(ctx, "worker-old", time.Minute); err != nil {
+		t.Fatalf("AcquireQueuedJob failed: %v", err)
+	}
+
+	queued := provisioner.NewJob(ser.Serial, json.RawMessage(`{"task_target":"install-linux.target"}`), "http://controller/maint.iso")
+	queued.ID = "job-queued"
+	if err := s.InsertJob(ctx, &queued); err != nil {
+		t.Fatalf("InsertJob queued failed: %v", err)
+	}
+
+	jobs, err := s.ListJobsByStatus(ctx, provisioner.JobStatusProvisioning)
+	if err != nil {
+		t.Fatalf("ListJobsByStatus failed: %v", err)
+	}
+	if len(jobs) != 1 || jobs[0].ID != provisioning.ID {
+		t.Fatalf("expected one provisioning job %s, got %+v", provisioning.ID, jobs)
+	}
+
+	if err := s.RequeueProvisioningJob(ctx, provisioning.ID); err != nil {
+		t.Fatalf("RequeueProvisioningJob failed: %v", err)
+	}
+
+	requeued, err := s.GetJobByID(ctx, provisioning.ID)
+	if err != nil {
+		t.Fatalf("GetJobByID failed: %v", err)
+	}
+	if requeued.Status != provisioner.JobStatusQueued {
+		t.Fatalf("expected status queued after requeue, got %s", requeued.Status)
+	}
+	if requeued.WorkerID != nil || requeued.LeaseExpiresAt != nil || requeued.PickedAt != nil {
+		t.Fatalf("expected lease fields cleared after requeue: %+v", requeued)
+	}
+	if requeued.TaskISOPath != nil {
+		t.Fatalf("expected task iso path cleared after requeue")
+	}
+
+	if err := s.RequeueProvisioningJob(ctx, provisioning.ID); err != ErrNotFound {
+		t.Fatalf("expected ErrNotFound requeueing non-provisioning job, got %v", err)
+	}
+}
+
 func ptrString(s string) *string { return &s }
 
 func ptrTime(ti time.Time) *time.Time { return &ti }

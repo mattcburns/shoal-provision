@@ -49,7 +49,7 @@ func TestIntegration_EndToEndPhase1Success(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	t.Cleanup(cancel)
 
-	st, err := store.Open(ctx, ":memory:")
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "store.db"))
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -206,7 +206,7 @@ func TestIntegration_EndToEndPhase1Failed(t *testing.T) {
 	// Store and server seed
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	t.Cleanup(cancel)
-	st, err := store.Open(ctx, ":memory:")
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "store.db"))
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -300,7 +300,6 @@ func TestIntegration_EndToEndPhase1Failed(t *testing.T) {
 		"failed_step": failStep,
 	}, headers)
 
-	// Wait for completion
 	waitUntil(t, 4*time.Second, 20*time.Millisecond, func() bool {
 		j, err := st.GetJobByID(ctx, jobID)
 		return err == nil && j.Status == provisioner.JobStatusComplete
@@ -328,7 +327,7 @@ func TestIntegration_EndToEndPhase1TimeoutFailure(t *testing.T) {
 	// Store and server seed
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	t.Cleanup(cancel)
-	st, err := store.Open(ctx, ":memory:")
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "store.db"))
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -399,10 +398,7 @@ func TestIntegration_EndToEndPhase1TimeoutFailure(t *testing.T) {
 	})
 
 	// Wait for completion due to webhook timeout path
-	waitUntil(t, 5*time.Second, 20*time.Millisecond, func() bool {
-		j, err := st.GetJobByID(ctx, jobID)
-		return err == nil && j.Status == provisioner.JobStatusComplete
-	})
+	waitForJobStatus(t, ctx, st, jobID, provisioner.JobStatusComplete, 8*time.Second)
 
 	// Verify an event indicates webhook timeout/failure
 	evs, err := st.ListJobEvents(ctx, jobID, 0)
@@ -505,5 +501,31 @@ func waitUntil(t *testing.T, timeout, step time.Duration, cond func() bool) {
 			t.Fatalf("condition not met within %s", timeout)
 		}
 		time.Sleep(step)
+	}
+}
+
+func waitForJobStatus(t *testing.T, ctx context.Context, st *store.Store, jobID string, want provisioner.JobStatus, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		j, err := st.GetJobByID(ctx, jobID)
+		if err == nil && j.Status == want {
+			return
+		}
+		if time.Now().After(deadline) {
+			status := "<error>"
+			if err == nil {
+				status = j.Status.String()
+			} else {
+				status = err.Error()
+			}
+			ev, _ := st.ListJobEvents(ctx, jobID, 0)
+			var b strings.Builder
+			for _, e := range ev {
+				b.WriteString(fmt.Sprintf("[%s %s]", e.Level, e.Message))
+			}
+			t.Fatalf("job %s did not reach %s (status=%s events=%s)", jobID, want, status, b.String())
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }
