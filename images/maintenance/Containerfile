@@ -1,0 +1,45 @@
+# syntax=docker/dockerfile:1.6
+
+# Shoal is a Redfish aggregator service.
+# Copyright (C) 2025 Matthew Burns
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU Affero General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+ARG GO_VERSION=1.25
+ARG GO_BASE="golang:${GO_VERSION}-alpine"
+
+FROM ${GO_BASE} AS builder
+RUN apk add --no-cache git
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o /out/provisioner ./cmd/provisioner-dispatcher
+
+FROM quay.io/fedora/fedora-bootc:40 AS final
+RUN microdnf install -y podman jq util-linux-core && microdnf clean all
+RUN install -d -m 0755 /opt/shoal/bin /etc/containers/systemd /etc/systemd/system/multi-user.target.wants /usr/lib/bootc/bound-images.d
+
+COPY --from=builder /out/provisioner /usr/sbin/provisioner
+COPY internal/provisioner/maintenance/scripts/ /opt/shoal/bin/
+COPY internal/provisioner/maintenance/systemd/ /etc/systemd/system/
+COPY internal/provisioner/maintenance/quadlet/ /etc/containers/systemd/
+
+RUN find /opt/shoal/bin -type f -name '*.sh' -exec chmod 0755 {} +
+RUN ln -s ../provision-dispatcher.service /etc/systemd/system/multi-user.target.wants/provision-dispatcher.service
+
+ENV PATH="/opt/shoal/bin:${PATH}" \
+    container=oci
+
+CMD ["/usr/lib/systemd/systemd"]

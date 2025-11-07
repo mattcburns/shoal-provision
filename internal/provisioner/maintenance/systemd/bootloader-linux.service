@@ -1,0 +1,15 @@
+[Unit]
+Description=Shoal Provisioner Step: Configure Linux Bootloader
+Requires=image-linux.service
+After=image-linux.service
+OnFailure=provision-failed@%n.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/run/provision/recipe.env
+ExecStart=/usr/bin/systemctl start bootloader-linux-tool.service
+RemainAfterExit=yes
+TimeoutSec=20min
+
+[Install]
+WantedBy=install-linux.target

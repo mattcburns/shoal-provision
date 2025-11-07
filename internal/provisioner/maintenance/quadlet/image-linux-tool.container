@@ -1,0 +1,13 @@
+[Unit]
+Description=Shoal Provisioner Tool: Image Linux RootFS
+
+[Container]
+Image=quay.io/shoal/tools-image-linux:dev
+Type=oneshot
+Remove=true
+EnvironmentFile=/run/provision/recipe.env
+AddDevice=/dev:/dev:rwm
+AddCapability=ALL
+Volume=/run/provision:/run/provision:ro
+Volume=/mnt/new-root:/mnt/new-root:rshared,rw
+Exec=/opt/shoal/bin/image-linux-wrapper.sh

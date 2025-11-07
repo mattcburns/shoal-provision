@@ -1,0 +1,13 @@
+[Unit]
+Description=Shoal Provisioner Tool: Configure Linux Bootloader
+
+[Container]
+Image=quay.io/shoal/tools-bootloader-linux:dev
+Type=oneshot
+Remove=true
+EnvironmentFile=/run/provision/recipe.env
+AddDevice=/dev:/dev:rwm
+AddCapability=ALL
+Volume=/mnt/new-root:/mnt/new-root:rshared,rw
+Volume=/mnt/efi:/mnt/efi:rshared,rw
+Exec=/opt/shoal/bin/bootloader-linux-wrapper.sh

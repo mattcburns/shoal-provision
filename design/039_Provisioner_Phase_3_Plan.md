@@ -1,8 +1,8 @@
 # 039: Provisioner — Phase 3 Plan (Full Linux Workflow)
 
-Status: Planned (ready to start)
+Status: In progress
 Owners: Provisioning Working Group
-Last updated: 2025-11-06
+Last updated: 2025-11-07
 
 Summary
 
@@ -41,30 +41,42 @@ Milestones and Deliverables
 - Commit host .service units and Quadlet .container files (with placeholder images)
 - Wrapper scripts for each step with dry-run logic and logging
 - systemd-analyze verification tests
+- Status: stub units, Quadlet definitions, and scripts added (2025-11-06)
 
 2) Partitioning
 - Implement partition-wrapper with schema → sgdisk/mkfs mapping and idempotency checks
 - Tests: layout translation, idempotent re-run, error cases (invalid schema)
+- Status: Go planner (`internal/provisioner/maintenance/partition`) and CLI (`cmd/partition-plan`) emit deterministic sgdisk/mkfs commands; wrapper invokes planner in dry-run by default (2025-11-06)
 
 3) Imaging
 - Implement image-linux-wrapper: oras pull → tar extraction to /mnt/new-root
 - Tests: digest capture/stamp, extraction flags (-xpf), negative case (unreachable OCI)
+  - Status: image planner CLI emits oras→tar commands and wrapper now supports dry-run/apply execution (2025-11-06)
 
 4) Bootloader
 - Implement bootloader-linux-wrapper: mount ESP, chroot, grub install, fstab generation
 - Tests: fstab content, UUID detection, idempotency on re-run
+- Status: bootloader planner and wrapper emit apply/dry-run plans; full integration testing pending (2025-11-06)
 
 5) Config Drive (optional)
 - Implement config-drive-wrapper: create VFAT CIDATA partition (if present in layout), write user-data and meta-data
 - Tests: content hashing, idempotent overwrite
+- Status: config-drive planner and wrapper handle optional CIDATA partition with dry-run/apply wiring (2025-11-06)
 
-6) Webhooks and Attribution
+6) Dispatcher Normalization
+- Implement provisioner-dispatcher binary: validate recipe, write /run/provision assets, start declared target
+- Tests: unit coverage for env persistence, schema failure mapping, systemctl invocation toggles
+- Status: dispatcher CLI normalizes recipe inputs and exercises exit codes via unit tests (2025-11-06)
+
+7) Webhooks and Attribution
 - Ensure OnSuccess/OnFailure wiring posts correct payloads with failing unit name
 - Integration: controller transitions and cleanup as per 021/032
+- Status: webhook services persist delivery_id, include optional metadata, and retry via systemd to report failing units accurately (2025-11-06)
 
-7) E2E Validation
+8) E2E Validation
 - VM-based or containerized integration test harness mounting maintenance.iso + task.iso
 - Happy path to success; 1-2 negative cases (e.g., invalid layout)
+  - Status: repo integration harness exercises dispatcher → planners path, covering happy flow plus simulated image-linux failure for webhook attribution (2025-11-07)
 
 Acceptance Criteria (summarized)
 

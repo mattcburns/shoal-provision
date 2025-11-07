@@ -73,7 +73,8 @@ Active work for the provisioner’s Phase 3 happens on the branch `feature/provi
 
 - Designs: see `design/020_Provisioner_Architecture.md`, `021_Provisioner_Controller_Service.md`, `025_Dispatcher_Go_Binary.md`, `026_Systemd_and_Quadlet_Orchestration.md`, and `029_Workflow_Linux.md`.
 - Planning: `design/039_Provisioner_Phase_3_Plan.md` tracks scope, milestones, and acceptance criteria.
-- Tests: a placeholder E2E test exists at `internal/provisioner/integration/linux_workflow_integration_test.go` and will be enabled as implementation lands.
+- Tests: end-to-end coverage for the dispatcher plus planner wrappers lives in `internal/provisioner/integration/linux_workflow_integration_test.go` (happy path + failure attribution).
+- Maintenance OS image: build the bootc maintenance ISO with `./scripts/build_maintenance_os.sh` (assets under `images/maintenance/`).
 
 Before sending a PR:
 

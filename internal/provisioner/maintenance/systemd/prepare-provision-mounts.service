@@ -1,0 +1,13 @@
+[Unit]
+Description=Shoal Provisioner: Prepare mount points for provisioning
+DefaultDependencies=no
+Before=partition.service image-linux.service bootloader-linux.service config-drive.service
+OnFailure=provision-failed@%n.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/bash -c '/usr/bin/install -d -m 0755 /mnt/new-root /mnt/new-windows /mnt/efi /mnt/cidata'
+RemainAfterExit=yes
+
+[Install]
+WantedBy=install-linux.target

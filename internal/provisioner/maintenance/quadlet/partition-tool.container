@@ -1,0 +1,13 @@
+[Unit]
+Description=Shoal Provisioner Tool: Partition Disk
+
+[Container]
+Image=quay.io/shoal/tools-partition:dev
+Type=oneshot
+Remove=true
+EnvironmentFile=/run/provision/recipe.env
+AddDevice=/dev:/dev:rwm
+AddCapability=ALL
+Volume=/run/provision:/run/provision:ro
+Volume=/mnt:/mnt:rshared,rw
+Exec=/opt/shoal/bin/partition-wrapper.sh

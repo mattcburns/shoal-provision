@@ -1,0 +1,16 @@
+[Unit]
+Description=Shoal Provisioner Step: Partition Target Disk
+Requires=prepare-provision-mounts.service
+Wants=network-online.target
+After=prepare-provision-mounts.service network-online.target
+OnFailure=provision-failed@%n.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/run/provision/recipe.env
+ExecStart=/usr/bin/systemctl start partition-tool.service
+RemainAfterExit=yes
+TimeoutSec=45min
+
+[Install]
+WantedBy=install-linux.target
