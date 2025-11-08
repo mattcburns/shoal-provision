@@ -1,0 +1,75 @@
+{
+  "description": "Example Linux provisioning recipe using embedded OCI registry",
+  "recipe_version": "1.0",
+  "task_target": "install-linux.target",
+  "target_disk": "/dev/sda",
+  "oci_url": "controller.example.com:8080/os-images/ubuntu-rootfs:22.04",
+  "partitions": [
+    {
+      "mount": "/boot/efi",
+      "size": "512M",
+      "fstype": "vfat",
+      "label": "EFI"
+    },
+    {
+      "mount": "/boot",
+      "size": "1G",
+      "fstype": "ext4",
+      "label": "BOOT"
+    },
+    {
+      "mount": "/",
+      "size": "0",
+      "fstype": "ext4",
+      "label": "ROOT"
+    }
+  ],
+  "cloud_init": {
+    "hostname": "server01.example.com",
+    "timezone": "America/New_York",
+    "users": [
+      {
+        "name": "admin",
+        "groups": ["sudo", "adm"],
+        "shell": "/bin/bash",
+        "ssh_authorized_keys": [
+          "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAACAQC... admin@workstation"
+        ]
+      }
+    ],
+    "packages": [
+      "htop",
+      "vim",
+      "curl",
+      "git"
+    ],
+    "write_files": [
+      {
+        "path": "/etc/motd",
+        "content": "Welcome to Server01\nProvisioned via Shoal with embedded OCI registry\n",
+        "permissions": "0644"
+      }
+    ],
+    "runcmd": [
+      "systemctl enable ssh",
+      "systemctl start ssh"
+    ]
+  },
+  "network": {
+    "version": 2,
+    "ethernets": {
+      "eth0": {
+        "dhcp4": true,
+        "dhcp6": false
+      }
+    }
+  },
+  "notes": [
+    "This recipe demonstrates Linux provisioning using artifacts from the embedded OCI registry.",
+    "The rootfs tarball is pulled from controller.example.com:8080/os-images/ubuntu-rootfs:22.04",
+    "Ensure the artifact has been pushed to the registry before provisioning:",
+    "  oras push controller.example.com:8080/os-images/ubuntu-rootfs:22.04 --artifact-type application/vnd.shoal.rootfs.tar.gz --plain-http ubuntu-22.04-rootfs.tar.gz",
+    "The maintenance OS will pull the artifact during provisioning and extract it to the target disk.",
+    "After extraction, cloud-init configuration is applied and the bootloader is installed."
+  ]
+}

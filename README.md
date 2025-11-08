@@ -23,19 +23,26 @@ Shoal is a Go-based Redfish aggregator that discovers and manages multiple Baseb
 The bare-metal provisioner provides automated server provisioning via Redfish and a bootable maintenance OS:
 
 **Status:**
-- **Phase 1 (Controller & API):** Complete
-- **Phase 2 (Maintenance OS & Dispatcher):** Complete
+- **Phase 1 (Controller & API):** Complete ✓
+- **Phase 2 (Maintenance OS & Dispatcher):** Complete ✓
 - **Phase 3 (Linux Workflow):** Complete ✓
   - Partitioning, imaging, bootloader installation, cloud-init
   - End-to-end integration tests and webhook delivery
   - CI for building maintenance ISO
-- **Phase 4+ (Windows, ESXi, Registry):** Planned
+- **Phase 4 (Windows Workflow):** Planned
+- **Phase 5 (Embedded OCI Registry):** Complete ✓
+  - OCI Distribution API for artifacts and container images
+  - Support for oras and podman clients
+  - Content-addressable storage with garbage collection
+  - Integration with Linux and Windows provisioning workflows
 
 **Documentation:**
 - Architecture: `design/020_Provisioner_Architecture.md`
 - Phase 3 Plan: `design/039_Provisioner_Phase_3_Plan.md`
+- Phase 5 Plan: `plans/003_Phase_5_Provisioner_Plan.md`
 - Controller: `design/021_Provisioner_Controller_Service.md`
 - Workflows: `design/029_Workflow_Linux.md`
+- Registry: `docs/provisioner/embedded_registry.md`
 - Webhook Examples: `docs/webhook_examples/`
 
 ## Quick Start
