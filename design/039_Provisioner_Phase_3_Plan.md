@@ -1,8 +1,8 @@
 # 039: Provisioner — Phase 3 Plan (Full Linux Workflow)
 
-Status: In progress (nearing completion)
+Status: Complete
 Owners: Provisioning Working Group
-Last updated: 2025-11-07
+Last updated: 2025-11-08
 
 Summary
 
@@ -92,11 +92,12 @@ Additional Notes (Maintenance OS)
 - Kernel args for serial (console=ttyS0,115200 console=tty0) are injected via `/usr/lib/bootc/kargs.d/50-serial.conf` and apply to the installed system’s boot entries.
 - Capturing installer-stage serial logs is out-of-scope for Phase 3 and can be revisited later if needed.
 
-Remaining Tasks to Close Phase 3
+Completion Summary
 
-- Optional: capture live webhook payloads during integration to document exact shapes per 032.
-- Optional: CI job to build the maintenance ISO artifact (gated/opt-in).
-- Final doc polish and PR to merge `feature/provisioner-phase3` into `master`.
+All Phase 3 tasks completed:
+✓ Live webhook payload examples captured and documented (docs/webhook_examples/)
+✓ CI workflow for building maintenance ISO added (.github/workflows/build-maintenance-iso.yml)
+✓ All acceptance criteria met; ready for merge to master
 
 Test Strategy (Phase 3)
 
@@ -126,3 +127,4 @@ Change Log
 
 - v0.1 (2025-11-06): Initial Phase 3 plan document.
 - v0.2 (2025-11-07): E2E tests expanded; maintenance ISO build scripted; serial kargs for installed system; installer serial deferred.
+- v1.0 (2025-11-08): Phase 3 complete. All implementation, tests, documentation, and CI tasks delivered.

@@ -18,12 +18,25 @@ Shoal is a Go-based Redfish aggregator that discovers and manages multiple Baseb
 - Development: [docs/4_development.md](docs/4_development.md)
 - Deployment & Ops: [docs/5_deployment.md](docs/5_deployment.md)
 
-### Provisioner (Phase 3 in progress)
+### Provisioner
 
-The bare-metal provisioner is being implemented incrementally. Active Phase 3 work (full Linux workflow) happens on the branch `feature/provisioner-phase3`.
+The bare-metal provisioner provides automated server provisioning via Redfish and a bootable maintenance OS:
 
-- Architecture and plan: see `design/020_Provisioner_Architecture.md` and `design/039_Provisioner_Phase_3_Plan.md`.
-- Controller and on-host components: `design/021_Provisioner_Controller_Service.md`, `design/025_Dispatcher_Go_Binary.md`, `design/026_Systemd_and_Quadlet_Orchestration.md`, `design/029_Workflow_Linux.md`.
+**Status:**
+- **Phase 1 (Controller & API):** Complete
+- **Phase 2 (Maintenance OS & Dispatcher):** Complete
+- **Phase 3 (Linux Workflow):** Complete ✓
+  - Partitioning, imaging, bootloader installation, cloud-init
+  - End-to-end integration tests and webhook delivery
+  - CI for building maintenance ISO
+- **Phase 4+ (Windows, ESXi, Registry):** Planned
+
+**Documentation:**
+- Architecture: `design/020_Provisioner_Architecture.md`
+- Phase 3 Plan: `design/039_Provisioner_Phase_3_Plan.md`
+- Controller: `design/021_Provisioner_Controller_Service.md`
+- Workflows: `design/029_Workflow_Linux.md`
+- Webhook Examples: `docs/webhook_examples/`
 
 ## Quick Start
 
