@@ -28,7 +28,13 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o /out/provisioner ./cmd/provisioner-dispatcher
 
 FROM quay.io/fedora/fedora-bootc:40 AS final
-RUN dnf -y install podman jq util-linux-core && dnf clean all
+RUN dnf -y install \
+    podman \
+    jq \
+    util-linux-core \
+    wimlib-utils \
+    ntfs-3g \
+    && dnf clean all
 RUN install -d -m 0755 /opt/shoal/bin /etc/containers/systemd /etc/systemd/system/multi-user.target.wants /usr/lib/bootc/bound-images.d
 
 # Default kernel args for better headless debugging on serial consoles.

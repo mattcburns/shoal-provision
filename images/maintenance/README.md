@@ -29,6 +29,27 @@ The script builds `shoal-maintenance:dev` from the repository root and runs `boo
 - Drop-in additional Quadlet units or systemd services under `internal/provisioner/maintenance/` before invoking the script.
 - Provide a target architecture via `--arch aarch64` when building on a different platform.
 
+## Supported Workflows
+
+The maintenance OS supports provisioning multiple operating systems:
+
+### Linux Provisioning
+- Partition creation and formatting (ext4, xfs, vfat, swap)
+- Rootfs extraction from OCI tarball via `oras`
+- GRUB bootloader installation via chroot
+- Cloud-init Config Drive (NoCloud)
+
+### Windows Provisioning
+- Partition creation with MSR (Microsoft Reserved) support
+- NTFS filesystem creation via `ntfs-3g` and `mkfs.ntfs`
+- WIM image application via `wimapply` (wimlib-utils)
+- Windows boot file setup and UEFI configuration
+- Unattend.xml placement for automated setup
+
+**Required packages for Windows workflows:**
+- `wimlib-utils` – WIM image extraction and application (LGPLv3+)
+- `ntfs-3g` – NTFS filesystem mounting and creation (GPL-2.0+)
+
 ## Outputs
 
 The ISO directory contains:
