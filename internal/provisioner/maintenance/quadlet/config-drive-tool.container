@@ -1,0 +1,13 @@
+[Unit]
+Description=Shoal Provisioner Tool: Create Cloud-Init Config Drive
+
+[Container]
+Image=quay.io/shoal/tools-config-drive:dev
+Type=oneshot
+Remove=true
+EnvironmentFile=/run/provision/recipe.env
+AddDevice=/dev:/dev:rwm
+AddCapability=ALL
+Volume=/run/provision:/run/provision:ro
+Volume=/mnt/cidata:/mnt/cidata:rshared,rw
+Exec=/opt/shoal/bin/config-drive-wrapper.sh

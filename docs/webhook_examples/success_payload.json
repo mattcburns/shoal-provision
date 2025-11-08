@@ -1,0 +1,9 @@
+{
+  "status": "success",
+  "delivery_id": "103bad5b-d1fe-4aee-ab80-9c53c9d5f432",
+  "task_target": "install-linux.target",
+  "dispatcher_version": "1.0.0",
+  "schema_id": "https://shoal.example.com/schemas/recipe.schema.json",
+  "started_at": "2025-11-07T12:00:00Z",
+  "finished_at": "2025-11-07T12:15:23Z"
+}

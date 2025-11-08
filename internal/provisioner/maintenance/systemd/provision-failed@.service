@@ -1,0 +1,18 @@
+[Unit]
+Description=Shoal Provisioner: Report Failed Provisioning (%i)
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=10min
+StartLimitBurst=10
+
+[Service]
+Type=oneshot
+EnvironmentFile=/run/provision/recipe.env
+ExecStart=/usr/bin/env bash /opt/shoal/bin/send-webhook.sh failed %i
+Restart=on-failure
+RestartSec=10s
+RemainAfterExit=no
+TimeoutSec=2min
+
+[Install]
+WantedBy=install-linux.target

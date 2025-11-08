@@ -1,0 +1,14 @@
+[Unit]
+Description=Shoal Provisioner Step: Create Cloud-Init Config Drive
+After=bootloader-linux.service
+OnFailure=provision-failed@%n.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/run/provision/recipe.env
+ExecStart=/usr/bin/systemctl start config-drive-tool.service
+RemainAfterExit=yes
+TimeoutSec=10min
+
+[Install]
+WantedBy=install-linux.target

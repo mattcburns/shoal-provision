@@ -1,0 +1,236 @@
+// Shoal is a Redfish aggregator service.
+
+// Copyright (C) 2025 Matthew Burns
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+package bootloader
+
+import (
+	"errors"
+	"fmt"
+	"path/filepath"
+
+	"shoal/internal/provisioner/maintenance/plan"
+)
+
+// Options configures the generated command plan for installing a Linux
+// bootloader inside the provisioned root filesystem.
+type Options struct {
+	RootPath     string
+	ESPMountPath string
+	ESPDevice    string
+	RootDevice   string
+	RootFSType   string
+	BootloaderID string
+	GrubTarget   string
+}
+
+// Plan produces the sequence of commands required to mount the EFI system
+// partition, enter the provisioned root via chroot, install GRUB, generate
+// /etc/fstab, and clean up mounts.
+func Plan(opts Options) ([]plan.Command, error) {
+	root := opts.RootPath
+	if root == "" {
+		root = "/mnt/new-root"
+	}
+	root = filepath.Clean(root)
+
+	espMount := opts.ESPMountPath
+	if espMount == "" {
+		espMount = "/mnt/efi"
+	}
+	espMount = filepath.Clean(espMount)
+
+	if opts.ESPDevice == "" {
+		return nil, errors.New("bootloader: ESP device is required")
+	}
+	espDevice := opts.ESPDevice
+
+	if opts.RootDevice == "" {
+		return nil, errors.New("bootloader: root device is required")
+	}
+	rootDevice := opts.RootDevice
+
+	rootFSType := opts.RootFSType
+	if rootFSType == "" {
+		rootFSType = "ext4"
+	}
+
+	bootloaderID := opts.BootloaderID
+	if bootloaderID == "" {
+		bootloaderID = "Shoal"
+	}
+
+	grubTarget := opts.GrubTarget
+	if grubTarget == "" {
+		grubTarget = "x86_64-efi"
+	}
+
+	rootBootEFI := filepath.Join(root, "boot", "efi")
+	espBind := rootBootEFI
+
+	ensureDirs := []string{
+		root,
+		espMount,
+		rootBootEFI,
+		filepath.Join(root, "dev"),
+		filepath.Join(root, "proc"),
+		filepath.Join(root, "sys"),
+		filepath.Join(root, "run"),
+	}
+
+	commands := make([]plan.Command, 0, 24)
+	for _, dir := range ensureDirs {
+		commands = append(commands, plan.Command{
+			Program:     "mkdir",
+			Args:        []string{"-p", dir},
+			Description: fmt.Sprintf("ensure directory %s exists", dir),
+		})
+	}
+
+	commands = append(commands,
+		plan.Command{
+			Program:     "mount",
+			Args:        []string{espDevice, espMount},
+			Description: "mount EFI system partition",
+		},
+		plan.Command{
+			Program:     "mount",
+			Args:        []string{"--bind", espMount, espBind},
+			Description: "bind ESP into root filesystem",
+		},
+		plan.Command{
+			Program:     "mount",
+			Args:        []string{"--rbind", "/dev", filepath.Join(root, "dev")},
+			Description: "bind /dev into chroot",
+		},
+		plan.Command{
+			Program:     "mount",
+			Args:        []string{"-t", "proc", "proc", filepath.Join(root, "proc")},
+			Description: "mount proc in chroot",
+		},
+		plan.Command{
+			Program:     "mount",
+			Args:        []string{"--rbind", "/sys", filepath.Join(root, "sys")},
+			Description: "bind /sys into chroot",
+		},
+		plan.Command{
+			Program:     "mount",
+			Args:        []string{"--rbind", "/run", filepath.Join(root, "run")},
+			Description: "bind /run into chroot",
+		},
+		plan.Command{
+			Program:     "mount",
+			Args:        []string{"--make-rslave", filepath.Join(root, "dev")},
+			Description: "set /dev mount propagation to rslave",
+		},
+		plan.Command{
+			Program:     "mount",
+			Args:        []string{"--make-rslave", filepath.Join(root, "run")},
+			Description: "set /run mount propagation to rslave",
+		},
+	)
+
+	commands = append(commands,
+		plan.Command{
+			Program: "chroot",
+			Args: []string{
+				root,
+				"grub-install",
+				fmt.Sprintf("--target=%s", grubTarget),
+				"--efi-directory=/boot/efi",
+				fmt.Sprintf("--bootloader-id=%s", bootloaderID),
+				"--recheck",
+			},
+			Description: "install GRUB EFI bootloader",
+		},
+		plan.Command{
+			Program:     "chroot",
+			Args:        []string{root, "grub-mkconfig", "-o", "/boot/grub/grub.cfg"},
+			Description: "generate GRUB configuration",
+		},
+	)
+
+	fstabPath := filepath.Join(root, "etc", "fstab")
+	fstabScript := fmt.Sprintf(`set -euo pipefail
+ROOT_UUID=$(blkid -s PARTUUID -o value %s)
+ESP_UUID=$(blkid -s PARTUUID -o value %s)
+if [[ -z "$ROOT_UUID" ]]; then
+  echo "bootloader-plan: unable to determine PARTUUID for %s" >&2
+  exit 1
+fi
+if [[ -z "$ESP_UUID" ]]; then
+  echo "bootloader-plan: unable to determine PARTUUID for %s" >&2
+  exit 1
+fi
+FSTAB=%s
+TMP="${FSTAB}.shoal.$$"
+mkdir -p "$(dirname "$FSTAB")"
+cat > "$TMP" <<EOF
+# Generated by Shoal bootloader step
+PARTUUID=$ROOT_UUID / %s defaults 0 1
+PARTUUID=$ESP_UUID /boot/efi vfat umask=0077 0 2
+EOF
+mv "$TMP" "$FSTAB"
+`,
+		plan.Quote(rootDevice),
+		plan.Quote(espDevice),
+		plan.Quote(rootDevice),
+		plan.Quote(espDevice),
+		plan.Quote(fstabPath),
+		rootFSType,
+	)
+
+	commands = append(commands, plan.Command{
+		Program:     "bash",
+		Args:        []string{"-c", fstabScript},
+		Description: "write /etc/fstab with root and ESP entries",
+	})
+
+	commands = append(commands,
+		plan.Command{
+			Program:     "umount",
+			Args:        []string{"-R", filepath.Join(root, "run")},
+			Description: "unmount /run from chroot",
+		},
+		plan.Command{
+			Program:     "umount",
+			Args:        []string{"-R", filepath.Join(root, "sys")},
+			Description: "unmount /sys from chroot",
+		},
+		plan.Command{
+			Program:     "umount",
+			Args:        []string{filepath.Join(root, "proc")},
+			Description: "unmount /proc from chroot",
+		},
+		plan.Command{
+			Program:     "umount",
+			Args:        []string{"-R", filepath.Join(root, "dev")},
+			Description: "unmount /dev from chroot",
+		},
+		plan.Command{
+			Program:     "umount",
+			Args:        []string{espBind},
+			Description: "unmount ESP from root",
+		},
+		plan.Command{
+			Program:     "umount",
+			Args:        []string{espMount},
+			Description: "unmount ESP",
+		},
+	)
+
+	return commands, nil
+}
