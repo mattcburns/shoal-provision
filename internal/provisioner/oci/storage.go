@@ -258,3 +258,34 @@ func (s *Storage) DeleteBlob(digest string) error {
 func (s *Storage) RepositoryPath(name string) string {
 	return filepath.Join(s.root, "repositories", name)
 }
+
+// HealthCheck verifies that storage is accessible and writable.
+// Returns nil if healthy, error otherwise.
+func (s *Storage) HealthCheck() error {
+	// Check if root directory exists
+	if _, err := os.Stat(s.root); err != nil {
+		return fmt.Errorf("storage root not accessible: %w", err)
+	}
+
+	// Check if oci-layout marker exists
+	layoutPath := filepath.Join(s.root, "oci-layout")
+	if _, err := os.Stat(layoutPath); err != nil {
+		return fmt.Errorf("oci-layout marker not found: %w", err)
+	}
+
+	// Check if blob directory is writable by creating and removing a test file
+	testDir := filepath.Join(s.root, "tmp")
+	if err := os.MkdirAll(testDir, 0755); err != nil {
+		return fmt.Errorf("tmp directory not writable: %w", err)
+	}
+
+	testFile, err := os.CreateTemp(testDir, "healthcheck-*")
+	if err != nil {
+		return fmt.Errorf("storage not writable: %w", err)
+	}
+	testPath := testFile.Name()
+	testFile.Close()
+	os.Remove(testPath)
+
+	return nil
+}
