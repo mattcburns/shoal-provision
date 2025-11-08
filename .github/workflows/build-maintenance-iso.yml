@@ -1,0 +1,160 @@
+name: Build Maintenance ISO
+
+on:
+  # Manual trigger only - building ISOs is resource-intensive
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: 'Container image tag for maintenance OS'
+        required: false
+        default: 'shoal-maintenance:dev'
+      upload_artifact:
+        description: 'Upload ISO as workflow artifact'
+        type: boolean
+        default: true
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  build-iso:
+    runs-on: ubuntu-latest
+    # ISO builds require significant resources and time
+    timeout-minutes: 60
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+
+      - name: Free up disk space
+        run: |
+          # ISO builds produce large artifacts; clean up runner to make room
+          echo "🧹 Freeing up disk space..."
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost "$AGENT_TOOLSDIRECTORY"
+          df -h
+
+      - name: Install dependencies
+        run: |
+          echo "📦 Installing podman and dependencies..."
+          # GitHub runners come with podman pre-installed, but ensure it's available
+          podman --version
+          
+          # Pull bootc-image-builder ahead of time to cache it
+          echo "📥 Pre-pulling bootc-image-builder..."
+          podman pull quay.io/centos-bootc/bootc-image-builder:latest
+
+      - name: Build maintenance bootc image
+        run: |
+          echo "🏗️ Building maintenance OS bootc container image..."
+          IMAGE_TAG="${{ github.event.inputs.image_tag }}"
+          
+          podman build \
+            --file images/maintenance/Containerfile \
+            --tag "${IMAGE_TAG}" \
+            .
+          
+          echo "✅ Container image built: ${IMAGE_TAG}"
+          podman images | grep shoal-maintenance
+
+      - name: Build maintenance ISO
+        run: |
+          echo "📀 Building bootable ISO with bootc-image-builder..."
+          IMAGE_TAG="${{ github.event.inputs.image_tag }}"
+          OUTPUT_DIR="${PWD}/build/maintenance-os"
+          
+          mkdir -p "${OUTPUT_DIR}"
+          
+          # Export image from user namespace and load into root for bootc-image-builder
+          IMAGE_ARCHIVE="${OUTPUT_DIR}/maintenance-image.oci"
+          podman save --format oci-archive -o "${IMAGE_ARCHIVE}" "${IMAGE_TAG}"
+          sudo podman load -i "${IMAGE_ARCHIVE}"
+          
+          # Ensure builder image is available in rootful storage
+          if ! sudo podman image exists quay.io/centos-bootc/bootc-image-builder:latest; then
+            sudo podman pull quay.io/centos-bootc/bootc-image-builder:latest
+          fi
+          
+          # Resolve local image name
+          RESOLVED_IMAGE="${IMAGE_TAG}"
+          if [[ "${RESOLVED_IMAGE}" != */* ]]; then
+            RESOLVED_IMAGE="localhost/${RESOLVED_IMAGE}"
+          fi
+          
+          echo "Running bootc-image-builder for: ${RESOLVED_IMAGE}"
+          
+          # Run bootc-image-builder (requires privileged container)
+          sudo podman run --rm \
+            --privileged \
+            --security-opt label=disable \
+            -v /var/lib/containers/storage:/var/lib/containers/storage:Z \
+            -v "${OUTPUT_DIR}:/output:Z" \
+            quay.io/centos-bootc/bootc-image-builder:latest \
+            build "${RESOLVED_IMAGE}" \
+            --type iso \
+            --rootfs ext4 \
+            --output /output
+          
+          echo "✅ ISO build complete"
+          ls -lh "${OUTPUT_DIR}"
+
+      - name: Verify ISO artifact
+        run: |
+          OUTPUT_DIR="${PWD}/build/maintenance-os"
+          
+          # bootc-image-builder produces image/bootiso/<arch>/image.iso
+          ISO_PATH=$(find "${OUTPUT_DIR}" -name "*.iso" -type f | head -1)
+          
+          if [[ -z "${ISO_PATH}" ]]; then
+            echo "❌ No ISO file found in output directory"
+            find "${OUTPUT_DIR}" -type f
+            exit 1
+          fi
+          
+          echo "✅ ISO artifact found: ${ISO_PATH}"
+          ISO_SIZE=$(du -h "${ISO_PATH}" | cut -f1)
+          echo "📊 ISO size: ${ISO_SIZE}"
+          
+          # Store ISO path for artifact upload
+          echo "iso_path=${ISO_PATH}" >> $GITHUB_ENV
+
+      - name: Upload ISO artifact
+        if: ${{ github.event.inputs.upload_artifact == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: shoal-maintenance-iso
+          path: ${{ env.iso_path }}
+          retention-days: 7
+          compression-level: 0  # ISOs are already compressed
+
+      - name: Build summary
+        run: |
+          ISO_PATH="${{ env.iso_path }}"
+          ISO_SIZE=$(du -h "${ISO_PATH}" | cut -f1)
+          ISO_NAME=$(basename "${ISO_PATH}")
+          
+          cat >> $GITHUB_STEP_SUMMARY <<EOF
+          ## 📀 Maintenance ISO Build Complete
+          
+          **Image Tag:** \`${{ github.event.inputs.image_tag }}\`  
+          **ISO File:** \`${ISO_NAME}\`  
+          **Size:** ${ISO_SIZE}  
+          **Artifact Upload:** ${{ github.event.inputs.upload_artifact }}
+          
+          ### 🚀 Next Steps
+          
+          - Download the ISO artifact from this workflow run
+          - Test the ISO in a VM (e.g., QEMU, VirtualBox, vSphere)
+          - Use for bare-metal provisioning workflows
+          
+          ### 📝 Notes
+          
+          - The ISO is bootable and includes all provisioner tools
+          - Serial console enabled by default (\`console=ttyS0,115200\`)
+          - The maintenance OS expects a task.iso with provisioning recipe
+          EOF
