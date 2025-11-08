@@ -40,12 +40,13 @@ done
 
 if [[ ${#PLAN_CMD[@]} -eq 0 ]]; then
   echo "image-windows-wrapper: plan binary not found (searched: ${PLAN_CANDIDATES[*]}); fallback to direct commands" >&2
+  ORAS_CMD="oras pull $(printf %q "${OCI_URL}") --output - | wimapply - $(printf %q "${WINDOWS_PATH}") --index=${WIM_INDEX}"
   printf -v PLAN_OUTPUT 'mkdir -p %q
 mount -t ntfs-3g %q %q
 bash -c %q
 umount %q
 ' "${WINDOWS_PATH}" "${WINDOWS_PARTITION}" "${WINDOWS_PATH}" \
-    "oras pull ${OCI_URL} --output - | wimapply - ${WINDOWS_PATH} --index=${WIM_INDEX}" \
+    "${ORAS_CMD}" \
     "${WINDOWS_PATH}"
 else
   PLAN_OUTPUT="$(${PLAN_CMD[@]} \

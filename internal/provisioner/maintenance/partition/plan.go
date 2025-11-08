@@ -155,7 +155,7 @@ var typeAlias = map[string]string{
 	"ef00": "C12A7328-F81F-11D2-BA4B-00A0C93EC93B", // EFI system partition
 	"8300": "0FC63DAF-8483-4772-8E79-3D69D8477DE4", // Linux filesystem
 	"8200": "0657FD6D-A4AB-43C4-84E5-0933C84B4F4F", // Linux swap
-	"0700": "EBD0A0A2-B9E5-4433-87C0-68B6B72699C7", // Microsoft basic data
+	"0700": "EBD0A0A2-B9E5-4433-87C0-68B6B72699C7", // Microsoft Basic Data
 	"0c01": "E3C9E316-0B5C-4DB8-817D-F92DF00215AE", // Microsoft Reserved (MSR)
 }
 
