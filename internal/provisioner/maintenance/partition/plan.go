@@ -130,7 +130,7 @@ func validateEntry(e LayoutEntry) error {
 		return nil
 	}
 	switch strings.ToLower(e.Format) {
-	case "vfat", "ext4", "xfs", "btrfs", "swap", "raw":
+	case "vfat", "ext4", "xfs", "btrfs", "swap", "ntfs", "raw", "none":
 		return nil
 	default:
 		return fmt.Errorf("unsupported format %q", e.Format)
@@ -155,8 +155,8 @@ var typeAlias = map[string]string{
 	"ef00": "C12A7328-F81F-11D2-BA4B-00A0C93EC93B", // EFI system partition
 	"8300": "0FC63DAF-8483-4772-8E79-3D69D8477DE4", // Linux filesystem
 	"8200": "0657FD6D-A4AB-43C4-84E5-0933C84B4F4F", // Linux swap
-	"0700": "EBD0A0A2-B9E5-4433-87C0-68B6B72699C7", // Basic data
-	"0c01": "F4019732-066E-4E12-8273-346C5641494F", // Microsoft basic data (alternative)
+	"0700": "EBD0A0A2-B9E5-4433-87C0-68B6B72699C7", // Microsoft Basic Data
+	"0c01": "E3C9E316-0B5C-4DB8-817D-F92DF00215AE", // Microsoft Reserved (MSR)
 }
 
 func partitionDeviceName(disk string, partNum int) string {
@@ -170,7 +170,7 @@ func partitionDeviceName(disk string, partNum int) string {
 }
 
 func formatCommands(format, label, device string) ([]plan.Command, error) {
-	if format == "" || strings.EqualFold(format, "raw") {
+	if format == "" || strings.EqualFold(format, "raw") || strings.EqualFold(format, "none") {
 		return nil, nil
 	}
 	switch strings.ToLower(format) {
@@ -228,6 +228,17 @@ func formatCommands(format, label, device string) ([]plan.Command, error) {
 			Program:     "mkswap",
 			Args:        args,
 			Description: fmt.Sprintf("create swap area on %s", device),
+		}}, nil
+	case "ntfs":
+		args := []string{"-f", "-F"}
+		if label != "" {
+			args = append(args, "-L", label)
+		}
+		args = append(args, device)
+		return []plan.Command{{
+			Program:     "mkfs.ntfs",
+			Args:        args,
+			Description: fmt.Sprintf("create NTFS filesystem on %s", device),
 		}}, nil
 	default:
 		return nil, fmt.Errorf("unsupported format %q", format)

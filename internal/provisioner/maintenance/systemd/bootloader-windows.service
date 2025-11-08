@@ -1,0 +1,15 @@
+[Unit]
+Description=Shoal Provisioner Step: Configure Windows Bootloader
+Requires=image-windows.service
+After=image-windows.service
+OnFailure=provision-failed@%n.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/run/provision/recipe.env
+ExecStart=/usr/bin/systemctl start bootloader-windows-tool.service
+RemainAfterExit=yes
+TimeoutSec=20min
+
+[Install]
+WantedBy=install-windows.target

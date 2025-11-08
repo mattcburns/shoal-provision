@@ -230,6 +230,9 @@ func Run(ctx context.Context, cfg Config) (err error) {
 	if strings.TrimSpace(rec.FirmwareURL) != "" {
 		envValues["FIRMWARE_URL"] = rec.FirmwareURL
 	}
+	if rec.WIMIndex > 0 {
+		envValues["WIM_INDEX"] = fmt.Sprintf("%d", rec.WIMIndex)
+	}
 
 	reserved := map[string]struct{}{}
 	for k := range envValues {
@@ -307,6 +310,7 @@ type recipe struct {
 	TargetDisk      string            `json:"target_disk"`
 	OCIURL          string            `json:"oci_url"`
 	FirmwareURL     string            `json:"firmware_url"`
+	WIMIndex        int               `json:"wim_index"`
 	PartitionLayout json.RawMessage   `json:"partition_layout"`
 	UserData        json.RawMessage   `json:"user_data"`
 	UnattendXML     json.RawMessage   `json:"unattend_xml"`

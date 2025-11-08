@@ -71,7 +71,7 @@ func TestPlanGeneratesExpectedCommands(t *testing.T) {
 }
 
 func TestUnknownFormatFails(t *testing.T) {
-	layout := `[{"size":"1G","type_guid":"8300","format":"ntfs"}]`
+	layout := `[{"size":"1G","type_guid":"8300","format":"zfs"}]`
 	if _, err := Plan("/dev/sda", []byte(layout)); err == nil {
 		t.Fatal("expected error for unsupported format")
 	}
@@ -90,5 +90,94 @@ func TestPartitionDeviceName(t *testing.T) {
 	}
 	if got := partitionDeviceName("/dev/nvme0n1", 3); got != "/dev/nvme0n1p3" {
 		t.Fatalf("unexpected device name for nvme: %s", got)
+	}
+}
+
+func TestWindowsLayout_EFI_MSR_NTFS(t *testing.T) {
+	layout := `[
+		{"size":"512M","type_guid":"ef00","format":"vfat","label":"EFI"},
+		{"size":"16M","type_guid":"0c01","format":"raw","label":"MSR"},
+		{"size":"100%","type_guid":"0700","format":"ntfs","label":"Windows"}
+	]`
+
+	cmds, err := Plan("/dev/sda", []byte(layout))
+	if err != nil {
+		t.Fatalf("Plan returned error for Windows layout: %v", err)
+	}
+
+	// Verify key commands are present
+	expectFragments := []string{
+		"--zap-all",
+		"-o /dev/sda", // GPT init
+		"-n 1:0:+512M",
+		"-t 1:C12A7328-F81F-11D2-BA4B-00A0C93EC93B", // EFI
+		"mkfs.vfat",
+		"-n 2:0:+16M",
+		"-t 2:E3C9E316-0B5C-4DB8-817D-F92DF00215AE", // MSR
+		"-n 3:0:0",
+		"-t 3:EBD0A0A2-B9E5-4433-87C0-68B6B72699C7", // Windows data
+		"mkfs.ntfs",
+	}
+
+	joined := ""
+	for _, cmd := range cmds {
+		joined += cmd.Shell() + " "
+	}
+
+	for _, frag := range expectFragments {
+		if !strings.Contains(joined, frag) {
+			t.Fatalf("expected fragment %q not found in command output", frag)
+		}
+	}
+}
+
+func TestMSRPartition_NoFilesystem(t *testing.T) {
+	layout := `[{"size":"16M","type_guid":"0c01","format":"raw"}]`
+
+	cmds, err := Plan("/dev/sda", []byte(layout))
+	if err != nil {
+		t.Fatalf("Plan returned error for MSR partition: %v", err)
+	}
+
+	// Ensure no mkfs command is generated for raw format
+	for _, cmd := range cmds {
+		if strings.HasPrefix(cmd.Program, "mkfs") || cmd.Program == "mkswap" {
+			t.Fatalf("unexpected format command for raw partition: %s", cmd.Shell())
+		}
+	}
+
+	// Verify MSR type GUID is set correctly
+	joined := ""
+	for _, cmd := range cmds {
+		joined += cmd.Shell() + " "
+	}
+	if !strings.Contains(joined, "E3C9E316-0B5C-4DB8-817D-F92DF00215AE") {
+		t.Fatal("MSR partition type GUID not found in commands")
+	}
+}
+
+func TestNTFSFormatSupported(t *testing.T) {
+	layout := `[{"size":"50G","type_guid":"0700","format":"ntfs","label":"Data"}]`
+
+	cmds, err := Plan("/dev/sda", []byte(layout))
+	if err != nil {
+		t.Fatalf("Plan should support ntfs format: %v", err)
+	}
+
+	// Verify mkfs.ntfs command is generated
+	found := false
+	for _, cmd := range cmds {
+		if cmd.Program == "mkfs.ntfs" {
+			found = true
+			if !strings.Contains(cmd.Shell(), "-f") || !strings.Contains(cmd.Shell(), "-F") {
+				t.Fatal("mkfs.ntfs should include -f and -F flags")
+			}
+			if !strings.Contains(cmd.Shell(), "-L Data") {
+				t.Fatal("mkfs.ntfs should include label")
+			}
+		}
+	}
+	if !found {
+		t.Fatal("expected mkfs.ntfs command not found")
 	}
 }

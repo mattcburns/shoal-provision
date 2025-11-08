@@ -1,0 +1,13 @@
+[Unit]
+Description=Shoal Provisioner Tool: Image Windows from WIM
+
+[Container]
+Image=quay.io/shoal/tools-image-windows:dev
+Type=oneshot
+Remove=true
+EnvironmentFile=/run/provision/recipe.env
+AddDevice=/dev:/dev:rwm
+AddCapability=ALL
+Volume=/run/provision:/run/provision:ro
+Volume=/mnt/new-windows:/mnt/new-windows:rshared,rw
+Exec=/opt/shoal/bin/image-windows-wrapper.sh

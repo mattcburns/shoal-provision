@@ -95,6 +95,7 @@ func (v *DefaultValidator) ValidateRecipe(raw json.RawMessage) ([]ValidationErro
 		"partition_layout": {},
 		"user_data":        {},
 		"unattend_xml":     {},
+		"wim_index":        {},
 		"ks.cfg":           {},
 		"env":              {},
 		"notes":            {},
@@ -137,6 +138,17 @@ func (v *DefaultValidator) ValidateRecipe(raw json.RawMessage) ([]ValidationErro
 			errs = append(errs, ValidationError{Field: "oci_url", Message: "must be a non-empty string"})
 		} else if !reOCIRef.MatchString(s) {
 			errs = append(errs, ValidationError{Field: "oci_url", Message: "does not look like a valid OCI reference (controller:port/repo[:tag|@digest])"})
+		}
+	}
+
+	// Optional: wim_index (integer, >= 1)
+	if v, ok := obj["wim_index"]; ok {
+		if num, ok := v.(float64); !ok {
+			errs = append(errs, ValidationError{Field: "wim_index", Message: "must be an integer"})
+		} else if num < 1 {
+			errs = append(errs, ValidationError{Field: "wim_index", Message: "must be >= 1 (minimum: 1)"})
+		} else if num != float64(int(num)) {
+			errs = append(errs, ValidationError{Field: "wim_index", Message: "must be an integer (no fractional part)"})
 		}
 	}
 
@@ -183,7 +195,7 @@ func (v *DefaultValidator) ValidateRecipe(raw json.RawMessage) ([]ValidationErro
 					if s, ok := f.(string); !ok {
 						errs = append(errs, ValidationError{Field: fmt.Sprintf("partition_layout[%d].format", i), Message: "must be a string"})
 					} else if !allowedFSFormat[s] {
-						errs = append(errs, ValidationError{Field: fmt.Sprintf("partition_layout[%d].format", i), Message: "must be one of vfat, ext4, xfs, ntfs, swap, none"})
+						errs = append(errs, ValidationError{Field: fmt.Sprintf("partition_layout[%d].format", i), Message: "must be one of vfat, ext4, xfs, ntfs, swap, raw, none"})
 					}
 				}
 				// label (optional)
@@ -320,6 +332,7 @@ var allowedFSFormat = map[string]bool{
 	"xfs":  true,
 	"ntfs": true,
 	"swap": true,
+	"raw":  true,
 	"none": true,
 }
 

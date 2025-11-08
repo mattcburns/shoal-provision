@@ -1,0 +1,14 @@
+[Unit]
+Description=Shoal Provisioner Tool: Configure Windows Bootloader
+
+[Container]
+Image=quay.io/shoal/tools-bootloader-windows:dev
+Type=oneshot
+Remove=true
+EnvironmentFile=/run/provision/recipe.env
+AddDevice=/dev:/dev:rwm
+AddCapability=ALL
+Volume=/mnt/new-windows:/mnt/new-windows:rshared,rw
+Volume=/mnt/efi:/mnt/efi:rshared,rw
+Volume=/run/provision:/run/provision:ro
+Exec=/opt/shoal/bin/bootloader-windows-wrapper.sh

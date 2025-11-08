@@ -1,0 +1,7 @@
+[Unit]
+Description=Shoal Provisioner: Install Windows Workflow
+Requires=prepare-provision-mounts.service partition.service image-windows.service bootloader-windows.service
+After=prepare-provision-mounts.service partition.service image-windows.service bootloader-windows.service
+OnSuccess=provision-success.service
+OnFailure=provision-failed@%n.service
+AllowIsolate=yes
