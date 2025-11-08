@@ -24,7 +24,8 @@ import (
 
 // Router handles OCI Distribution API routing.
 type Router struct {
-	handler *Handler
+	handler       *Handler
+	authenticator *Authenticator
 
 	// Compiled regex patterns for route matching
 	blobPattern          *regexp.Regexp
@@ -37,6 +38,7 @@ type Router struct {
 func NewRouter(storage *Storage) *Router {
 	return &Router{
 		handler:              NewHandler(storage),
+		authenticator:        nil,
 		blobPattern:          regexp.MustCompile(`^/v2/([^/]+(?:/[^/]+)*)/blobs/(sha256:[a-f0-9]{64})$`),
 		uploadPattern:        regexp.MustCompile(`^/v2/([^/]+(?:/[^/]+)*)/blobs/uploads/$`),
 		uploadSessionPattern: regexp.MustCompile(`^/v2/([^/]+(?:/[^/]+)*)/blobs/uploads/([a-f0-9-]+)$`),
@@ -44,8 +46,47 @@ func NewRouter(storage *Storage) *Router {
 	}
 }
 
+// NewRouterWithAuth creates a new OCI Distribution API router with authentication.
+func NewRouterWithAuth(storage *Storage, authConfig AuthConfig) (*Router, error) {
+	authenticator, err := NewAuthenticator(authConfig)
+	if err != nil {
+		return nil, err
+	}
+
+	return &Router{
+		handler:              NewHandler(storage),
+		authenticator:        authenticator,
+		blobPattern:          regexp.MustCompile(`^/v2/([^/]+(?:/[^/]+)*)/blobs/(sha256:[a-f0-9]{64})$`),
+		uploadPattern:        regexp.MustCompile(`^/v2/([^/]+(?:/[^/]+)*)/blobs/uploads/$`),
+		uploadSessionPattern: regexp.MustCompile(`^/v2/([^/]+(?:/[^/]+)*)/blobs/uploads/([a-f0-9-]+)$`),
+		manifestPattern:      regexp.MustCompile(`^/v2/([^/]+(?:/[^/]+)*)/manifests/([^/]+)$`),
+	}, nil
+}
+
+// SetAuthenticator sets the authenticator for the router.
+// This can be used to add authentication to an existing router.
+func (rt *Router) SetAuthenticator(authenticator *Authenticator) {
+	rt.authenticator = authenticator
+}
+
 // ServeHTTP implements http.Handler for the OCI Distribution API.
 func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// Apply authentication if configured
+	if rt.authenticator != nil {
+		// Create a handler that wraps the rest of the routing logic
+		handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			rt.serveHTTPInternal(w, r)
+		})
+		rt.authenticator.Middleware(handler).ServeHTTP(w, r)
+		return
+	}
+
+	// No auth configured, proceed directly
+	rt.serveHTTPInternal(w, r)
+}
+
+// serveHTTPInternal handles the actual routing logic after authentication.
+func (rt *Router) serveHTTPInternal(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Path
 
 	// GET /v2/ - ping
