@@ -54,6 +54,12 @@
       "$ref": "#/$defs/payload",
       "description": "Windows unattend.xml content."
     },
+    "wim_index": {
+      "type": "integer",
+      "description": "WIM image index to apply for Windows workflows. Default is 1 (first image in WIM).",
+      "minimum": 1,
+      "default": 1
+    },
     "ks.cfg": {
       "$ref": "#/$defs/payload",
       "description": "Kickstart file for ESXi or Linux workflows that use kickstart."
@@ -91,8 +97,8 @@
         },
         "format": {
           "type": "string",
-          "description": "Filesystem format for the partition. Use 'none' to leave unformatted.",
-          "enum": ["vfat", "ext4", "xfs", "ntfs", "swap", "none"],
+          "description": "Filesystem format for the partition. Use 'raw' or 'none' to leave unformatted (e.g., for MSR partitions).",
+          "enum": ["vfat", "ext4", "xfs", "ntfs", "swap", "raw", "none"],
           "default": "none"
         },
         "label": {
@@ -175,8 +181,8 @@
       "oci_url": "controller.internal:8080/os-images/windows-wim:22H2",
       "partition_layout": [
         { "size": "500M", "type_guid": "ef00", "format": "vfat", "label": "EFI", "bootable": true },
-        { "size": "16M", "label": "MSR" },
-        { "size": "100%", "format": "ntfs", "label": "Windows" }
+        { "size": "16M", "type_guid": "0c01", "format": "raw", "label": "MSR" },
+        { "size": "100%", "type_guid": "0700", "format": "ntfs", "label": "Windows" }
       ],
       "unattend_xml": { "content": "<unattend version=\"1.0\"></unattend>" }
     },

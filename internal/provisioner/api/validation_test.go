@@ -197,6 +197,92 @@ func TestValidateRecipe_InvalidJSON(t *testing.T) {
 	}
 }
 
+func TestValidateRecipe_Windows_MinimalSuccess(t *testing.T) {
+	raw := []byte(`{
+		"task_target": "install-windows.target",
+		"target_disk": "/dev/sda",
+		"partition_layout": [
+			{ "size": "512M", "type_guid": "ef00", "format": "vfat", "label": "EFI" },
+			{ "size": "16M", "type_guid": "0c01", "format": "raw", "label": "MSR" },
+			{ "size": "100%", "type_guid": "0700", "format": "ntfs", "label": "Windows" }
+		],
+		"unattend_xml": { "content": "<?xml version=\"1.0\"?><unattend></unattend>" }
+	}`)
+	errs, err := api.ValidateRecipe(raw)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(errs) != 0 {
+		t.Fatalf("expected no validation errors for valid Windows recipe, got %v", errs)
+	}
+}
+
+func TestValidateRecipe_Windows_MSRWithRawFormat(t *testing.T) {
+	raw := []byte(`{
+		"task_target": "install-windows.target",
+		"target_disk": "/dev/sda",
+		"partition_layout": [
+			{ "size": "16M", "type_guid": "0c01", "format": "raw" }
+		],
+		"unattend_xml": { "content": "<unattend></unattend>" }
+	}`)
+	errs, err := api.ValidateRecipe(raw)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(errs) != 0 {
+		t.Fatalf("expected no validation errors for MSR with raw format, got %v", errs)
+	}
+}
+
+func TestValidateRecipe_Windows_MSRWithNoneFormat(t *testing.T) {
+	raw := []byte(`{
+		"task_target": "install-windows.target",
+		"target_disk": "/dev/sda",
+		"partition_layout": [
+			{ "size": "16M", "type_guid": "0c01", "format": "none" }
+		],
+		"unattend_xml": { "content": "<unattend></unattend>" }
+	}`)
+	errs, err := api.ValidateRecipe(raw)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(errs) != 0 {
+		t.Fatalf("expected no validation errors for MSR with none format, got %v", errs)
+	}
+}
+
+func TestValidateRecipe_Windows_WIMIndexValid(t *testing.T) {
+	raw := []byte(`{
+		"task_target": "install-windows.target",
+		"target_disk": "/dev/sda",
+		"wim_index": 2,
+		"unattend_xml": { "content": "<unattend></unattend>" }
+	}`)
+	errs, err := api.ValidateRecipe(raw)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(errs) != 0 {
+		t.Fatalf("expected no validation errors for valid wim_index, got %v", errs)
+	}
+}
+
+func TestValidateRecipe_Windows_WIMIndexZero(t *testing.T) {
+	raw := []byte(`{
+		"task_target": "install-windows.target",
+		"target_disk": "/dev/sda",
+		"wim_index": 0,
+		"unattend_xml": { "content": "<unattend></unattend>" }
+	}`)
+	errs, err := api.ValidateRecipe(raw)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assertHasError(t, errs, "wim_index", "minimum")
+}
+
 func assertHasError(t *testing.T, errs []api.ValidationError, fieldContains, msgContains string) {
 	t.Helper()
 	for _, e := range errs {
