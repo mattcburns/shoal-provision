@@ -28,8 +28,14 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o /out/provisioner ./cmd/provisioner-dispatcher
 
 FROM quay.io/fedora/fedora-bootc:40 AS final
-RUN microdnf install -y podman jq util-linux-core && microdnf clean all
+RUN dnf -y install podman jq util-linux-core && dnf clean all
 RUN install -d -m 0755 /opt/shoal/bin /etc/containers/systemd /etc/systemd/system/multi-user.target.wants /usr/lib/bootc/bound-images.d
+
+# Default kernel args for better headless debugging on serial consoles.
+# bootc reads kargs drop-ins from /usr/lib/bootc/kargs.d and applies them
+# when generating boot loader entries on install.
+RUN install -d -m 0755 /usr/lib/bootc/kargs.d \
+    && printf '%s\n' 'console=ttyS0,115200 console=tty0' > /usr/lib/bootc/kargs.d/50-serial.conf
 
 COPY --from=builder /out/provisioner /usr/sbin/provisioner
 COPY internal/provisioner/maintenance/scripts/ /opt/shoal/bin/

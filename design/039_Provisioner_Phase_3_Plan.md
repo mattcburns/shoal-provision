@@ -1,6 +1,6 @@
 # 039: Provisioner — Phase 3 Plan (Full Linux Workflow)
 
-Status: In progress
+Status: In progress (nearing completion)
 Owners: Provisioning Working Group
 Last updated: 2025-11-07
 
@@ -76,7 +76,7 @@ Milestones and Deliverables
 8) E2E Validation
 - VM-based or containerized integration test harness mounting maintenance.iso + task.iso
 - Happy path to success; 1-2 negative cases (e.g., invalid layout)
-  - Status: repo integration harness exercises dispatcher → planners path, covering happy flow plus simulated image-linux failure for webhook attribution (2025-11-07)
+  - Status: repo integration harness exercises dispatcher → planners path, covering happy flow plus simulated image-linux failure for webhook attribution (2025-11-07). Maintenance ISO is produced via bootc-image-builder; installed system includes default serial console kargs for headless debugging. Installer serial output is deferred (not required for Phase 3).
 
 Acceptance Criteria (summarized)
 
@@ -84,6 +84,19 @@ Acceptance Criteria (summarized)
 - Failures attribute precise unit names via provision-failed@.service (026 §7.2)
 - Re-runs are safe and mostly no-ops when state matches (idempotency)
 - go run build.go validate passes with added tests and wiring (035)
+
+Additional Notes (Maintenance OS)
+
+- The maintenance ISO is built from `images/maintenance/Containerfile` using `scripts/build_maintenance_os.sh`.
+- bootc-image-builder requires rootful Podman; the build script handles exporting from rootless storage and running the builder with sudo.
+- Kernel args for serial (console=ttyS0,115200 console=tty0) are injected via `/usr/lib/bootc/kargs.d/50-serial.conf` and apply to the installed system’s boot entries.
+- Capturing installer-stage serial logs is out-of-scope for Phase 3 and can be revisited later if needed.
+
+Remaining Tasks to Close Phase 3
+
+- Optional: capture live webhook payloads during integration to document exact shapes per 032.
+- Optional: CI job to build the maintenance ISO artifact (gated/opt-in).
+- Final doc polish and PR to merge `feature/provisioner-phase3` into `master`.
 
 Test Strategy (Phase 3)
 
@@ -112,3 +125,4 @@ Start Checklist
 Change Log
 
 - v0.1 (2025-11-06): Initial Phase 3 plan document.
+- v0.2 (2025-11-07): E2E tests expanded; maintenance ISO build scripted; serial kargs for installed system; installer serial deferred.
