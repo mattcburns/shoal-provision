@@ -1,0 +1,10 @@
+{
+  "status": "failed",
+  "delivery_id": "8dcffbe1-d484-4fad-8d67-89f54062b010",
+  "task_target": "install-linux.target",
+  "dispatcher_version": "1.0.0",
+  "schema_id": "https://shoal.example.com/schemas/recipe.schema.json",
+  "started_at": "2025-11-07T14:30:00Z",
+  "finished_at": "2025-11-07T14:45:12Z",
+  "failed_step": "bootloader-linux.service"
+}
