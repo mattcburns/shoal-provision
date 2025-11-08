@@ -14,7 +14,7 @@ Phase 4 implements the end-to-end Windows Server provisioning workflow inside th
 - `design/030_Workflow_Windows.md` - Windows workflow specifications
 - `design/026_Systemd_and_Quadlet_Orchestration.md` - Unit orchestration patterns
 - `design/032_Error_Handling_and_Webhooks.md` - Error handling and webhooks
-- `plans/001_Phase_3_Provisioner_Plan.md` - Phase 3 implementation (Linux reference)
+- `design/039_Provisioner_Phase_3_Plan.md` - Phase 3 implementation (Linux reference)
 
 ## Scope (Phase 4)
 
@@ -103,7 +103,7 @@ install-windows.target
 4. **bootloader-windows.service** configures UEFI:
    - Copies Windows boot files from applied image to ESP
    - Creates firmware boot entry via efibootmgr
-   - Places unattend.xml at `/Windows/Panther/Unattend.xml`
+   - Places unattend.xml at `/mnt/new-windows/Windows/Panther/Unattend.xml`
 
 ## Milestones and Deliverables
 
@@ -185,7 +185,7 @@ install-windows.target
   - Copy Windows boot files from `/mnt/new-windows/Windows/Boot/EFI` to ESP
   - Create fallback boot path `/EFI/Boot/bootx64.efi`
   - Run efibootmgr to create firmware boot entry
-  - Place unattend.xml at `/Windows/Panther/Unattend.xml`
+  - Place unattend.xml at `/mnt/new-windows/Windows/Panther/Unattend.xml`
 - Create `bootloader-windows.service` systemd unit
 
 **Tests:**
@@ -288,7 +288,7 @@ All Phase 4 acceptance criteria must be met:
 - ✓ GPT layout created: EFI (vfat), MSR (raw), Windows (ntfs)
 - ✓ WIM applied to NTFS partition via wimapply
 - ✓ UEFI boot configured with firmware entry and fallback path
-- ✓ Unattend.xml placed at `/Windows/Panther/Unattend.xml`
+- ✓ Unattend.xml placed at `/mnt/new-windows/Windows/Panther/Unattend.xml`
 - ✓ Failure attribution reports precise unit names
 - ✓ Idempotent operations (re-runs safe and mostly no-ops)
 - ✓ `go run build.go validate` passes with new tests
