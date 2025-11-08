@@ -4,11 +4,11 @@ Status: Planned
 Owners: Provisioning Working Group  
 Last updated: 2025-11-08
 
-## Summary
+Summary
 
 Phase 5 implements an embedded OCI Distribution API (`/v2/*`) co-hosted within the Provisioner Controller process. This enables the controller to serve as a single-binary, air-gap friendly deployment that hosts both the provisioning API and an OCI registry for artifacts (rootfs tarballs, Windows WIMs) and tool container images. The embedded registry eliminates the need for external registries in isolated environments and simplifies artifact management.
 
-## References
+References
 
 - `design/020_Provisioner_Architecture.md` - Overall architecture and roadmap
 - `design/027_Embedded_OCI_Registry.md` - Embedded registry specifications
@@ -16,7 +16,7 @@ Phase 5 implements an embedded OCI Distribution API (`/v2/*`) co-hosted within t
 - `design/022_Recipe_Schema_and_Validation.md` - Recipe schema
 - `design/032_Error_Handling_and_Webhooks.md` - Error handling patterns
 
-## Scope (Phase 5)
+Scope (Phase 5)
 
 ### In Scope
 
@@ -65,7 +65,7 @@ Phase 5 implements an embedded OCI Distribution API (`/v2/*`) co-hosted within t
 - Web UI for browsing registry contents
 - Docker Registry v1 API (only OCI Distribution v2)
 
-## Architecture Overview
+Architecture Overview
 
 ### HTTP Routing
 
@@ -121,7 +121,7 @@ OCI Image Layout on disk (default: `/var/lib/shoal/oci`):
    oras pull controller:8080/os-images/ubuntu-rootfs:22.04 --output - | tar xpf -
    ```
 
-## Milestones and Deliverables
+Milestones and Deliverables
 
 ### 1. Storage Backend and Blob Management
 
@@ -366,7 +366,7 @@ OCI Image Layout on disk (default: `/var/lib/shoal/oci`):
 - Documentation comprehensive and clear
 - Controller restarts safely recover state
 
-## Acceptance Criteria (Summarized)
+Acceptance Criteria (Summarized)
 
 All Phase 5 acceptance criteria must be met:
 
@@ -387,7 +387,7 @@ All Phase 5 acceptance criteria must be met:
 - ✓ Integration tests cover happy path and failure scenarios
 - ✓ Documentation complete with examples
 
-## Testing Strategy (Phase 5)
+Testing Strategy (Phase 5)
 
 ### Unit Tests
 
@@ -465,7 +465,7 @@ All Phase 5 acceptance criteria must be met:
 - Corrupted blob upload rejected
 - Manifest with missing blobs rejected
 
-## Operational Notes
+Operational Notes
 
 ### Storage Requirements
 
@@ -497,7 +497,7 @@ All Phase 5 acceptance criteria must be met:
 - **Monitoring:** Alert on high storage usage before GC runs
 - **Manual Trigger:** Provide admin endpoint for emergency cleanup
 
-## Risks & Mitigations
+Risks & Mitigations
 
 ### Risk: Large Artifact Performance
 
@@ -519,7 +519,7 @@ All Phase 5 acceptance criteria must be met:
 
 **Mitigation:** Use standard Go crypto/sha256, verify on upload, trust collision resistance
 
-## Dependencies
+Dependencies
 
 ### Phase 3 Components (Reused)
 
@@ -538,7 +538,7 @@ All Phase 5 acceptance criteria must be met:
 - `design/020_Provisioner_Architecture.md` (system overview)
 - `design/021_Provisioner_Controller_Service.md` (controller integration)
 
-## Start Checklist
+Start Checklist
 
 - [ ] Branch: `feature/provisioner-phase5`
 - [ ] Baseline: `go run build.go validate` → PASS on master
@@ -547,7 +547,7 @@ All Phase 5 acceptance criteria must be met:
 - [ ] Storage location planned and accessible
 - [ ] Test artifacts prepared (rootfs tarball, sparse WIM)
 
-## Success Metrics
+Success Metrics
 
 - Complete embedded OCI registry implementation
 - All unit and integration tests passing
@@ -557,7 +557,7 @@ All Phase 5 acceptance criteria must be met:
 - Test coverage maintained >50%
 - No regression in Phase 3/4 functionality
 
-## Future Enhancements (Post-Phase 5)
+Future Enhancements (Post-Phase 5)
 
 - Catalog API (`/v2/_catalog`) for browsing repositories
 - Bearer token authentication (JWT with scopes)
@@ -569,6 +569,6 @@ All Phase 5 acceptance criteria must be met:
 - Replication between controller instances
 - S3-backed storage backend (alternative to filesystem)
 
-## Change Log
+Change Log
 
 - v0.1 (2025-11-08): Initial Phase 5 plan for Embedded OCI Registry implementation.
