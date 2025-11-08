@@ -1,5 +1,4 @@
-// Shoal is a Redfish aggregator service.package configdrive
-
+// Shoal is a Redfish aggregator service.
 // Copyright (C) 2025 Matthew Burns
 //
 // This program is free software: you can redistribute it and/or modify

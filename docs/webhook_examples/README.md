@@ -37,7 +37,10 @@ Sent when all provisioning steps complete successfully.
 - `Content-Type: application/json`
 - `X-Webhook-Secret: <shared-secret>` (if configured)
 
-**Response:** `200 OK { "ok": true }`
+**Response:** `200 OK`
+```json
+{ "ok": true }
+```
 
 ---
 
@@ -75,7 +78,10 @@ Sent when any provisioning step fails.
 - `started_at`: ISO 8601 timestamp when workflow started
 - `finished_at`: ISO 8601 timestamp when workflow completed
 
-**Response:** `200 OK { "ok": true }`
+**Response:** `200 OK`
+```json
+{ "ok": true }
+```
 
 ---
 
