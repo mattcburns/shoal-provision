@@ -1,0 +1,16 @@
+[Unit]
+Description=Shoal Provisioner Step: Image Windows from WIM
+Requires=partition.service
+After=partition.service network-online.target
+Wants=network-online.target
+OnFailure=provision-failed@%n.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/run/provision/recipe.env
+ExecStart=/usr/bin/systemctl start image-windows-tool.service
+RemainAfterExit=yes
+TimeoutSec=90min
+
+[Install]
+WantedBy=install-windows.target
