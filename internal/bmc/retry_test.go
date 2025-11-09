@@ -43,6 +43,7 @@ func TestDoWithRetry_SucceedsAfterTransientErrors(t *testing.T) {
 	if resp == nil || resp.StatusCode != 200 {
 		t.Fatalf("expected 200 response, got %#v", resp)
 	}
+	defer resp.Body.Close()
 	if attempts != 3 {
 		t.Fatalf("expected 3 attempts, got %d", attempts)
 	}

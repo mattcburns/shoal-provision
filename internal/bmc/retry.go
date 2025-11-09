@@ -77,7 +77,6 @@ func (s *Service) doWithRetry(ctx context.Context, cfg retryConfig, fn func(cont
 
 	var attempt int
 	var lastErr error
-	var lastResp *http.Response
 	for attempt = 1; attempt <= cfg.maxAttempts; attempt++ {
 		start := time.Now()
 		resp, err := fn(ctx)
@@ -111,7 +110,6 @@ func (s *Service) doWithRetry(ctx context.Context, cfg retryConfig, fn func(cont
 		}
 
 		lastErr = err
-		lastResp = resp
 
 		if attempt < cfg.maxAttempts {
 			// Backoff with jitter
@@ -123,6 +121,7 @@ func (s *Service) doWithRetry(ctx context.Context, cfg retryConfig, fn func(cont
 			if backoff > cfg.maxDelay {
 				backoff = cfg.maxDelay
 			}
+			// NOTE: Uses math/rand global RNG. Go 1.20+ auto-seeds; sufficient for non-cryptographic jitter.
 			jitter := time.Duration(rand.Float64() * cfg.jitterFrac * float64(backoff) * 2)
 			sleep := backoff - time.Duration(cfg.jitterFrac*float64(backoff)) + jitter // +/- around base
 			pm.IncRedfishRetry(cfg.opLabel, cfg.vendor)
@@ -147,7 +146,8 @@ func (s *Service) doWithRetry(ctx context.Context, cfg retryConfig, fn func(cont
 	if lastErr != nil {
 		return nil, lastErr
 	}
-	return lastResp, errors.New("redfish request failed after retries")
+	// On failure after all retries, return error and no response to avoid returning a closed body.
+	return nil, errors.New("redfish request failed after retries")
 }
 
 // isRetryable determines if the error/response suggests a transient failure.

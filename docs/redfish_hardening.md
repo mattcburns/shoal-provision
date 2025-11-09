@@ -4,17 +4,9 @@ This document summarizes the reliability, idempotency, and observability work ad
 
 ## What changed
 
-- Standardized retry/backoff with jitter for Redfish HTTP calls (5xx/429/network timeouts retryable).
-- Idempotent virtual media insert/eject and one-time boot override logic (checks current state and avoids redundant writes).
-- Vendor quirks registry to normalize differences in boot targets, action names, and slot selection heuristics.
-- Metrics: per-operation request counts, durations, and retry counters via Prometheus.
-- Reconciliation on restart to reassert expected media/boot state when desired (opt-in API).
 
 ## Retry & backoff
 
-- Exponential backoff with base 300ms (bounded) and light jitter; 4 attempts by default for critical ops.
-- Retries on: HTTP 5xx, 429 Too Many Requests, and network timeouts/temporary errors.
-- Metrics recorded for each attempt: `shoal_provisioner_redfish_requests_total`, `shoal_provisioner_redfish_request_duration_seconds`, `shoal_provisioner_redfish_retries_total`.
 
 ## Idempotency
 
