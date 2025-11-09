@@ -52,7 +52,7 @@ func TestPlanWindowsGeneratesExpectedSequence(t *testing.T) {
 	foundMountWindows := false
 	foundCopyBootFiles := false
 	foundFallbackBoot := false
-	foundEfibootmgr := false
+	foundEfibootEnsure := false
 	foundUnattendXML := false
 	foundUmountWindows := false
 	foundUmountESP := false
@@ -79,10 +79,10 @@ func TestPlanWindowsGeneratesExpectedSequence(t *testing.T) {
 			}
 		case "bash":
 			if len(cmd.Args) == 2 && cmd.Args[0] == "-c" {
-				if strings.Contains(cmd.Args[1], "efibootmgr --create") &&
+				if strings.Contains(cmd.Args[1], "efibootmgr") &&
 					strings.Contains(cmd.Args[1], "--label Windows") &&
 					strings.Contains(cmd.Args[1], "bootmgfw.efi") {
-					foundEfibootmgr = true
+					foundEfibootEnsure = true
 				}
 				if strings.Contains(cmd.Args[1], "Windows/Panther/Unattend.xml") &&
 					strings.Contains(cmd.Args[1], "SHOAL_UNATTEND_EOF") &&
@@ -112,8 +112,8 @@ func TestPlanWindowsGeneratesExpectedSequence(t *testing.T) {
 	if !foundFallbackBoot {
 		t.Errorf("expected creation of fallback bootx64.efi")
 	}
-	if !foundEfibootmgr {
-		t.Errorf("expected efibootmgr command to create boot entry")
+	if !foundEfibootEnsure {
+		t.Errorf("expected efibootmgr command to ensure boot entry")
 	}
 	if !foundUnattendXML {
 		t.Errorf("expected unattend.xml placement command")
@@ -166,6 +166,30 @@ func TestPlanWindowsUnattendSecurityNoContentInLogs(t *testing.T) {
 
 	if !foundUnattendScript {
 		t.Errorf("expected unattend.xml script in commands")
+	}
+}
+
+func TestPlanWindowsUnattendIdempotentSkip(t *testing.T) {
+	content := "<unattend><settings><component><ComputerName>SkipTest</ComputerName></component></settings></unattend>"
+	cmds, err := PlanWindows(WindowsOptions{ESPDevice: "/dev/sda1", WindowsDevice: "/dev/sda3", UnattendXML: content})
+	if err != nil {
+		t.Fatalf("PlanWindows returned error: %v", err)
+	}
+	foundScript := false
+	foundSkipLogic := false
+	for _, cmd := range cmds {
+		if cmd.Program == "bash" && len(cmd.Args) == 2 && cmd.Args[0] == "-c" {
+			foundScript = true
+			if strings.Contains(cmd.Args[1], "unattend.xml unchanged") && strings.Contains(cmd.Args[1], "EXISTING_HASH") {
+				foundSkipLogic = true
+			}
+		}
+	}
+	if !foundScript {
+		t.Fatalf("expected unattend script in commands")
+	}
+	if !foundSkipLogic {
+		t.Fatalf("expected skip logic for unchanged unattend.xml")
 	}
 }
 

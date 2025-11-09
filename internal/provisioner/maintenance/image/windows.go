@@ -58,29 +58,45 @@ func PlanWindows(opts WindowsOptions) ([]plan.Command, error) {
 		index = 1
 	}
 
+	// Idempotency strategy:
+	// 1. Compute manifest digest of the OCI reference (lightweight) via oras manifest fetch
+	// 2. Compare with stamp file "$WIN_PATH/.provisioner_wim_digest"
+	// 3. If unchanged, skip wimapply; otherwise stream apply and update stamp.
+	// NOTE: Using manifest digest rather than full WIM file hash keeps memory/time lower; acceptable for change detection.
+	idempotentScript := fmt.Sprintf(`set -euo pipefail
+WIN_PATH=%s
+OCI_REF=%s
+WIM_INDEX=%d
+STAMP_FILE="$WIN_PATH/.provisioner_wim_digest"
+mkdir -p "$WIN_PATH"
+mount -t ntfs-3g %s "$WIN_PATH"
+CURRENT_DIGEST=$(oras manifest fetch "$OCI_REF" 2>/dev/null | sha256sum | awk '{print $1}') || {
+  echo "image-windows-plan: failed to fetch manifest for $OCI_REF" >&2; umount "$WIN_PATH"; exit 1; }
+if [ -f "$STAMP_FILE" ]; then
+  PREV_DIGEST=$(cat "$STAMP_FILE")
+  if [ "$PREV_DIGEST" = "$CURRENT_DIGEST" ]; then
+	echo "image-windows-plan: WIM digest unchanged ($CURRENT_DIGEST), skipping apply" >&2
+	umount "$WIN_PATH"
+	exit 0
+  fi
+fi
+echo "image-windows-plan: applying WIM (index=$WIM_INDEX, digest=$CURRENT_DIGEST)" >&2
+if ! oras pull "$OCI_REF" --output - | wimapply - "$WIN_PATH" --index=%d; then
+  echo "image-windows-plan: wimapply failed" >&2
+  umount "$WIN_PATH"
+  exit 1
+fi
+echo "$CURRENT_DIGEST" > "$STAMP_FILE"
+sync
+umount "$WIN_PATH"
+`,
+		plan.Quote(winPath), plan.Quote(url), index, plan.Quote(partDev), index)
+
 	commands := []plan.Command{
 		{
-			Program:     "mkdir",
-			Args:        []string{"-p", winPath},
-			Description: "ensure Windows mount directory exists",
-		},
-		{
-			Program:     "mount",
-			Args:        []string{"-t", "ntfs-3g", partDev, winPath},
-			Description: fmt.Sprintf("mount NTFS partition %s to %s", partDev, winPath),
-		},
-		{
-			Program: "bash",
-			Args: []string{"-c", fmt.Sprintf(
-				"oras pull %s --output - | wimapply - %s --index=%d",
-				plan.Quote(url), plan.Quote(winPath), index,
-			)},
-			Description: fmt.Sprintf("stream WIM image and apply index %d", index),
-		},
-		{
-			Program:     "umount",
-			Args:        []string{winPath},
-			Description: fmt.Sprintf("unmount %s", winPath),
+			Program:     "bash",
+			Args:        []string{"-c", idempotentScript},
+			Description: fmt.Sprintf("idempotent WIM apply (index %d) with digest stamp", index),
 		},
 	}
 
