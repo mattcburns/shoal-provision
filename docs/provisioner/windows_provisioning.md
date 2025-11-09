@@ -6,6 +6,30 @@ This guide describes how to provision Windows Server systems using Shoal's provi
 
 Shoal supports automated Windows Server provisioning via the `install-windows.target` workflow. The process applies a WIM (Windows Imaging Format) image to an NTFS partition and configures UEFI boot with an unattend.xml answer file for hands-off deployment.
 
+## Idempotency Enhancements (Phase 6 Milestone 3)
+
+Phase 6 introduced additional safeguards to make re-runs safe and fast:
+
+* Imaging now records a manifest digest stamp at the root of the Windows partition (e.g., `C:\\.provisioner_wim_digest` when Windows boots, or `/mnt/new-windows/.provisioner_wim_digest` when mounted in maintenance OS). If the digest for the referenced OCI artifact matches the stamp, the WIM apply step is skipped.
+* Bootloader setup skips creation of the UEFI boot entry when one with the configured label already exists (checked via `efibootmgr`).
+* `Unattend.xml` placement now hashes existing content; identical content results in a no-op.
+
+These changes reduce unnecessary writes and shorten subsequent provisioning attempts (e.g., recovery after dispatcher or controller restart).
+
+### Observing Skips
+
+Dry-run or journal output will include messages such as:
+
+```
+image-windows-plan: WIM digest unchanged (<digest>), skipping apply
+bootloader-windows-plan: boot entry 'Windows' already exists; skipping creation
+bootloader-windows-plan: unattend.xml unchanged (sha256: <hash>), skipping write
+```
+
+### Forcing Reapply
+
+To force a reimage despite a matching digest, push an updated artifact (new digest) or remove the stamp file inside the Windows partition before rerunning the workflow.
+
 ## Prerequisites
 
 - **Maintenance OS**: Shoal maintenance OS with `wimlib-utils` and `ntfs-3g` packages

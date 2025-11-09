@@ -31,29 +31,23 @@ func TestPlanWindows(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PlanWindows returned error: %v", err)
 	}
-	if len(cmds) != 4 {
-		t.Fatalf("expected 4 commands, got %d", len(cmds))
+	if len(cmds) < 1 {
+		t.Fatalf("expected at least one command, got %d", len(cmds))
 	}
 
-	// Verify mkdir
-	if got := cmds[0].Shell(); got != "mkdir -p /mnt/new-windows" {
-		t.Fatalf("unexpected mkdir command: %s", got)
+	// Single bash script should contain oras pull, wimapply, --index=1, and mount/umount
+	sh := cmds[0].Shell()
+	if !(strings.Contains(sh, "oras pull") && strings.Contains(sh, "OCI_REF=") && strings.Contains(sh, "controller:8080/os-images/windows-wim:22H2")) {
+		t.Fatalf("expected oras pull with OCI_REF in script: %s", sh)
 	}
-
-	// Verify mount
-	if got := cmds[1].Shell(); got != "mount -t ntfs-3g /dev/sda3 /mnt/new-windows" {
-		t.Fatalf("unexpected mount command: %s", got)
+	if !(strings.Contains(sh, "wimapply -") && strings.Contains(sh, "--index=1") && strings.Contains(sh, "WIN_PATH=/mnt/new-windows")) {
+		t.Fatalf("expected wimapply with index and WIN_PATH in script: %s", sh)
 	}
-
-	// Verify wimapply stream
-	want := "bash -c 'oras pull controller:8080/os-images/windows-wim:22H2 --output - | wimapply - /mnt/new-windows --index=1'"
-	if got := cmds[2].Shell(); got != want {
-		t.Fatalf("unexpected stream command:\n got: %s\nwant: %s", got, want)
+	if !(strings.Contains(sh, "mount -t ntfs-3g /dev/sda3 \"$WIN_PATH\"") || strings.Contains(sh, "mount -t ntfs-3g /dev/sda3 /mnt/new-windows")) {
+		t.Fatalf("expected mount in script: %s", sh)
 	}
-
-	// Verify umount
-	if got := cmds[3].Shell(); got != "umount /mnt/new-windows" {
-		t.Fatalf("unexpected umount command: %s", got)
+	if !(strings.Contains(sh, "umount \"$WIN_PATH\"") || strings.Contains(sh, "umount /mnt/new-windows")) {
+		t.Fatalf("expected umount in script: %s", sh)
 	}
 }
 
@@ -68,8 +62,11 @@ func TestPlanWindowsWithCustomIndex(t *testing.T) {
 		t.Fatalf("PlanWindows returned error: %v", err)
 	}
 
-	// Verify index is used
-	wimCmd := cmds[2].Shell()
+	// Verify index is set in environment and used in wimapply
+	wimCmd := cmds[0].Shell()
+	if !strings.Contains(wimCmd, "WIM_INDEX=3") {
+		t.Fatalf("expected WIM_INDEX=3 in script: %s", wimCmd)
+	}
 	if !strings.Contains(wimCmd, "--index=3") {
 		t.Fatalf("expected --index=3 in wimapply command: %s", wimCmd)
 	}
@@ -87,9 +84,12 @@ func TestPlanWindowsDefaultIndex(t *testing.T) {
 	}
 
 	// Verify defaults to index 1
-	wimCmd := cmds[2].Shell()
+	wimCmd := cmds[0].Shell()
+	if !strings.Contains(wimCmd, "WIM_INDEX=1") {
+		t.Fatalf("expected WIM_INDEX=1 (default) in script: %s", wimCmd)
+	}
 	if !strings.Contains(wimCmd, "--index=1") {
-		t.Fatalf("expected --index=1 (default) in wimapply command: %s", wimCmd)
+		t.Fatalf("expected --index=1 in wimapply command: %s", wimCmd)
 	}
 }
 
@@ -115,9 +115,9 @@ func TestPlanWindowsDefaultPath(t *testing.T) {
 		t.Fatalf("PlanWindows returned error: %v", err)
 	}
 
-	// Verify default path is used
-	mkdirCmd := cmds[0].Shell()
-	if !strings.Contains(mkdirCmd, "/mnt/new-windows") {
-		t.Fatalf("expected default path /mnt/new-windows in mkdir: %s", mkdirCmd)
+	// Verify default path is used in script
+	script := cmds[0].Shell()
+	if !strings.Contains(script, "/mnt/new-windows") {
+		t.Fatalf("expected default path /mnt/new-windows in script: %s", script)
 	}
 }

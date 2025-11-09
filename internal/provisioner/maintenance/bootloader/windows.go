@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 
 	"shoal/internal/provisioner/maintenance/plan"
 )
@@ -145,40 +146,59 @@ func PlanWindows(opts WindowsOptions) ([]plan.Command, error) {
 		},
 	)
 
-	// Create firmware boot entry
+	// Create firmware boot entry (idempotent): skip if label already present
 	efibootmgrScript := fmt.Sprintf(`set -euo pipefail
 ESP_PART_NUM=$(lsblk -no PARTN %s)
 ESP_DISK=$(lsblk -no PKNAME %s)
 if [[ -z "$ESP_PART_NUM" ]]; then
-  echo "bootloader-windows-plan: unable to determine ESP partition number for %s" >&2
-  exit 1
+	echo "bootloader-windows-plan: unable to determine ESP partition number for %s" >&2
+	exit 1
 fi
 if [[ -z "$ESP_DISK" ]]; then
-  echo "bootloader-windows-plan: unable to determine ESP disk for %s" >&2
-  exit 1
+	echo "bootloader-windows-plan: unable to determine ESP disk for %s" >&2
+	exit 1
+fi
+if efibootmgr | grep -qF %s; then
+	echo "bootloader-windows-plan: boot entry '%s' already exists; skipping creation" >&2
+	exit 0
 fi
 efibootmgr --create --disk "/dev/${ESP_DISK}" --part "${ESP_PART_NUM}" \
-  --label %s --loader '\EFI\Microsoft\Boot\bootmgfw.efi'
+	--label %s --loader '\EFI\Microsoft\Boot\bootmgfw.efi'
 `,
 		plan.Quote(espDevice),
 		plan.Quote(espDevice),
 		plan.Quote(espDevice),
 		plan.Quote(espDevice),
 		plan.Quote(bootLabel),
+		plan.Quote(bootLabel),
+		plan.Quote(bootLabel),
 	)
 
 	commands = append(commands, plan.Command{
 		Program:     "bash",
 		Args:        []string{"-c", efibootmgrScript},
-		Description: "create UEFI boot entry for Windows",
+		Description: "ensure UEFI boot entry present",
 	})
 
 	// Place unattend.xml (hash logged, content never logged)
 	unattendDest := filepath.Join(windowsPath, "Windows", "Panther", "Unattend.xml")
+	escapedContent := opts.UnattendXML
+	// Basic safety: remove potential EOF terminator collisions (extremely unlikely in real XML)
+	if strings.Contains(escapedContent, "SHOAL_UNATTEND_EOF") {
+		escapedContent = strings.ReplaceAll(escapedContent, "SHOAL_UNATTEND_EOF", "SHOAL_UNATTEND_EOF_1")
+	}
 	unattendScript := fmt.Sprintf(`set -euo pipefail
 UNATTEND_DIR=%s
 UNATTEND_FILE=%s
+NEW_HASH=%s
 mkdir -p "$UNATTEND_DIR"
+if [[ -f "$UNATTEND_FILE" ]]; then
+  EXISTING_HASH=$(sha256sum "$UNATTEND_FILE" | awk '{print $1}') || true
+  if [[ "$EXISTING_HASH" == "$NEW_HASH" ]]; then
+	echo "bootloader-windows-plan: unattend.xml unchanged (sha256: %s), skipping write" >&2
+	exit 0
+  fi
+fi
 # NOTE: unattend.xml content from recipe (hash: %s, size: %d bytes)
 cat > "$UNATTEND_FILE" <<'SHOAL_UNATTEND_EOF'
 %s
@@ -188,16 +208,18 @@ echo "bootloader-windows-plan: unattend.xml written (sha256: %s)" >&2
 `,
 		plan.Quote(filepath.Dir(unattendDest)),
 		plan.Quote(unattendDest),
+		unattendHashStr,
+		unattendHashStr[:16],
 		unattendHashStr[:16],
 		len(opts.UnattendXML),
-		opts.UnattendXML,
+		escapedContent,
 		unattendHashStr[:16],
 	)
 
 	commands = append(commands, plan.Command{
 		Program:     "bash",
 		Args:        []string{"-c", unattendScript},
-		Description: fmt.Sprintf("write unattend.xml (sha256: %s)", unattendHashStr[:16]),
+		Description: fmt.Sprintf("ensure unattend.xml present (sha256: %s)", unattendHashStr[:16]),
 	})
 
 	// Unmount
