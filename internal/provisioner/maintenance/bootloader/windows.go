@@ -183,7 +183,7 @@ efibootmgr --create --disk "/dev/${ESP_DISK}" --part "${ESP_PART_NUM}" \
 	// Place unattend.xml (hash logged, content never logged)
 	unattendDest := filepath.Join(windowsPath, "Windows", "Panther", "Unattend.xml")
 	escapedContent := opts.UnattendXML
-	// Basic safety: remove potential EOF terminator collisions
+	// Basic safety: remove potential EOF terminator collisions (extremely unlikely in real XML)
 	if strings.Contains(escapedContent, "SHOAL_UNATTEND_EOF") {
 		escapedContent = strings.ReplaceAll(escapedContent, "SHOAL_UNATTEND_EOF", "SHOAL_UNATTEND_EOF_1")
 	}

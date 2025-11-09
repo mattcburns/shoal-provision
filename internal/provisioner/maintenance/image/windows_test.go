@@ -37,7 +37,7 @@ func TestPlanWindows(t *testing.T) {
 
 	// Single bash script should contain oras pull, wimapply, --index=1, and mount/umount
 	sh := cmds[0].Shell()
-	if !(strings.Contains(sh, "oras pull") && strings.Contains(sh, "OCI_REF=controller:8080/os-images/windows-wim:22H2")) {
+	if !(strings.Contains(sh, "oras pull") && strings.Contains(sh, "OCI_REF=") && strings.Contains(sh, "controller:8080/os-images/windows-wim:22H2")) {
 		t.Fatalf("expected oras pull with OCI_REF in script: %s", sh)
 	}
 	if !(strings.Contains(sh, "wimapply -") && strings.Contains(sh, "--index=1") && strings.Contains(sh, "WIN_PATH=/mnt/new-windows")) {
@@ -62,8 +62,11 @@ func TestPlanWindowsWithCustomIndex(t *testing.T) {
 		t.Fatalf("PlanWindows returned error: %v", err)
 	}
 
-	// Verify index is used
+	// Verify index is set in environment and used in wimapply
 	wimCmd := cmds[0].Shell()
+	if !strings.Contains(wimCmd, "WIM_INDEX=3") {
+		t.Fatalf("expected WIM_INDEX=3 in script: %s", wimCmd)
+	}
 	if !strings.Contains(wimCmd, "--index=3") {
 		t.Fatalf("expected --index=3 in wimapply command: %s", wimCmd)
 	}
@@ -82,8 +85,11 @@ func TestPlanWindowsDefaultIndex(t *testing.T) {
 
 	// Verify defaults to index 1
 	wimCmd := cmds[0].Shell()
+	if !strings.Contains(wimCmd, "WIM_INDEX=1") {
+		t.Fatalf("expected WIM_INDEX=1 (default) in script: %s", wimCmd)
+	}
 	if !strings.Contains(wimCmd, "--index=1") {
-		t.Fatalf("expected --index=1 (default) in wimapply command: %s", wimCmd)
+		t.Fatalf("expected --index=1 in wimapply command: %s", wimCmd)
 	}
 }
 

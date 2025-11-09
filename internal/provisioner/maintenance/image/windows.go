@@ -93,9 +93,9 @@ CURRENT_DIGEST=$(oras manifest fetch "$OCI_REF" 2>/dev/null | sha256sum | awk '{
 if [ -f "$STAMP_FILE" ]; then
   PREV_DIGEST=$(cat "$STAMP_FILE")
   if [ "$PREV_DIGEST" = "$CURRENT_DIGEST" ]; then
-	echo "image-windows-plan: WIM digest unchanged ($CURRENT_DIGEST), skipping apply" >&2
-	[ "$MOUNTED" = "1" ] && umount "$WIN_PATH"
-	exit 0
+    echo "image-windows-plan: WIM digest unchanged ($CURRENT_DIGEST), skipping apply" >&2
+    [ "$MOUNTED" = "1" ] && umount "$WIN_PATH"
+    exit 0
   fi
 fi
 
