@@ -35,16 +35,29 @@ The maintenance OS supports provisioning multiple operating systems:
 
 ### Linux Provisioning
 - Partition creation and formatting (ext4, xfs, vfat, swap)
-- Rootfs extraction from OCI tarball via `oras`
+- Rootfs extraction from OCI tarball via `oras` (from embedded registry or external sources)
 - GRUB bootloader installation via chroot
 - Cloud-init Config Drive (NoCloud)
+
+**OCI Registry Integration:**
+The maintenance OS pulls rootfs artifacts from the Shoal embedded registry:
+```bash
+oras pull controller:8080/os-images/ubuntu-rootfs:22.04 --output - | tar xpf - -C /mnt/root
+```
 
 ### Windows Provisioning
 - Partition creation with MSR (Microsoft Reserved) support
 - NTFS filesystem creation via `ntfs-3g` and `mkfs.ntfs`
-- WIM image application via `wimapply` (wimlib-utils)
+- WIM image application via `wimapply` (wimlib-utils) from embedded registry
 - Windows boot file setup and UEFI configuration
 - Unattend.xml placement for automated setup
+
+**OCI Registry Integration:**
+The maintenance OS pulls WIM images from the Shoal embedded registry:
+```bash
+oras pull controller:8080/os-images/windows-server:2022 --output - > install.wim
+wimapply install.wim 1 /mnt/windows
+```
 
 **Required packages for Windows workflows:**
 - `wimlib-utils` – WIM image extraction and application (LGPLv3+)

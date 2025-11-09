@@ -1,0 +1,67 @@
+{
+  "description": "Example Windows Server 2022 provisioning recipe using embedded OCI registry",
+  "recipe_version": "1.0",
+  "task_target": "install-windows.target",
+  "target_disk": "/dev/sda",
+  "oci_url": "controller.example.com:8080/os-images/windows-server:2022",
+  "partitions": [
+    {
+      "mount": "MSR",
+      "size": "128M",
+      "fstype": "reserved",
+      "label": "MSR"
+    },
+    {
+      "mount": "C:",
+      "size": "0",
+      "fstype": "ntfs",
+      "label": "Windows"
+    }
+  ],
+  "windows_edition": "ServerStandard",
+  "windows_product_key": "XXXXX-XXXXX-XXXXX-XXXXX-XXXXX",
+  "unattend_xml": "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<unattend xmlns=\"urn:schemas-microsoft-com:unattend\">\n  <settings pass=\"windowsPE\">\n    <component name=\"Microsoft-Windows-International-Core-WinPE\" processorArchitecture=\"amd64\" publicKeyToken=\"31bf3856ad364e35\" language=\"neutral\" versionScope=\"nonSxS\" xmlns:wcm=\"http://schemas.microsoft.com/WMIConfig/2002/State\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\">\n      <SetupUILanguage>\n        <UILanguage>en-US</UILanguage>\n      </SetupUILanguage>\n      <InputLocale>en-US</InputLocale>\n      <SystemLocale>en-US</SystemLocale>\n      <UILanguage>en-US</UILanguage>\n      <UserLocale>en-US</UserLocale>\n    </component>\n    <component name=\"Microsoft-Windows-Setup\" processorArchitecture=\"amd64\" publicKeyToken=\"31bf3856ad364e35\" language=\"neutral\" versionScope=\"nonSxS\" xmlns:wcm=\"http://schemas.microsoft.com/WMIConfig/2002/State\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\">\n      <UserData>\n        <AcceptEula>true</AcceptEula>\n        <ProductKey>\n          <Key>XXXXX-XXXXX-XXXXX-XXXXX-XXXXX</Key>\n        </ProductKey>\n      </UserData>\n    </component>\n  </settings>\n  <settings pass=\"specialize\">\n    <component name=\"Microsoft-Windows-Shell-Setup\" processorArchitecture=\"amd64\" publicKeyToken=\"31bf3856ad364e35\" language=\"neutral\" versionScope=\"nonSxS\" xmlns:wcm=\"http://schemas.microsoft.com/WMIConfig/2002/State\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\">\n      <ComputerName>WIN-SERVER01</ComputerName>\n      <TimeZone>Eastern Standard Time</TimeZone>\n    </component>\n    <component name=\"Microsoft-Windows-TerminalServices-LocalSessionManager\" processorArchitecture=\"amd64\" publicKeyToken=\"31bf3856ad364e35\" language=\"neutral\" versionScope=\"nonSxS\" xmlns:wcm=\"http://schemas.microsoft.com/WMIConfig/2002/State\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\">\n      <fDenyTSConnections>false</fDenyTSConnections>\n    </component>\n    <component name=\"Microsoft-Windows-TerminalServices-RDP-WinStationExtensions\" processorArchitecture=\"amd64\" publicKeyToken=\"31bf3856ad364e35\" language=\"neutral\" versionScope=\"nonSxS\" xmlns:wcm=\"http://schemas.microsoft.com/WMIConfig/2002/State\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\">\n      <UserAuthentication>0</UserAuthentication>\n    </component>\n  </settings>\n  <settings pass=\"oobeSystem\">\n    <component name=\"Microsoft-Windows-Shell-Setup\" processorArchitecture=\"amd64\" publicKeyToken=\"31bf3856ad364e35\" language=\"neutral\" versionScope=\"nonSxS\" xmlns:wcm=\"http://schemas.microsoft.com/WMIConfig/2002/State\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\">\n      <OOBE>\n        <HideEULAPage>true</HideEULAPage>\n        <HideOEMRegistrationScreen>true</HideOEMRegistrationScreen>\n        <HideOnlineAccountScreens>true</HideOnlineAccountScreens>\n        <HideWirelessSetupInOOBE>true</HideWirelessSetupInOOBE>\n        <ProtectYourPC>3</ProtectYourPC>\n      </OOBE>\n      <UserAccounts>\n        <AdministratorPassword>\n          <Value>P@ssw0rd123!</Value>\n          <PlainText>true</PlainText>\n        </AdministratorPassword>\n      </UserAccounts>\n      <TimeZone>Eastern Standard Time</TimeZone>\n    </component>\n  </settings>\n</unattend>",
+  "drivers": {
+    "inject": true,
+    "sources": [
+      "controller.example.com:8080/drivers/storage:latest",
+      "controller.example.com:8080/drivers/network:latest"
+    ]
+  },
+  "post_install_scripts": [
+    {
+      "name": "enable_winrm",
+      "content": "@echo off\nnetsh advfirewall firewall add rule name=\"WinRM-HTTP\" dir=in action=allow protocol=TCP localport=5985\nwinrm quickconfig -quiet\nwinrm set winrm/config/service/auth @{Basic=\"true\"}\nwinrm set winrm/config/service @{AllowUnencrypted=\"true\"}\n",
+      "run_at": "firstboot"
+    },
+    {
+      "name": "install_tools",
+      "content": "@echo off\necho Installing additional tools...\npowershell -Command \"Install-WindowsFeature -Name Web-Server -IncludeManagementTools\"\npowershell -Command \"Install-Module -Name PSWindowsUpdate -Force\"\n",
+      "run_at": "firstboot"
+    }
+  ],
+  "network": {
+    "interfaces": [
+      {
+        "name": "Ethernet",
+        "dhcp": true,
+        "dns_servers": ["8.8.8.8", "8.8.4.4"]
+      }
+    ]
+  },
+  "notes": [
+    "This recipe demonstrates Windows Server 2022 provisioning using a WIM image from the embedded OCI registry.",
+    "The WIM image is pulled from controller.example.com:8080/os-images/windows-server:2022",
+    "Ensure the WIM has been pushed to the registry before provisioning:",
+    "  oras push controller.example.com:8080/os-images/windows-server:2022 --artifact-type application/vnd.shoal.windows.wim --plain-http install.wim",
+    "The maintenance OS will:",
+    "  1. Pull the WIM image from the registry",
+    "  2. Apply it to the target C: partition using wimapply",
+    "  3. Configure Windows boot files and UEFI entries",
+    "  4. Place unattend.xml for automated setup",
+    "  5. Inject any specified drivers from the registry",
+    "After first boot, Windows will complete OOBE using the unattend.xml configuration.",
+    "Replace XXXXX-XXXXX-XXXXX-XXXXX-XXXXX with your actual Windows product key.",
+    "The default Administrator password is P@ssw0rd123! - change this immediately after provisioning."
+  ]
+}
