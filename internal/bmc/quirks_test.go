@@ -14,17 +14,32 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-package ctxkeys
+package bmc
 
-// key is a distinct type to avoid context key collisions.
-type key string
+import "testing"
 
-// User is the context key used to store the authenticated user (*models.User).
-var User key = "user"
+func TestGetQuirks_MapsBootTargets(t *testing.T) {
+	cases := []struct{ vendor, in, expect string }{
+		{"Dell iDRAC", "Cd", "Cd"},
+		{"AcmeVendor", "Cd", "UsbCd"},
+		{"Supermicro", "Cd", "Cd"},
+		{"Unknown", "Cd", "Cd"},
+	}
+	for _, c := range cases {
+		q := getQuirks(c.vendor)
+		out := q.mapBootTarget(c.in)
+		if out != c.expect {
+			t.Fatalf("vendor %s: expected %s got %s", c.vendor, c.expect, out)
+		}
+	}
+}
 
-// Refresh is the context key used to signal a forced refresh (bool=true).
-var Refresh key = "refresh"
-
-// CorrelationID is the context key used to store a per-request correlation ID (string).
-// When absent, callers should generate a new ID for outbound requests for traceability.
-var CorrelationID key = "correlation_id"
+func TestGetQuirks_DefaultsNonEmpty(t *testing.T) {
+	q := getQuirks("Unknown")
+	if q.InsertAction == "" || q.EjectAction == "" {
+		t.Fatalf("expected default action names set")
+	}
+	if len(q.BootTargetMap) == 0 {
+		t.Fatalf("expected boot target map filled")
+	}
+}

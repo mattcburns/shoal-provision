@@ -387,3 +387,13 @@ Content-Type: application/json
 
 {}
 ```
+
+## Phase 6 Hardening Additions (2025-11-08)
+
+- Standardized retry/backoff with jitter and Prometheus metrics for Redfish calls.
+- Idempotent virtual media insert/eject and one-time boot override semantics.
+- Vendor quirks registry (boot target mapping, slot preferences, optional timing hints).
+- Restart reconciliation helper to reassert media/boot state when desired.
+- New unit tests covering transient failures, vendor profiles, and reconciliation.
+
+See also: `docs/redfish_hardening.md`.

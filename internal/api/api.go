@@ -29,6 +29,7 @@ import (
 
 	"shoal/internal/auth"
 	"shoal/internal/bmc"
+	"shoal/internal/ctxkeys"
 	"shoal/internal/database"
 	"shoal/pkg/models"
 	"shoal/pkg/redfish"
@@ -66,11 +67,36 @@ func New(db *database.DB) http.Handler {
 	return NewRouter(db)
 }
 
+// isValidCorrelationID validates that a correlation ID is safe for logging.
+// Accepts UUIDs and alphanumeric strings with dashes, up to 128 chars.
+func isValidCorrelationID(id string) bool {
+	if len(id) == 0 || len(id) > 128 {
+		return false
+	}
+	for _, r := range id {
+		if !(r >= 'a' && r <= 'z') && !(r >= 'A' && r <= 'Z') &&
+			!(r >= '0' && r <= '9') && r != '-' && r != '_' {
+			return false
+		}
+	}
+	return true
+}
+
 // handleRedfish routes Redfish API requests
 func (h *Handler) handleRedfish(w http.ResponseWriter, r *http.Request) {
+	// Correlation ID injection: accept inbound header or generate one.
+	var cid string
+	ctx := r.Context()
+	if hdrCID := r.Header.Get("X-Correlation-ID"); hdrCID != "" && isValidCorrelationID(hdrCID) {
+		ctx = ctxkeys.WithCorrelationID(ctx, hdrCID)
+		cid = hdrCID
+	} else {
+		ctx, cid = ctxkeys.EnsureCorrelationID(ctx)
+	}
+	// Propagate into request context for downstream handlers
+	r = r.WithContext(ctx)
+	slog.Debug("Handling Redfish request", "method", r.Method, "path", strings.TrimPrefix(r.URL.Path, "/redfish"), "correlation_id", cid)
 	path := strings.TrimPrefix(r.URL.Path, "/redfish")
-
-	slog.Debug("Handling Redfish request", "method", r.Method, "path", path)
 
 	// Handle service root
 	if path == "/" || path == "" {

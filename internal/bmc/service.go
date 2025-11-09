@@ -53,6 +53,7 @@ type bmcIDCache struct {
 	managerID string
 	systemID  string
 	cachedAt  time.Time
+	vendor    string
 }
 
 // New creates a new BMC service
@@ -116,7 +117,11 @@ func (s *Service) ProxyRequest(ctx context.Context, bmcName, path string, r *htt
 	}
 
 	// Execute request
-	slog.Debug("Proxying request to BMC", "bmc", bmcName, "url", targetURL, "method", r.Method)
+	if cid := ctxkeys.GetCorrelationID(ctx); cid != "" {
+		slog.Debug("Proxying request to BMC", "bmc", bmcName, "url", targetURL, "method", r.Method, "correlation_id", cid)
+	} else {
+		slog.Debug("Proxying request to BMC", "bmc", bmcName, "url", targetURL, "method", r.Method)
+	}
 	resp, err := s.client.Do(proxyReq)
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute BMC request: %w", err)
@@ -262,6 +267,366 @@ func (s *Service) GetFirstSystemID(ctx context.Context, bmcName string) (string,
 	return "", fmt.Errorf("unable to parse system ID from @odata.id: %q", oid)
 }
 
+// getVendor best-effort fetches the system Manufacturer for metrics/quirks labeling.
+func (s *Service) getVendor(ctx context.Context, bmc *models.BMC) string {
+	// Try cache
+	s.idCacheMux.RLock()
+	if cache, ok := s.idCache[bmc.Name]; ok && cache.vendor != "" && time.Since(cache.cachedAt) < 5*time.Minute {
+		v := cache.vendor
+		s.idCacheMux.RUnlock()
+		return v
+	}
+	s.idCacheMux.RUnlock()
+
+	// Fetch first system and read Manufacturer
+	data, err := s.fetchRedfishResource(ctx, bmc, "/redfish/v1/Systems")
+	if err == nil {
+		if members, ok := data["Members"].([]interface{}); ok && len(members) > 0 {
+			if m, ok := members[0].(map[string]interface{}); ok {
+				if oid, ok := m["@odata.id"].(string); ok && oid != "" {
+					if sys, err := s.fetchRedfishResource(ctx, bmc, oid); err == nil && sys != nil {
+						if manu, ok := sys["Manufacturer"].(string); ok && manu != "" {
+							s.idCacheMux.Lock()
+							s.idCache[bmc.Name] = &bmcIDCache{
+								vendor:   manu,
+								cachedAt: time.Now(),
+							}
+							s.idCacheMux.Unlock()
+							return manu
+						}
+					}
+				}
+			}
+		}
+	}
+	return ""
+}
+
+// findVirtualMediaSlot locates a VirtualMedia member suitable for CD/DVD operations.
+func (s *Service) findVirtualMediaSlot(ctx context.Context, bmc *models.BMC, managerID string, quirks *Quirks) (string, error) {
+	collPath := "/redfish/v1/Managers/" + managerID + "/VirtualMedia"
+	coll, err := s.fetchRedfishResource(ctx, bmc, collPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to fetch VirtualMedia collection: %w", err)
+	}
+	members, _ := coll["Members"].([]interface{})
+
+	// Use vendor-specific preferences if available, otherwise default to cd/dvd
+	prefs := quirks.VirtualMediaPreference
+	if len(prefs) == 0 {
+		prefs = []string{"cd", "dvd"}
+	}
+
+	for _, m := range members {
+		mm, _ := m.(map[string]interface{})
+		oid, _ := mm["@odata.id"].(string)
+		if oid == "" {
+			continue
+		}
+		// Fetch member to inspect MediaTypes
+		vm, err := s.fetchRedfishResource(ctx, bmc, oid)
+		if err != nil || vm == nil {
+			continue
+		}
+		// Check if MediaTypes match any preference
+		if mts, ok := vm["MediaTypes"].([]interface{}); ok {
+			for _, t := range mts {
+				if ts, ok := t.(string); ok {
+					l := strings.ToLower(ts)
+					for _, pref := range prefs {
+						if l == strings.ToLower(pref) {
+							return oid, nil
+						}
+					}
+				}
+			}
+		}
+		// Check if Id contains any preference
+		if id, _ := vm["Id"].(string); id != "" {
+			idLower := strings.ToLower(id)
+			for _, pref := range prefs {
+				if strings.Contains(idLower, strings.ToLower(pref)) {
+					return oid, nil
+				}
+			}
+		}
+	}
+	// Fallback: return first member if present
+	if len(members) > 0 {
+		if mm, ok := members[0].(map[string]interface{}); ok {
+			if oid, _ := mm["@odata.id"].(string); oid != "" {
+				return oid, nil
+			}
+		}
+	}
+	return "", fmt.Errorf("no VirtualMedia member found")
+}
+
+// InsertVirtualMedia mounts a remote image and optionally sets one-time boot override.
+func (s *Service) InsertVirtualMedia(ctx context.Context, bmcName, imageURL string, writeProtected bool, bootOnce bool) error {
+	bmc, err := s.db.GetBMCByName(ctx, bmcName)
+	if err != nil {
+		return fmt.Errorf("failed to get BMC: %w", err)
+	}
+	if bmc == nil || !bmc.Enabled {
+		return fmt.Errorf("BMC not found or disabled: %s", bmcName)
+	}
+
+	vendor := s.getVendor(ctx, bmc)
+	quirks := getQuirks(vendor)
+	managerID, err := s.GetFirstManagerID(ctx, bmcName)
+	if err != nil {
+		return fmt.Errorf("failed to get manager ID: %w", err)
+	}
+	slotOID, err := s.findVirtualMediaSlot(ctx, bmc, managerID, quirks)
+	if err != nil {
+		return err
+	}
+
+	// Check current state for idempotency
+	vmRes, _ := s.fetchRedfishResource(ctx, bmc, slotOID)
+	if vmRes != nil {
+		curImg, _ := vmRes["Image"].(string)
+		inserted, _ := vmRes["Inserted"].(bool)
+		if inserted && curImg == imageURL {
+			slog.Info("virtual media already inserted", "bmc", bmcName, "slot", slotOID, "image", imageURL)
+			// Still ensure boot once if requested
+			if bootOnce {
+				if err := s.SetOneTimeBoot(ctx, bmcName, "Cd"); err != nil {
+					slog.Warn("failed to set one-time boot after existing insert", "bmc", bmcName, "error", err)
+				}
+			}
+			return nil
+		}
+	}
+
+	// Primary: Action InsertMedia
+	actionName := quirks.InsertAction
+	if actionName == "" {
+		actionName = "VirtualMedia.InsertMedia"
+	}
+	actionPath := slotOID + "/Actions/" + actionName
+	targetURL, err := s.buildBMCURL(bmc, actionPath)
+	if err != nil {
+		return fmt.Errorf("failed to build action URL: %w", err)
+	}
+	effectiveWP := writeProtected || quirks.RequiresWriteProtected
+	payload := map[string]interface{}{
+		"Image":          imageURL,
+		"Inserted":       true,
+		"WriteProtected": effectiveWP,
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("failed to marshal payload: %w", err)
+	}
+	doReq := func(ctx context.Context) (*http.Response, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(body))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.SetBasicAuth(bmc.Username, bmc.Password)
+		return s.client.Do(req)
+	}
+	resp, err := s.doWithRetry(ctx, newDefaultRetryConfig("mount.maintenance", vendor), doReq)
+	if err != nil {
+		return fmt.Errorf("insert media failed: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusMethodNotAllowed || resp.StatusCode == http.StatusBadRequest {
+		// Fallback to PATCH on member resource
+		patchURL, _ := s.buildBMCURL(bmc, slotOID)
+		patchPayload := map[string]interface{}{
+			"Image":    imageURL,
+			"Inserted": true,
+		}
+		pbody, perr := json.Marshal(patchPayload)
+		if perr != nil {
+			return fmt.Errorf("failed to marshal PATCH payload: %w", perr)
+		}
+		doPatch := func(ctx context.Context) (*http.Response, error) {
+			req, err := http.NewRequestWithContext(ctx, http.MethodPatch, patchURL, bytes.NewReader(pbody))
+			if err != nil {
+				return nil, err
+			}
+			req.Header.Set("Content-Type", "application/json")
+			req.SetBasicAuth(bmc.Username, bmc.Password)
+			return s.client.Do(req)
+		}
+		presp, perr := s.doWithRetry(ctx, newDefaultRetryConfig("mount.maintenance", vendor), doPatch)
+		if perr != nil {
+			return fmt.Errorf("insert media fallback failed: %w", perr)
+		}
+		defer func() { _ = presp.Body.Close() }()
+		if presp.StatusCode < 200 || presp.StatusCode >= 300 {
+			b, _ := io.ReadAll(presp.Body)
+			return fmt.Errorf("insert media fallback status %d: %s", presp.StatusCode, string(b))
+		}
+	} else if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		b, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("insert media status %d: %s", resp.StatusCode, string(b))
+	}
+
+	if quirks.DelayAfterInsert > 0 {
+		timer := time.NewTimer(quirks.DelayAfterInsert)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-timer.C:
+			// continue
+		}
+	}
+	if bootOnce {
+		if err := s.SetOneTimeBoot(ctx, bmcName, "Cd"); err != nil {
+			slog.Warn("failed to set one-time boot", "bmc", bmcName, "error", err)
+		}
+	}
+	return nil
+}
+
+// EjectVirtualMedia unmounts any currently inserted image on the preferred slot.
+func (s *Service) EjectVirtualMedia(ctx context.Context, bmcName string) error {
+	bmc, err := s.db.GetBMCByName(ctx, bmcName)
+	if err != nil {
+		return fmt.Errorf("failed to get BMC: %w", err)
+	}
+	if bmc == nil || !bmc.Enabled {
+		return fmt.Errorf("BMC not found or disabled: %s", bmcName)
+	}
+	vendor := s.getVendor(ctx, bmc)
+	quirks := getQuirks(vendor)
+	managerID, err := s.GetFirstManagerID(ctx, bmcName)
+	if err != nil {
+		return fmt.Errorf("failed to get manager ID: %w", err)
+	}
+	slotOID, err := s.findVirtualMediaSlot(ctx, bmc, managerID, quirks)
+	if err != nil {
+		return err
+	}
+	// If already not inserted, idempotent success
+	vmRes, _ := s.fetchRedfishResource(ctx, bmc, slotOID)
+	if vmRes != nil {
+		if inserted, _ := vmRes["Inserted"].(bool); !inserted {
+			return nil
+		}
+	}
+
+	actionName := quirks.EjectAction
+	if actionName == "" {
+		actionName = "VirtualMedia.EjectMedia"
+	}
+	actionPath := slotOID + "/Actions/" + actionName
+	targetURL, _ := s.buildBMCURL(bmc, actionPath)
+	doReq := func(ctx context.Context) (*http.Response, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, http.NoBody)
+		if err != nil {
+			return nil, err
+		}
+		req.SetBasicAuth(bmc.Username, bmc.Password)
+		return s.client.Do(req)
+	}
+	resp, err := s.doWithRetry(ctx, newDefaultRetryConfig("cleanup.unmount-maintenance", vendor), doReq)
+	if err != nil {
+		return fmt.Errorf("eject media failed: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusMethodNotAllowed {
+		// Fallback: PATCH Inserted=false
+		patchURL, _ := s.buildBMCURL(bmc, slotOID)
+		pbody, perr := json.Marshal(map[string]any{"Inserted": false})
+		if perr != nil {
+			return fmt.Errorf("failed to marshal eject fallback body: %w", perr)
+		}
+		doPatch := func(ctx context.Context) (*http.Response, error) {
+			req, err := http.NewRequestWithContext(ctx, http.MethodPatch, patchURL, bytes.NewReader(pbody))
+			if err != nil {
+				return nil, err
+			}
+			req.Header.Set("Content-Type", "application/json")
+			req.SetBasicAuth(bmc.Username, bmc.Password)
+			return s.client.Do(req)
+		}
+		presp, perr := s.doWithRetry(ctx, newDefaultRetryConfig("cleanup.unmount-maintenance", vendor), doPatch)
+		if perr != nil {
+			return perr
+		}
+		defer func() { _ = presp.Body.Close() }()
+		if presp.StatusCode < 200 || presp.StatusCode >= 300 {
+			b, _ := io.ReadAll(presp.Body)
+			return fmt.Errorf("eject media fallback status %d: %s", presp.StatusCode, string(b))
+		}
+		return nil
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		b, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("eject media status %d: %s", resp.StatusCode, string(b))
+	}
+	return nil
+}
+
+// SetOneTimeBoot sets a one-time boot source override (e.g., "Cd", "Pxe", "Hdd").
+func (s *Service) SetOneTimeBoot(ctx context.Context, bmcName, target string) error {
+	bmc, err := s.db.GetBMCByName(ctx, bmcName)
+	if err != nil {
+		return fmt.Errorf("failed to get BMC: %w", err)
+	}
+	if bmc == nil || !bmc.Enabled {
+		return fmt.Errorf("BMC not found or disabled: %s", bmcName)
+	}
+	vendor := s.getVendor(ctx, bmc)
+	quirks := getQuirks(vendor)
+	systemID, err := s.GetFirstSystemID(ctx, bmcName)
+	if err != nil {
+		return fmt.Errorf("failed to get system ID: %w", err)
+	}
+	sysPath := fmt.Sprintf("/redfish/v1/Systems/%s", systemID)
+	targetURL, _ := s.buildBMCURL(bmc, sysPath)
+	// Idempotency: if already set to Once and target, consider success
+	if cur, err := s.fetchRedfishResource(ctx, bmc, sysPath); err == nil && cur != nil {
+		if boot, ok := cur["Boot"].(map[string]interface{}); ok {
+			curEnabled, _ := boot["BootSourceOverrideEnabled"].(string)
+			curTarget, _ := boot["BootSourceOverrideTarget"].(string)
+			if strings.EqualFold(curEnabled, "Once") && strings.EqualFold(curTarget, target) {
+				return nil
+			}
+		}
+	}
+
+	mappedTarget := quirks.mapBootTarget(target)
+	payload := map[string]any{
+		"Boot": map[string]any{
+			"BootSourceOverrideEnabled": "Once",
+			"BootSourceOverrideTarget":  mappedTarget,
+		},
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("failed to marshal boot override payload: %w", err)
+	}
+	doReq := func(ctx context.Context) (*http.Response, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPatch, targetURL, bytes.NewReader(body))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.SetBasicAuth(bmc.Username, bmc.Password)
+		return s.client.Do(req)
+	}
+	resp, err := s.doWithRetry(ctx, newDefaultRetryConfig("boot.override", vendor), doReq)
+	if err != nil {
+		return fmt.Errorf("set one-time boot failed: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		b, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("set one-time boot status %d: %s", resp.StatusCode, string(b))
+	}
+	return nil
+}
+
 // PowerControl executes a power control action on a BMC
 func (s *Service) PowerControl(ctx context.Context, bmcName string, action models.PowerAction) error {
 	bmc, err := s.db.GetBMCByName(ctx, bmcName)
@@ -320,7 +685,11 @@ func (s *Service) PowerControl(ctx context.Context, bmcName string, action model
 	systemPath := systemsCollection.Members[0].ODataID
 	powerActionPath := systemPath + "/Actions/ComputerSystem.Reset"
 
-	slog.Debug("Using system for power control", "systemPath", systemPath, "actionPath", powerActionPath)
+	if cid := ctxkeys.GetCorrelationID(ctx); cid != "" {
+		slog.Debug("Using system for power control", "systemPath", systemPath, "actionPath", powerActionPath, "correlation_id", cid)
+	} else {
+		slog.Debug("Using system for power control", "systemPath", systemPath, "actionPath", powerActionPath)
+	}
 
 	// Create power control request
 	powerReq := models.PowerRequest{ResetType: action}
@@ -335,29 +704,28 @@ func (s *Service) PowerControl(ctx context.Context, bmcName string, action model
 		return fmt.Errorf("failed to build BMC URL: %w", err)
 	}
 
-	// Create HTTP request
-	req, err := http.NewRequestWithContext(ctx, "POST", targetURL, bytes.NewReader(body))
-	if err != nil {
-		return fmt.Errorf("failed to create power control request: %w", err)
+	// Prepare a retrying POST request
+	doReq := func(ctx context.Context) (*http.Response, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(body))
+		if err != nil {
+			return nil, fmt.Errorf("failed to create power control request: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.SetBasicAuth(bmc.Username, bmc.Password)
+		return s.client.Do(req)
 	}
 
-	// Set headers and authentication
-	req.Header.Set("Content-Type", "application/json")
-	req.SetBasicAuth(bmc.Username, bmc.Password)
+	vendor := s.getVendor(ctx, bmc)
+	// Execute with retry/backoff and metrics
+	resp, err := s.doWithRetry(ctx, retryConfig{
+		maxAttempts: 4,
+		baseDelay:   500 * time.Millisecond,
+		maxDelay:    3 * time.Second,
+		jitterFrac:  0.3,
+		opLabel:     "system.power",
+		vendor:      vendor,
+	}, doReq)
 
-	// Log detailed request information for debugging
-	slog.Info("Power control request details",
-		"bmc", bmcName,
-		"action", action,
-		"targetURL", targetURL,
-		"systemPath", systemPath,
-		"username", bmc.Username,
-		"hasPassword", bmc.Password != "",
-		"requestBody", string(body))
-
-	// Execute request
-	slog.Info("Executing power control action", "bmc", bmcName, "action", action)
-	resp, err := s.client.Do(req)
 	if err != nil {
 		return fmt.Errorf("failed to execute power control request: %w", err)
 	}

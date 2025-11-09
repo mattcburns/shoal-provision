@@ -16,15 +16,28 @@
 
 package ctxkeys
 
-// key is a distinct type to avoid context key collisions.
-type key string
+import (
+	"context"
+	"testing"
+)
 
-// User is the context key used to store the authenticated user (*models.User).
-var User key = "user"
+func TestEnsureCorrelationIDGenerates(t *testing.T) {
+	ctx, id := EnsureCorrelationID(context.TODO())
+	if id == "" {
+		t.Fatalf("expected generated id not empty")
+	}
+	if got := GetCorrelationID(ctx); got != id {
+		t.Fatalf("expected id round trip; got %s want %s", got, id)
+	}
+}
 
-// Refresh is the context key used to signal a forced refresh (bool=true).
-var Refresh key = "refresh"
-
-// CorrelationID is the context key used to store a per-request correlation ID (string).
-// When absent, callers should generate a new ID for outbound requests for traceability.
-var CorrelationID key = "correlation_id"
+func TestEnsureCorrelationIDPreservesExisting(t *testing.T) {
+	base := WithCorrelationID(context.TODO(), "abc123")
+	ctx, id := EnsureCorrelationID(base)
+	if id != "abc123" {
+		t.Fatalf("expected existing id preserved; got %s", id)
+	}
+	if got := GetCorrelationID(ctx); got != "abc123" {
+		t.Fatalf("round trip mismatch: %s", got)
+	}
+}
