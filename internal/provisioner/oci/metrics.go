@@ -341,5 +341,16 @@ func formatInt64(v int64) string {
 
 func formatFloat64(v float64) string {
 	// Simple float formatting for Prometheus (good enough for duration metrics)
-	return formatInt64(int64(v*1000)) + "." + formatInt64(int64((v*1000000))%1000)
+	// Format as seconds with 3 decimal places (milliseconds precision)
+	seconds := int64(v)
+	milliseconds := int64((v - float64(seconds)) * 1000)
+	return formatInt64(seconds) + "." + formatInt64WithPadding(milliseconds, 3)
+}
+
+func formatInt64WithPadding(v int64, minDigits int) string {
+	result := formatInt64(v)
+	for len(result) < minDigits {
+		result = "0" + result
+	}
+	return result
 }

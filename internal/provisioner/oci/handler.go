@@ -83,7 +83,10 @@ func writeOCIError(w http.ResponseWriter, status int, code, message string) {
 		},
 	}
 
-	json.NewEncoder(w).Encode(errResp)
+	if err := json.NewEncoder(w).Encode(errResp); err != nil {
+		// Log encoding error if logger available
+		// TODO: Add proper logging when logger is available
+	}
 }
 
 // PingHandler handles GET /v2/ - registry ping.
@@ -145,7 +148,10 @@ func (h *Handler) GetBlobHandler(w http.ResponseWriter, r *http.Request, name, d
 
 	// Stream blob content
 	w.WriteHeader(http.StatusOK)
-	io.Copy(w, reader)
+	if _, err := io.Copy(w, reader); err != nil {
+		// Log copy error if logger available
+		// TODO: Add proper logging when logger is available
+	}
 }
 
 // HeadBlobHandler handles HEAD /v2/<name>/blobs/<digest> - check blob existence.

@@ -173,11 +173,14 @@ func (s *Storage) WriteBlob(r io.Reader, expectedDigest string) (string, error) 
 	}
 	tmpPath := tmpFile.Name()
 
-	// Cleanup temp file on error
+	// Deferred cleanup: only remove tmp file if we don't successfully move it
+	committed := false
 	defer func() {
-		if tmpFile != nil {
+		if !committed {
 			tmpFile.Close()
-			os.Remove(tmpPath)
+			if err := os.Remove(tmpPath); err != nil {
+				// Log error if logger available; best effort cleanup
+			}
 		}
 	}()
 
@@ -186,17 +189,18 @@ func (s *Storage) WriteBlob(r io.Reader, expectedDigest string) (string, error) 
 	tee := io.TeeReader(r, hash)
 
 	if _, err := io.Copy(tmpFile, tee); err != nil {
+		tmpFile.Close()
 		return "", fmt.Errorf("failed to write blob data: %w", err)
 	}
 
 	if err := tmpFile.Sync(); err != nil {
+		tmpFile.Close()
 		return "", fmt.Errorf("failed to sync blob data: %w", err)
 	}
 
 	if err := tmpFile.Close(); err != nil {
 		return "", fmt.Errorf("failed to close temp file: %w", err)
 	}
-	tmpFile = nil // Prevent deferred cleanup
 
 	// Compute final digest
 	digestHex := hex.EncodeToString(hash.Sum(nil))
@@ -204,35 +208,36 @@ func (s *Storage) WriteBlob(r io.Reader, expectedDigest string) (string, error) 
 
 	// Verify digest if expected digest was provided
 	if expectedDigest != "" && actualDigest != expectedDigest {
-		os.Remove(tmpPath)
 		return "", fmt.Errorf("digest mismatch: expected %s, got %s", expectedDigest, actualDigest)
 	}
 
 	// Move to final location (atomic rename)
 	finalPath, err := s.BlobPath(actualDigest)
 	if err != nil {
-		os.Remove(tmpPath)
 		return "", err
 	}
 
 	// Ensure parent directory exists
 	if err := os.MkdirAll(filepath.Dir(finalPath), 0755); err != nil {
-		os.Remove(tmpPath)
 		return "", fmt.Errorf("failed to create blob directory: %w", err)
 	}
 
 	// Check if blob already exists (deduplication)
 	if _, err := os.Stat(finalPath); err == nil {
-		os.Remove(tmpPath)
+		// Blob already exists, just remove temp file
+		if err := os.Remove(tmpPath); err != nil {
+			// Log error if logger available
+		}
+		committed = true
 		return actualDigest, nil
 	}
 
 	// Atomic rename
 	if err := os.Rename(tmpPath, finalPath); err != nil {
-		os.Remove(tmpPath)
 		return "", fmt.Errorf("failed to rename temp file: %w", err)
 	}
 
+	committed = true
 	return actualDigest, nil
 }
 

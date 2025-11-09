@@ -96,9 +96,12 @@ func (um *UploadManager) GetSession(sessionID string) (*UploadSession, error) {
 
 // AppendData appends data to an upload session.
 func (um *UploadManager) AppendData(sessionID string, data io.Reader) (int64, error) {
-	session, err := um.GetSession(sessionID)
-	if err != nil {
-		return 0, err
+	um.mu.Lock()
+	defer um.mu.Unlock()
+
+	session, ok := um.sessions[sessionID]
+	if !ok {
+		return 0, fmt.Errorf("upload session not found: %s", sessionID)
 	}
 
 	// Write data to temp file
@@ -142,7 +145,10 @@ func (um *UploadManager) CompleteSession(sessionID, expectedDigest string) (stri
 
 	// Clean up
 	delete(um.sessions, sessionID)
-	os.Remove(session.FilePath)
+	if err := os.Remove(session.FilePath); err != nil {
+		// Log error but don't fail the operation since blob was successfully stored
+		// TODO: Add proper logging when logger is available
+	}
 
 	return digest, nil
 }
@@ -159,9 +165,15 @@ func (um *UploadManager) CancelSession(sessionID string) error {
 
 	// Close and remove temp file
 	if session.File != nil {
-		session.File.Close()
+		if err := session.File.Close(); err != nil {
+			// Log error but continue cleanup
+			// TODO: Add proper logging when logger is available
+		}
 	}
-	os.Remove(session.FilePath)
+	if err := os.Remove(session.FilePath); err != nil {
+		// Log error but continue cleanup
+		// TODO: Add proper logging when logger is available
+	}
 
 	delete(um.sessions, sessionID)
 	return nil
@@ -178,9 +190,15 @@ func (um *UploadManager) CleanupExpiredSessions(maxAge time.Duration) int {
 	for sessionID, session := range um.sessions {
 		if now.Sub(session.CreatedAt) > maxAge {
 			if session.File != nil {
-				session.File.Close()
+				if err := session.File.Close(); err != nil {
+					// Log error but continue cleanup
+					// TODO: Add proper logging when logger is available
+				}
 			}
-			os.Remove(session.FilePath)
+			if err := os.Remove(session.FilePath); err != nil {
+				// Log error but continue cleanup
+				// TODO: Add proper logging when logger is available
+			}
 			delete(um.sessions, sessionID)
 			count++
 		}

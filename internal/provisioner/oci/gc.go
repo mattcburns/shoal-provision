@@ -268,7 +268,9 @@ func (gc *GarbageCollector) listRepositories() ([]string, error) {
 // processQuarantine moves unreferenced blobs to quarantine and deletes old quarantined blobs.
 func (gc *GarbageCollector) processQuarantine(unreferencedBlobs map[string]bool) (int, int, int64, []string) {
 	quarantineDir := filepath.Join(gc.storage.root, "quarantine")
-	os.MkdirAll(quarantineDir, 0755)
+	if err := os.MkdirAll(quarantineDir, 0755); err != nil {
+		return 0, 0, 0, []string{fmt.Sprintf("failed to create quarantine directory: %v", err)}
+	}
 
 	quarantined := 0
 	deleted := 0
@@ -308,7 +310,9 @@ func (gc *GarbageCollector) processQuarantine(unreferencedBlobs map[string]bool)
 					bytesFreed += qEntry.Size
 
 					// Remove quarantine entry
-					os.Remove(entryPath)
+					if err := os.Remove(entryPath); err != nil {
+						errors = append(errors, fmt.Sprintf("failed to remove quarantine entry %s: %v", entry.Name(), err))
+					}
 				}
 			}
 		}
