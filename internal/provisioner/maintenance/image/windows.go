@@ -69,28 +69,46 @@ OCI_REF=%s
 WIM_INDEX=%d
 STAMP_FILE="$WIN_PATH/.provisioner_wim_digest"
 mkdir -p "$WIN_PATH"
-mount -t ntfs-3g %s "$WIN_PATH"
+
+# Mount partition if not already mounted
+MOUNTED=0
+if mountpoint -q "$WIN_PATH"; then
+  echo "image-windows-plan: $WIN_PATH already mounted" >&2
+else
+  if ! mount -t ntfs-3g %s "$WIN_PATH"; then
+    echo "image-windows-plan: failed to mount %s on $WIN_PATH" >&2
+    exit 1
+  fi
+  MOUNTED=1
+fi
+
 CURRENT_DIGEST=$(oras manifest fetch "$OCI_REF" 2>/dev/null | sha256sum | awk '{print $1}') || {
-  echo "image-windows-plan: failed to fetch manifest for $OCI_REF" >&2; umount "$WIN_PATH"; exit 1; }
+  echo "image-windows-plan: failed to fetch manifest for $OCI_REF" >&2
+  [ "$MOUNTED" = "1" ] && umount "$WIN_PATH"
+  exit 1
+}
+
 if [ -f "$STAMP_FILE" ]; then
   PREV_DIGEST=$(cat "$STAMP_FILE")
   if [ "$PREV_DIGEST" = "$CURRENT_DIGEST" ]; then
 	echo "image-windows-plan: WIM digest unchanged ($CURRENT_DIGEST), skipping apply" >&2
-	umount "$WIN_PATH"
+	[ "$MOUNTED" = "1" ] && umount "$WIN_PATH"
 	exit 0
   fi
 fi
+
 echo "image-windows-plan: applying WIM (index=$WIM_INDEX, digest=$CURRENT_DIGEST)" >&2
 if ! oras pull "$OCI_REF" --output - | wimapply - "$WIN_PATH" --index=%d; then
   echo "image-windows-plan: wimapply failed" >&2
-  umount "$WIN_PATH"
+  [ "$MOUNTED" = "1" ] && umount "$WIN_PATH"
   exit 1
 fi
+
 echo "$CURRENT_DIGEST" > "$STAMP_FILE"
 sync
-umount "$WIN_PATH"
+[ "$MOUNTED" = "1" ] && umount "$WIN_PATH"
 `,
-		plan.Quote(winPath), plan.Quote(url), index, plan.Quote(partDev), index)
+		plan.Quote(winPath), plan.Quote(url), index, plan.Quote(partDev), plan.Quote(partDev), index)
 
 	commands := []plan.Command{
 		{

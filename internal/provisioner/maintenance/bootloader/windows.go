@@ -158,12 +158,12 @@ if [[ -z "$ESP_DISK" ]]; then
 	echo "bootloader-windows-plan: unable to determine ESP disk for %s" >&2
 	exit 1
 fi
-if efibootmgr | grep -q %s; then
+if efibootmgr | grep -qF %s; then
 	echo "bootloader-windows-plan: boot entry '%s' already exists; skipping creation" >&2
 	exit 0
 fi
 efibootmgr --create --disk "/dev/${ESP_DISK}" --part "${ESP_PART_NUM}" \
-	--label %s --loader '\\EFI\\Microsoft\\Boot\\bootmgfw.efi'
+	--label %s --loader '\EFI\Microsoft\Boot\bootmgfw.efi'
 `,
 		plan.Quote(espDevice),
 		plan.Quote(espDevice),

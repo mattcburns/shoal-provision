@@ -200,10 +200,10 @@ Note the returned job ID for status tracking.
    # Verify Windows directory structure
    ls -la /mnt/new-windows/Windows
    # Should see Boot/, System32/, etc.
-   
+
    # Verify stamp file
    cat /mnt/new-windows/.provisioner_wim_digest
-   # Should show sha256 hash
+   # Should show only the raw sha256 hex digest (e.g., "abcdef1234...")
    ```
 
 ### Phase 5: Bootloader Windows
@@ -235,10 +235,10 @@ Note the returned job ID for status tracking.
    # Check ESP contents
    ls -la /mnt/efi/EFI/Microsoft/Boot/
    ls -la /mnt/efi/EFI/Boot/bootx64.efi
-   
+
    # Check boot entry
    efibootmgr | grep -i windows
-   
+
    # Verify unattend.xml placement
    ls -la /mnt/new-windows/Windows/Panther/Unattend.xml
    # Should be mode 0600
@@ -343,7 +343,7 @@ To validate idempotent behavior, re-run the workflow without changing artifacts:
 
 **Cause**: Unattend.xml not placed at correct path or malformed.
 
-**Fix**: 
+**Fix**:
 - Verify file at `C:\Windows\Panther\Unattend.xml` on booted Windows.
 - Check XML validity with `xmllint` or Windows Setup log (`C:\Windows\Panther\setupact.log`).
 
@@ -351,13 +351,13 @@ To validate idempotent behavior, re-run the workflow without changing artifacts:
 
 ✅ Partition layout matches recipe (GPT, EFI/MSR/NTFS)  
 ✅ WIM applied to Windows partition  
-✅ Digest stamp file exists at `Windows/.provisioner_wim_digest`  
-✅ Boot files copied to ESP (`/EFI/Microsoft/Boot/bootmgfw.efi`, `/EFI/Boot/bootx64.efi`)  
-✅ UEFI boot entry created (`efibootmgr` lists "Windows" entry)  
-✅ `Unattend.xml` present at `Windows/Panther/Unattend.xml` with mode `0600`  
-✅ Webhook delivered with `status: "completed"`  
-✅ System boots into Windows and completes unattended setup  
-✅ Re-run skips already-applied steps (idempotency confirmed)  
+✅ Digest stamp file exists at root of Windows partition (e.g., `C:\\.provisioner_wim_digest` or `/mnt/new-windows/.provisioner_wim_digest`)  
+✅ Boot files copied to ESP (`/EFI/Microsoft/Boot/bootmgfw.efi`, `/EFI/Boot/bootx64.efi`)
+✅ UEFI boot entry created (`efibootmgr` lists "Windows" entry)
+✅ `Unattend.xml` present at `Windows/Panther/Unattend.xml` with mode `0600`
+✅ Webhook delivered with `status: "completed"`
+✅ System boots into Windows and completes unattended setup
+✅ Re-run skips already-applied steps (idempotency confirmed)
 
 ## Cleanup
 
