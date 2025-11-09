@@ -47,7 +47,14 @@ func (s *Service) ReconcileState(ctx context.Context, bmcName string, expectedIm
 						// Ignore bootOnce here; caller can set ensureBootOnce
 						_ = s.InsertVirtualMedia(ctx, bmcName, expectedImage, false, false)
 						// small delay to allow mount before boot override
-						time.Sleep(300 * time.Millisecond)
+						timer := time.NewTimer(300 * time.Millisecond)
+						select {
+						case <-ctx.Done():
+							timer.Stop()
+							return ctx.Err()
+						case <-timer.C:
+							// continue
+						}
 					}
 				}
 			}

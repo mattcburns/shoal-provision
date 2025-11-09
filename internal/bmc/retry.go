@@ -99,8 +99,8 @@ func (s *Service) doWithRetry(ctx context.Context, cfg retryConfig, fn func(cont
 			if backoff > cfg.maxDelay {
 				backoff = cfg.maxDelay
 			}
-			jitter := time.Duration(rand.Float64() * cfg.jitterFrac * float64(backoff))
-			sleep := backoff - jitter/2 + jitter // +/- around base
+			jitter := time.Duration(rand.Float64() * cfg.jitterFrac * float64(backoff) * 2)
+			sleep := backoff - time.Duration(cfg.jitterFrac*float64(backoff)) + jitter // +/- around base
 			pm.IncRedfishRetry(cfg.opLabel, cfg.vendor)
 			cid := ctxkeys.GetCorrelationID(ctx)
 			if cid != "" {
@@ -132,7 +132,7 @@ func isRetryable(err error, resp *http.Response) bool {
 		// Timeouts and temporary net errors are retryable
 		var nerr net.Error
 		if errors.As(err, &nerr) {
-			if nerr.Timeout() || nerr.Temporary() {
+			if nerr.Timeout() {
 				return true
 			}
 		}

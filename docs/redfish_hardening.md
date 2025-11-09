@@ -12,7 +12,7 @@ This document summarizes the reliability, idempotency, and observability work ad
 
 ## Retry & backoff
 
-- Exponential backoff with base 500ms (bounded) and light jitter; 4 attempts by default for critical ops.
+- Exponential backoff with base 300ms (bounded) and light jitter; 4 attempts by default for critical ops.
 - Retries on: HTTP 5xx, 429 Too Many Requests, and network timeouts/temporary errors.
 - Metrics recorded for each attempt: `shoal_provisioner_redfish_requests_total`, `shoal_provisioner_redfish_request_duration_seconds`, `shoal_provisioner_redfish_retries_total`.
 
