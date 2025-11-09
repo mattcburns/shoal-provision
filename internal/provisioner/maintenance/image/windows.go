@@ -63,6 +63,8 @@ func PlanWindows(opts WindowsOptions) ([]plan.Command, error) {
 	// 2. Compare with stamp file "$WIN_PATH/.provisioner_wim_digest"
 	// 3. If unchanged, skip wimapply; otherwise stream apply and update stamp.
 	// NOTE: Using manifest digest rather than full WIM file hash keeps memory/time lower; acceptable for change detection.
+	// LIMITATION: If a blob were replaced in-place in the registry without a manifest change (non-standard OCI practice),
+	// the digest comparison would not detect it. This tradeoff is intentional for performance; full WIM hashing is costly.
 	idempotentScript := fmt.Sprintf(`set -euo pipefail
 WIN_PATH=%s
 OCI_REF=%s
