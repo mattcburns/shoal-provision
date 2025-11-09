@@ -351,7 +351,7 @@ To validate idempotent behavior, re-run the workflow without changing artifacts:
 
 ✅ Partition layout matches recipe (GPT, EFI/MSR/NTFS)
 ✅ WIM applied to Windows partition
-✅ Digest stamp file exists at root of Windows partition (e.g., `C:\\.provisioner_wim_digest` or `/mnt/new-windows/.provisioner_wim_digest`)
+✅ Digest stamp file exists at root of Windows partition (e.g., `C:\.provisioner_wim_digest` or `/mnt/new-windows/.provisioner_wim_digest`)
 ✅ Boot files copied to ESP (`/EFI/Microsoft/Boot/bootmgfw.efi`, `/EFI/Boot/bootx64.efi`)
 ✅ UEFI boot entry created (`efibootmgr` lists "Windows" entry)
 ✅ `Unattend.xml` present at `Windows/Panther/Unattend.xml` with mode `0600`
