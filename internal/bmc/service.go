@@ -303,13 +303,20 @@ func (s *Service) getVendor(ctx context.Context, bmc *models.BMC) string {
 }
 
 // findVirtualMediaSlot locates a VirtualMedia member suitable for CD/DVD operations.
-func (s *Service) findVirtualMediaSlot(ctx context.Context, bmc *models.BMC, managerID string) (string, error) {
+func (s *Service) findVirtualMediaSlot(ctx context.Context, bmc *models.BMC, managerID string, quirks *Quirks) (string, error) {
 	collPath := "/redfish/v1/Managers/" + managerID + "/VirtualMedia"
 	coll, err := s.fetchRedfishResource(ctx, bmc, collPath)
 	if err != nil {
 		return "", fmt.Errorf("failed to fetch VirtualMedia collection: %w", err)
 	}
 	members, _ := coll["Members"].([]interface{})
+
+	// Use vendor-specific preferences if available, otherwise default to cd/dvd
+	prefs := quirks.VirtualMediaPreference
+	if len(prefs) == 0 {
+		prefs = []string{"cd", "dvd"}
+	}
+
 	for _, m := range members {
 		mm, _ := m.(map[string]interface{})
 		oid, _ := mm["@odata.id"].(string)
@@ -321,21 +328,26 @@ func (s *Service) findVirtualMediaSlot(ctx context.Context, bmc *models.BMC, man
 		if err != nil || vm == nil {
 			continue
 		}
-		// Prefer slots advertising CD/DVD
+		// Check if MediaTypes match any preference
 		if mts, ok := vm["MediaTypes"].([]interface{}); ok {
 			for _, t := range mts {
 				if ts, ok := t.(string); ok {
 					l := strings.ToLower(ts)
-					if l == "cd" || l == "dvd" {
-						return oid, nil
+					for _, pref := range prefs {
+						if l == strings.ToLower(pref) {
+							return oid, nil
+						}
 					}
 				}
 			}
 		}
-		// Some vendors have a specific Id like CD or DVD
+		// Check if Id contains any preference
 		if id, _ := vm["Id"].(string); id != "" {
-			if strings.EqualFold(id, "cd") || strings.Contains(strings.ToLower(id), "cd") || strings.Contains(strings.ToLower(id), "dvd") {
-				return oid, nil
+			idLower := strings.ToLower(id)
+			for _, pref := range prefs {
+				if strings.Contains(idLower, strings.ToLower(pref)) {
+					return oid, nil
+				}
 			}
 		}
 	}
@@ -366,7 +378,7 @@ func (s *Service) InsertVirtualMedia(ctx context.Context, bmcName, imageURL stri
 	if err != nil {
 		return fmt.Errorf("failed to get manager ID: %w", err)
 	}
-	slotOID, err := s.findVirtualMediaSlot(ctx, bmc, managerID)
+	slotOID, err := s.findVirtualMediaSlot(ctx, bmc, managerID, quirks)
 	if err != nil {
 		return err
 	}
@@ -417,7 +429,7 @@ func (s *Service) InsertVirtualMedia(ctx context.Context, bmcName, imageURL stri
 		req.SetBasicAuth(bmc.Username, bmc.Password)
 		return s.client.Do(req)
 	}
-	resp, err := s.doWithRetry(ctx, retryConfig{maxAttempts: 4, baseDelay: 500 * time.Millisecond, maxDelay: 3 * time.Second, jitterFrac: 0.3, opLabel: "mount.maintenance", vendor: vendor}, doReq)
+	resp, err := s.doWithRetry(ctx, newDefaultRetryConfig("mount.maintenance", vendor), doReq)
 	if err != nil {
 		return fmt.Errorf("insert media failed: %w", err)
 	}
@@ -443,7 +455,7 @@ func (s *Service) InsertVirtualMedia(ctx context.Context, bmcName, imageURL stri
 			req.SetBasicAuth(bmc.Username, bmc.Password)
 			return s.client.Do(req)
 		}
-		presp, perr := s.doWithRetry(ctx, retryConfig{maxAttempts: 4, baseDelay: 500 * time.Millisecond, maxDelay: 3 * time.Second, jitterFrac: 0.3, opLabel: "mount.maintenance", vendor: vendor}, doPatch)
+		presp, perr := s.doWithRetry(ctx, newDefaultRetryConfig("mount.maintenance", vendor), doPatch)
 		if perr != nil {
 			return fmt.Errorf("insert media fallback failed: %w", perr)
 		}
@@ -458,7 +470,14 @@ func (s *Service) InsertVirtualMedia(ctx context.Context, bmcName, imageURL stri
 	}
 
 	if quirks.DelayAfterInsert > 0 {
-		time.Sleep(quirks.DelayAfterInsert)
+		timer := time.NewTimer(quirks.DelayAfterInsert)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-timer.C:
+			// continue
+		}
 	}
 	if bootOnce {
 		if err := s.SetOneTimeBoot(ctx, bmcName, "Cd"); err != nil {
@@ -483,7 +502,7 @@ func (s *Service) EjectVirtualMedia(ctx context.Context, bmcName string) error {
 	if err != nil {
 		return fmt.Errorf("failed to get manager ID: %w", err)
 	}
-	slotOID, err := s.findVirtualMediaSlot(ctx, bmc, managerID)
+	slotOID, err := s.findVirtualMediaSlot(ctx, bmc, managerID, quirks)
 	if err != nil {
 		return err
 	}
@@ -509,7 +528,7 @@ func (s *Service) EjectVirtualMedia(ctx context.Context, bmcName string) error {
 		req.SetBasicAuth(bmc.Username, bmc.Password)
 		return s.client.Do(req)
 	}
-	resp, err := s.doWithRetry(ctx, retryConfig{maxAttempts: 4, baseDelay: 500 * time.Millisecond, maxDelay: 3 * time.Second, jitterFrac: 0.3, opLabel: "cleanup.unmount-maintenance", vendor: vendor}, doReq)
+	resp, err := s.doWithRetry(ctx, newDefaultRetryConfig("cleanup.unmount-maintenance", vendor), doReq)
 	if err != nil {
 		return fmt.Errorf("eject media failed: %w", err)
 	}
@@ -530,7 +549,7 @@ func (s *Service) EjectVirtualMedia(ctx context.Context, bmcName string) error {
 			req.SetBasicAuth(bmc.Username, bmc.Password)
 			return s.client.Do(req)
 		}
-		presp, perr := s.doWithRetry(ctx, retryConfig{maxAttempts: 4, baseDelay: 500 * time.Millisecond, maxDelay: 3 * time.Second, jitterFrac: 0.3, opLabel: "cleanup.unmount-maintenance", vendor: vendor}, doPatch)
+		presp, perr := s.doWithRetry(ctx, newDefaultRetryConfig("cleanup.unmount-maintenance", vendor), doPatch)
 		if perr != nil {
 			return perr
 		}
@@ -596,7 +615,7 @@ func (s *Service) SetOneTimeBoot(ctx context.Context, bmcName, target string) er
 		req.SetBasicAuth(bmc.Username, bmc.Password)
 		return s.client.Do(req)
 	}
-	resp, err := s.doWithRetry(ctx, retryConfig{maxAttempts: 4, baseDelay: 500 * time.Millisecond, maxDelay: 3 * time.Second, jitterFrac: 0.3, opLabel: "boot.override", vendor: vendor}, doReq)
+	resp, err := s.doWithRetry(ctx, newDefaultRetryConfig("boot.override", vendor), doReq)
 	if err != nil {
 		return fmt.Errorf("set one-time boot failed: %w", err)
 	}

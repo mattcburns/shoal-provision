@@ -29,6 +29,14 @@ import (
 	pm "shoal/internal/provisioner/metrics"
 )
 
+// Default retry configuration values for critical Redfish operations.
+const (
+	defaultMaxAttempts = 4
+	defaultBaseDelay   = 500 * time.Millisecond
+	defaultMaxDelay    = 3 * time.Second
+	defaultJitterFrac  = 0.3
+)
+
 // retryConfig defines retry/backoff parameters for Redfish calls.
 type retryConfig struct {
 	maxAttempts int
@@ -37,6 +45,18 @@ type retryConfig struct {
 	jitterFrac  float64 // 0.0-1.0 fraction of delay to jitter
 	opLabel     string  // metrics/logging operation label
 	vendor      string  // optional vendor label for metrics
+}
+
+// newDefaultRetryConfig creates a retry config with default values for critical operations.
+func newDefaultRetryConfig(opLabel, vendor string) retryConfig {
+	return retryConfig{
+		maxAttempts: defaultMaxAttempts,
+		baseDelay:   defaultBaseDelay,
+		maxDelay:    defaultMaxDelay,
+		jitterFrac:  defaultJitterFrac,
+		opLabel:     opLabel,
+		vendor:      vendor,
+	}
 }
 
 // doWithRetry executes fn with retry/backoff on transient failures.
@@ -76,18 +96,18 @@ func (s *Service) doWithRetry(ctx context.Context, cfg retryConfig, fn func(cont
 			return resp, nil
 		}
 
-		// Close response body on failure to avoid leaks
-		if resp != nil && resp.Body != nil {
-			_ = resp.Body.Close()
-		}
-
 		// Decide if retryable
 		if !isRetryable(err, resp) {
-			// Not retryable - return immediately
+			// Not retryable - return immediately without closing body (caller handles it)
 			if err != nil {
 				return nil, err
 			}
 			return resp, nil
+		}
+
+		// Close response body on retryable failure to avoid leaks before retry
+		if resp != nil && resp.Body != nil {
+			_ = resp.Body.Close()
 		}
 
 		lastErr = err

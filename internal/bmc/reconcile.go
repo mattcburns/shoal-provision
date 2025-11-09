@@ -36,7 +36,9 @@ func (s *Service) ReconcileState(ctx context.Context, bmcName string, expectedIm
 	if expectedImage != "" {
 		managerID, merr := s.GetFirstManagerID(ctx, bmcName)
 		if merr == nil && managerID != "" {
-			slotOID, serr := s.findVirtualMediaSlot(ctx, bmc, managerID)
+			vendor := s.getVendor(ctx, bmc)
+			quirks := getQuirks(vendor)
+			slotOID, serr := s.findVirtualMediaSlot(ctx, bmc, managerID, quirks)
 			if serr == nil && slotOID != "" {
 				vmRes, ferr := s.fetchRedfishResource(ctx, bmc, slotOID)
 				if ferr == nil && vmRes != nil {
