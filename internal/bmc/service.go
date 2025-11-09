@@ -287,11 +287,10 @@ func (s *Service) getVendor(ctx context.Context, bmc *models.BMC) string {
 					if sys, err := s.fetchRedfishResource(ctx, bmc, oid); err == nil && sys != nil {
 						if manu, ok := sys["Manufacturer"].(string); ok && manu != "" {
 							s.idCacheMux.Lock()
-							if s.idCache[bmc.Name] == nil {
-								s.idCache[bmc.Name] = &bmcIDCache{}
+							s.idCache[bmc.Name] = &bmcIDCache{
+								vendor:   manu,
+								cachedAt: time.Now(),
 							}
-							s.idCache[bmc.Name].vendor = manu
-							s.idCache[bmc.Name].cachedAt = time.Now()
 							s.idCacheMux.Unlock()
 							return manu
 						}
@@ -405,7 +404,10 @@ func (s *Service) InsertVirtualMedia(ctx context.Context, bmcName, imageURL stri
 		"Inserted":       true,
 		"WriteProtected": effectiveWP,
 	}
-	body, _ := json.Marshal(payload)
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("failed to marshal payload: %w", err)
+	}
 	doReq := func(ctx context.Context) (*http.Response, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(body))
 		if err != nil {
@@ -428,7 +430,10 @@ func (s *Service) InsertVirtualMedia(ctx context.Context, bmcName, imageURL stri
 			"Image":    imageURL,
 			"Inserted": true,
 		}
-		pbody, _ := json.Marshal(patchPayload)
+		pbody, perr := json.Marshal(patchPayload)
+		if perr != nil {
+			return fmt.Errorf("failed to marshal PATCH payload: %w", perr)
+		}
 		doPatch := func(ctx context.Context) (*http.Response, error) {
 			req, err := http.NewRequestWithContext(ctx, http.MethodPatch, patchURL, bytes.NewReader(pbody))
 			if err != nil {
@@ -512,7 +517,10 @@ func (s *Service) EjectVirtualMedia(ctx context.Context, bmcName string) error {
 	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusMethodNotAllowed {
 		// Fallback: PATCH Inserted=false
 		patchURL, _ := s.buildBMCURL(bmc, slotOID)
-		pbody, _ := json.Marshal(map[string]any{"Inserted": false})
+		pbody, perr := json.Marshal(map[string]any{"Inserted": false})
+		if perr != nil {
+			return fmt.Errorf("failed to marshal eject fallback body: %w", perr)
+		}
 		doPatch := func(ctx context.Context) (*http.Response, error) {
 			req, err := http.NewRequestWithContext(ctx, http.MethodPatch, patchURL, bytes.NewReader(pbody))
 			if err != nil {
@@ -575,7 +583,10 @@ func (s *Service) SetOneTimeBoot(ctx context.Context, bmcName, target string) er
 			"BootSourceOverrideTarget":  mappedTarget,
 		},
 	}
-	body, _ := json.Marshal(payload)
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("failed to marshal boot override payload: %w", err)
+	}
 	doReq := func(ctx context.Context) (*http.Response, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodPatch, targetURL, bytes.NewReader(body))
 		if err != nil {
@@ -685,6 +696,7 @@ func (s *Service) PowerControl(ctx context.Context, bmcName string, action model
 		return s.client.Do(req)
 	}
 
+	vendor := s.getVendor(ctx, bmc)
 	// Execute with retry/backoff and metrics
 	resp, err := s.doWithRetry(ctx, retryConfig{
 		maxAttempts: 4,
@@ -692,7 +704,7 @@ func (s *Service) PowerControl(ctx context.Context, bmcName string, action model
 		maxDelay:    3 * time.Second,
 		jitterFrac:  0.3,
 		opLabel:     "system.power",
-		vendor:      "", // vendor detection TODO
+		vendor:      vendor,
 	}, doReq)
 
 	if err != nil {

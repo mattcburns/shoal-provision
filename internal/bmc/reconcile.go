@@ -71,7 +71,9 @@ func (s *Service) ReconcileState(ctx context.Context, bmcName string, expectedIm
 					target, _ := boot["BootSourceOverrideTarget"].(string)
 					if !(strings.EqualFold(enabled, "Once") && strings.EqualFold(target, "Cd")) {
 						slog.Info("reconcile: reapplying one-time boot override", "bmc", bmcName)
-						_ = s.SetOneTimeBoot(ctx, bmcName, "Cd")
+						if err := s.SetOneTimeBoot(ctx, bmcName, "Cd"); err != nil {
+							slog.Warn("reconcile: failed to set boot override", "bmc", bmcName, "error", err)
+						}
 					}
 				}
 			}

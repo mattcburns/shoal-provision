@@ -95,7 +95,11 @@ func (s *Service) doWithRetry(ctx context.Context, cfg retryConfig, fn func(cont
 
 		if attempt < cfg.maxAttempts {
 			// Backoff with jitter
-			backoff := cfg.baseDelay * (1 << (attempt - 1))
+			exp := attempt - 1
+			if exp > 10 {
+				exp = 10 // cap exponent to prevent overflow
+			}
+			backoff := cfg.baseDelay * (1 << exp)
 			if backoff > cfg.maxDelay {
 				backoff = cfg.maxDelay
 			}
