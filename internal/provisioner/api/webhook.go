@@ -115,8 +115,14 @@ func (dc *deliveryCache) remove(jobID string) {
 
 // NewWebhookHandler builds an http.HandlerFunc that processes webhook calls.
 // If secret is non-empty, requests must include header "X-Webhook-Secret" with a
-// matching value. If secret is empty, authentication is disabled.
-func NewWebhookHandler(store WebhookStore, secret string, logger *log.Logger, now func() time.Time) http.HandlerFunc {
+// matching value. If secretOld is non-empty, it is also accepted (for zero-downtime
+// secret rotation). If both secret and secretOld are empty, authentication is disabled.
+//
+// Secret rotation workflow:
+//  1. Deploy with WEBHOOK_SECRET=new_secret, WEBHOOK_SECRET_OLD=old_secret
+//  2. Update dispatcher to use new_secret
+//  3. After all dispatchers updated, remove WEBHOOK_SECRET_OLD
+func NewWebhookHandler(store WebhookStore, secret, secretOld string, logger *log.Logger, now func() time.Time) http.HandlerFunc {
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
 	}
@@ -162,11 +168,33 @@ func NewWebhookHandler(store WebhookStore, secret string, logger *log.Logger, no
 			return
 		}
 
-		// Auth check (shared secret)
-		if secret != "" {
+		// Auth check (shared secret with rotation support)
+		// Accept both secret and secretOld to allow zero-downtime rotation
+		if secret != "" || secretOld != "" {
 			got := r.Header.Get("X-Webhook-Secret")
-			if got == "" || got != secret {
-				logf("unauthorized webhook for serial=%s header=%s expected=%s", serial, redact(got), redact(secret))
+			if got == "" {
+				logf("unauthorized webhook for serial=%s: missing secret", serial)
+				writeJSON(w, http.StatusUnauthorized, jsonError{
+					Error:   "unauthorized",
+					Message: "invalid or missing webhook secret",
+				})
+				return
+			}
+
+			// Check against current secret first
+			validSecret := false
+			if secret != "" && got == secret {
+				validSecret = true
+			}
+			// Fallback to old secret if provided (rotation support)
+			if !validSecret && secretOld != "" && got == secretOld {
+				validSecret = true
+				// Log that old secret was used (for monitoring rotation progress)
+				logf("webhook for serial=%s authenticated with old secret (rotation in progress)", serial)
+			}
+
+			if !validSecret {
+				logf("unauthorized webhook for serial=%s header=%s", serial, redact(got))
 				writeJSON(w, http.StatusUnauthorized, jsonError{
 					Error:   "unauthorized",
 					Message: "invalid or missing webhook secret",
@@ -197,7 +225,7 @@ func NewWebhookHandler(store WebhookStore, secret string, logger *log.Logger, no
 
 		// Find the active provisioning job for this server
 		job, err := store.GetActiveProvisioningJobBySerial(ctx, serial)
-		if err != nil {
+		if err != nil || job == nil {
 			// Keep 404 generic (no job)
 			writeJSON(w, http.StatusNotFound, jsonError{
 				Error:   "not_found",

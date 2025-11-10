@@ -26,7 +26,6 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -36,6 +35,7 @@ import (
 	"shoal/internal/provisioner/iso"
 	"shoal/internal/provisioner/jobs"
 	"shoal/internal/provisioner/metrics"
+	"shoal/internal/provisioner/middleware"
 	"shoal/internal/provisioner/redfish"
 	"shoal/internal/provisioner/store"
 	"shoal/pkg/provisioner"
@@ -55,6 +55,7 @@ type Config struct {
 	RegistryStorage    string        // REGISTRY_STORAGE
 	AuthMode           string        // AUTH_MODE: basic|jwt|none
 	WebhookSecret      string        // WEBHOOK_SECRET (do not log value)
+	WebhookSecretOld   string        // WEBHOOK_SECRET_OLD (do not log value; for secret rotation)
 	WorkerConcurrency  int           // WORKER_CONCURRENCY
 	RedfishTimeout     time.Duration // REDFISH_TIMEOUT
 	RedfishRetries     int           // REDFISH_RETRIES
@@ -63,6 +64,16 @@ type Config struct {
 	JobLeaseTTL        time.Duration // JOB_LEASE_TTL
 	JobStuckTimeout    time.Duration // JOB_STUCK_TIMEOUT
 	LogLevel           string        // LOG_LEVEL: info|debug
+	TLSCertFile        string        // TLS_CERT_FILE: path to TLS certificate
+	TLSKeyFile         string        // TLS_KEY_FILE: path to TLS private key
+	EnableTLS          bool          // ENABLE_TLS: enable HTTPS (default: false for backwards compatibility)
+	MediaSigningSecret string        // MEDIA_SIGNING_SECRET: HMAC secret for signed media URLs
+	MediaSignedURLTTL  time.Duration // MEDIA_SIGNED_URL_TTL: expiry duration for signed media URLs
+	MediaEnableIPBind  bool          // MEDIA_ENABLE_IP_BIND: enable IP binding in signed URLs
+	RateLimitRPM       int           // RATE_LIMIT_RPM: requests per minute per client IP (default: 10)
+	RateLimitBurst     int           // RATE_LIMIT_BURST: burst size for rate limiter (default: 5)
+	EnableCORS         bool          // ENABLE_CORS: enable CORS headers (default: false)
+	CORSAllowedOrigins string        // CORS_ALLOWED_ORIGINS: comma-separated list of allowed origins (default: *)
 }
 
 // defaultConfig returns sane defaults aligned with the design docs.
@@ -86,6 +97,16 @@ func defaultConfig() Config {
 		JobLeaseTTL:        10 * time.Minute,
 		JobStuckTimeout:    4 * time.Hour,
 		LogLevel:           "info",
+		TLSCertFile:        "",
+		TLSKeyFile:         "",
+		EnableTLS:          false,
+		MediaSigningSecret: "",
+		MediaSignedURLTTL:  30 * time.Minute,
+		MediaEnableIPBind:  false,
+		RateLimitRPM:       10,
+		RateLimitBurst:     5,
+		EnableCORS:         false,
+		CORSAllowedOrigins: "*",
 	}
 }
 
@@ -149,6 +170,7 @@ func parseConfig() Config {
 		RegistryStorage:    getenv("REGISTRY_STORAGE", def.RegistryStorage),
 		AuthMode:           getenv("AUTH_MODE", def.AuthMode),
 		WebhookSecret:      getenv("WEBHOOK_SECRET", def.WebhookSecret),
+		WebhookSecretOld:   getenv("WEBHOOK_SECRET_OLD", def.WebhookSecretOld),
 		WorkerConcurrency:  getenvInt("WORKER_CONCURRENCY", def.WorkerConcurrency),
 		RedfishTimeout:     getenvDuration("REDFISH_TIMEOUT", def.RedfishTimeout),
 		RedfishRetries:     getenvInt("REDFISH_RETRIES", def.RedfishRetries),
@@ -157,6 +179,16 @@ func parseConfig() Config {
 		JobLeaseTTL:        getenvDuration("JOB_LEASE_TTL", def.JobLeaseTTL),
 		JobStuckTimeout:    getenvDuration("JOB_STUCK_TIMEOUT", def.JobStuckTimeout),
 		LogLevel:           getenv("LOG_LEVEL", def.LogLevel),
+		TLSCertFile:        getenv("TLS_CERT_FILE", def.TLSCertFile),
+		TLSKeyFile:         getenv("TLS_KEY_FILE", def.TLSKeyFile),
+		EnableTLS:          getenvBool("ENABLE_TLS", def.EnableTLS),
+		MediaSigningSecret: getenv("MEDIA_SIGNING_SECRET", def.MediaSigningSecret),
+		MediaSignedURLTTL:  getenvDuration("MEDIA_SIGNED_URL_TTL", def.MediaSignedURLTTL),
+		MediaEnableIPBind:  getenvBool("MEDIA_ENABLE_IP_BIND", def.MediaEnableIPBind),
+		RateLimitRPM:       getenvInt("RATE_LIMIT_RPM", def.RateLimitRPM),
+		RateLimitBurst:     getenvInt("RATE_LIMIT_BURST", def.RateLimitBurst),
+		EnableCORS:         getenvBool("ENABLE_CORS", def.EnableCORS),
+		CORSAllowedOrigins: getenv("CORS_ALLOWED_ORIGINS", def.CORSAllowedOrigins),
 	}
 
 	// Flags (override env if provided)
@@ -170,6 +202,7 @@ func parseConfig() Config {
 	flag.StringVar(&cfg.RegistryStorage, "registry-storage", cfg.RegistryStorage, "Embedded registry storage path (env REGISTRY_STORAGE)")
 	flag.StringVar(&cfg.AuthMode, "auth-mode", cfg.AuthMode, "Auth mode: basic|jwt|none (env AUTH_MODE)")
 	flag.StringVar(&cfg.WebhookSecret, "webhook-secret", cfg.WebhookSecret, "Webhook shared secret (env WEBHOOK_SECRET)")
+	flag.StringVar(&cfg.WebhookSecretOld, "webhook-secret-old", cfg.WebhookSecretOld, "Old webhook shared secret for rotation (env WEBHOOK_SECRET_OLD)")
 	flag.IntVar(&cfg.WorkerConcurrency, "workers", cfg.WorkerConcurrency, "Worker concurrency (env WORKER_CONCURRENCY)")
 	flag.DurationVar(&cfg.RedfishTimeout, "redfish-timeout", cfg.RedfishTimeout, "Redfish request timeout (env REDFISH_TIMEOUT)")
 	flag.IntVar(&cfg.RedfishRetries, "redfish-retries", cfg.RedfishRetries, "Redfish retry count (env REDFISH_RETRIES)")
@@ -178,6 +211,16 @@ func parseConfig() Config {
 	flag.DurationVar(&cfg.JobLeaseTTL, "job-lease-ttl", cfg.JobLeaseTTL, "Job lease TTL (env JOB_LEASE_TTL)")
 	flag.DurationVar(&cfg.JobStuckTimeout, "job-stuck-timeout", cfg.JobStuckTimeout, "Job stuck timeout (env JOB_STUCK_TIMEOUT)")
 	flag.StringVar(&cfg.LogLevel, "log-level", cfg.LogLevel, "Log level: info|debug (env LOG_LEVEL)")
+	flag.StringVar(&cfg.TLSCertFile, "tls-cert", cfg.TLSCertFile, "Path to TLS certificate file (env TLS_CERT_FILE)")
+	flag.StringVar(&cfg.TLSKeyFile, "tls-key", cfg.TLSKeyFile, "Path to TLS private key file (env TLS_KEY_FILE)")
+	flag.BoolVar(&cfg.EnableTLS, "enable-tls", cfg.EnableTLS, "Enable HTTPS/TLS (env ENABLE_TLS)")
+	flag.StringVar(&cfg.MediaSigningSecret, "media-signing-secret", cfg.MediaSigningSecret, "HMAC secret for signed media URLs (env MEDIA_SIGNING_SECRET)")
+	flag.DurationVar(&cfg.MediaSignedURLTTL, "media-signed-url-ttl", cfg.MediaSignedURLTTL, "Expiry duration for signed media URLs (env MEDIA_SIGNED_URL_TTL)")
+	flag.BoolVar(&cfg.MediaEnableIPBind, "media-enable-ip-bind", cfg.MediaEnableIPBind, "Enable IP binding in signed media URLs (env MEDIA_ENABLE_IP_BIND)")
+	flag.IntVar(&cfg.RateLimitRPM, "rate-limit-rpm", cfg.RateLimitRPM, "Rate limit requests per minute per client IP (env RATE_LIMIT_RPM)")
+	flag.IntVar(&cfg.RateLimitBurst, "rate-limit-burst", cfg.RateLimitBurst, "Rate limit burst size (env RATE_LIMIT_BURST)")
+	flag.BoolVar(&cfg.EnableCORS, "enable-cors", cfg.EnableCORS, "Enable CORS headers (env ENABLE_CORS)")
+	flag.StringVar(&cfg.CORSAllowedOrigins, "cors-allowed-origins", cfg.CORSAllowedOrigins, "CORS allowed origins, comma-separated (env CORS_ALLOWED_ORIGINS)")
 
 	flag.Parse()
 	return cfg
@@ -209,66 +252,6 @@ func notImplementedHandler(msg string) http.HandlerFunc {
 			Error:   "not_implemented",
 			Message: msg,
 		})
-	}
-}
-
-func jobsHandler(w http.ResponseWriter, r *http.Request) {
-	switch r.Method {
-	case http.MethodPost:
-		notImplementedHandler("POST /api/v1/jobs is not implemented yet")(w, r)
-	default:
-		http.NotFound(w, r)
-	}
-}
-
-func jobByIDHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.NotFound(w, r)
-		return
-	}
-	// Extract job_id from path: /api/v1/jobs/{id}
-	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/v1/jobs/"), "/")
-	if len(parts) < 1 || parts[0] == "" {
-		http.NotFound(w, r)
-		return
-	}
-	jobID := parts[0]
-	_ = jobID
-	notImplementedHandler("GET /api/v1/jobs/{id} is not implemented yet")(w, r)
-}
-
-func webhookHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.NotFound(w, r)
-		return
-	}
-	// Extract serial from path: /api/v1/status-webhook/{serial}
-	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/v1/status-webhook/"), "/")
-	if len(parts) < 1 || parts[0] == "" {
-		http.NotFound(w, r)
-		return
-	}
-	serial := parts[0]
-	_ = serial
-	notImplementedHandler("POST /api/v1/status-webhook/{serial} is not implemented yet")(w, r)
-}
-
-func tasksMediaHandler(cfg Config) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		// GET /media/tasks/{job_id}/task.iso
-		if r.Method != http.MethodGet {
-			http.NotFound(w, r)
-			return
-		}
-		trim := strings.TrimPrefix(r.URL.Path, "/media/tasks/")
-		parts := strings.Split(trim, "/")
-		if len(parts) != 2 || parts[0] == "" || parts[1] != "task.iso" {
-			http.NotFound(w, r)
-			return
-		}
-		jobID := parts[0]
-		fpath := filepath.Join(cfg.TaskISODir, jobID, "task.iso")
-		http.ServeFile(w, r, fpath)
 	}
 }
 
@@ -312,11 +295,20 @@ func logConfig(cfg Config) {
 	log.Printf("  job_lease_ttl=%s", cfg.JobLeaseTTL)
 	log.Printf("  job_stuck_timeout=%s", cfg.JobStuckTimeout)
 	log.Printf("  log_level=%s", cfg.LogLevel)
+	log.Printf("  enable_tls=%v", cfg.EnableTLS)
+	if cfg.EnableTLS {
+		if cfg.TLSCertFile != "" {
+			log.Printf("  tls_cert_file=%s", cfg.TLSCertFile)
+		}
+		if cfg.TLSKeyFile != "" {
+			log.Printf("  tls_key_file=%s", cfg.TLSKeyFile)
+		}
+	}
 }
 
 // computeTaskMediaBase derives the base URL used by workers to mount
 // /media/tasks/{job_id}/task.iso, preferring the scheme/host from the
-// configured MaintenanceISOURL. Falls back to http://127.0.0.1:<port>.
+// configured MaintenanceISOURL. Falls back to http(s)://127.0.0.1:<port>.
 func computeTaskMediaBase(cfg Config) string {
 	if u, err := url.Parse(cfg.MaintenanceISOURL); err == nil && u.Scheme != "" && u.Host != "" {
 		return fmt.Sprintf("%s://%s/media/tasks", u.Scheme, u.Host)
@@ -325,10 +317,14 @@ func computeTaskMediaBase(cfg Config) string {
 	if strings.HasPrefix(host, ":") {
 		host = "127.0.0.1" + host
 	}
-	return "http://" + host + "/media/tasks"
+	scheme := "http"
+	if cfg.EnableTLS {
+		scheme = "https"
+	}
+	return scheme + "://" + host + "/media/tasks"
 }
 
-func newMux(cfg Config, ap *api.API, webhook http.Handler) *http.ServeMux {
+func newMux(cfg Config, ap *api.API, webhook http.Handler, mediaHandler *api.MediaHandler, rateLimiter *middleware.RateLimiter) http.Handler {
 	mux := http.NewServeMux()
 
 	// Health/ready
@@ -337,6 +333,7 @@ func newMux(cfg Config, ap *api.API, webhook http.Handler) *http.ServeMux {
 	mux.Handle("/metrics", metrics.Handler())
 
 	// Protected Jobs API (auth: basic|jwt|none via cfg.AuthMode)
+	// Apply rate limiting to prevent DoS attacks on authentication endpoints
 	if ap != nil {
 		protected := http.NewServeMux()
 		ap.Register(protected)
@@ -350,7 +347,14 @@ func newMux(cfg Config, ap *api.API, webhook http.Handler) *http.ServeMux {
 			JWTIssuer:     getenv("JWT_ISSUER", ""),
 			Header:        "Authorization",
 		}
-		wrapped := api.AuthMiddleware(authCfg, log.Default())(protected)
+		authMiddleware := api.AuthMiddleware(authCfg, log.Default())
+
+		// Chain: rate limiter → auth → protected API
+		wrapped := authMiddleware(protected)
+		if rateLimiter != nil {
+			wrapped = rateLimiter.Middleware(wrapped)
+		}
+
 		mux.Handle("/api/v1/jobs", wrapped)
 		mux.Handle("/api/v1/jobs/", wrapped)
 	}
@@ -358,8 +362,10 @@ func newMux(cfg Config, ap *api.API, webhook http.Handler) *http.ServeMux {
 	// Webhook (separate auth via shared secret)
 	mux.Handle("/api/v1/status-webhook/", webhook)
 
-	// Media serving (task ISO)
-	mux.HandleFunc("/media/tasks/", tasksMediaHandler(cfg))
+	// Media serving (task ISO with optional signed URLs)
+	if mediaHandler != nil {
+		mux.Handle("/media/tasks/", mediaHandler)
+	}
 
 	// Embedded registry (optional)
 	if cfg.EnableRegistry {
@@ -376,7 +382,19 @@ func newMux(cfg Config, ap *api.API, webhook http.Handler) *http.ServeMux {
 		})
 	})
 
-	return mux
+	// Wrap entire mux with security headers middleware
+	securityCfg := middleware.SecurityHeadersConfig{
+		EnableHSTS:            cfg.EnableTLS, // Only enable HSTS when TLS is active
+		HSTSMaxAge:            31536000,      // 1 year
+		HSTSIncludeSubdomains: false,
+		EnableCORS:            cfg.EnableCORS,
+		CORSAllowedOrigins:    strings.Split(cfg.CORSAllowedOrigins, ","),
+		CORSAllowedMethods:    []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
+		CORSAllowedHeaders:    []string{"Content-Type", "Authorization"},
+		CORSMaxAge:            3600,
+	}
+
+	return middleware.SecurityHeaders(securityCfg)(mux)
 }
 
 func reconcileProvisioningJobs(ctx context.Context, st *store.Store, logger *log.Logger) error {
@@ -425,7 +443,27 @@ func main() {
 	defer st.Close()
 
 	ap := api.New(st, cfg.MaintenanceISOURL, log.Default())
-	wbh := api.NewWebhookHandler(st, cfg.WebhookSecret, log.Default(), nil)
+	wbh := api.NewWebhookHandler(st, cfg.WebhookSecret, cfg.WebhookSecretOld, log.Default(), nil)
+
+	// Create media handler with signed URL support
+	mediaCfg := api.MediaConfig{
+		TaskISODir:      cfg.TaskISODir,
+		SigningSecret:   cfg.MediaSigningSecret,
+		SignedURLExpiry: cfg.MediaSignedURLTTL,
+		EnableIPBinding: cfg.MediaEnableIPBind,
+		Logger:          log.Default(),
+	}
+	mediaHandler := api.NewMediaHandler(mediaCfg)
+
+	// Create rate limiter for API endpoints
+	rateLimiterCfg := middleware.RateLimitConfig{
+		RequestsPerMinute: cfg.RateLimitRPM,
+		BurstSize:         cfg.RateLimitBurst,
+		CleanupInterval:   5 * time.Minute,
+	}
+	rateLimiter := middleware.NewRateLimiter(rateLimiterCfg)
+	defer rateLimiter.Stop()
+
 	if err := reconcileProvisioningJobs(context.Background(), st, log.Default()); err != nil {
 		log.Printf("reconcile provisioning jobs: %v", err)
 	}
@@ -472,7 +510,7 @@ func main() {
 	// Prepare server with conservative timeouts
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           newMux(cfg, ap, wbh),
+		Handler:           newMux(cfg, ap, wbh, mediaHandler, rateLimiter),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      60 * time.Second,
@@ -482,8 +520,19 @@ func main() {
 	// Start server
 	errCh := make(chan error, 1)
 	go func() {
-		log.Printf("HTTP server listening on %s", cfg.HTTPAddr)
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		var err error
+		if cfg.EnableTLS {
+			if cfg.TLSCertFile == "" || cfg.TLSKeyFile == "" {
+				errCh <- fmt.Errorf("TLS enabled but TLS_CERT_FILE or TLS_KEY_FILE not provided")
+				return
+			}
+			log.Printf("HTTPS server listening on %s (TLS enabled)", cfg.HTTPAddr)
+			err = srv.ListenAndServeTLS(cfg.TLSCertFile, cfg.TLSKeyFile)
+		} else {
+			log.Printf("HTTP server listening on %s (TLS disabled)", cfg.HTTPAddr)
+			err = srv.ListenAndServe()
+		}
+		if err != nil && err != http.ErrServerClosed {
 			errCh <- fmt.Errorf("http server error: %w", err)
 		}
 	}()

@@ -92,7 +92,7 @@ func newTestMux(t *testing.T, s *store.Store, webhookSecret string) *http.ServeM
 	mux := http.NewServeMux()
 	ap := api.New(s, maintISO, nil)
 	ap.Register(mux)
-	wh := api.NewWebhookHandler(s, webhookSecret, nil, func() time.Time { return time.Now().UTC() })
+	wh := api.NewWebhookHandler(s, webhookSecret, "", nil, func() time.Time { return time.Now().UTC() })
 	mux.Handle("/api/v1/status-webhook/", wh)
 	return mux
 }
