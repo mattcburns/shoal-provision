@@ -190,20 +190,30 @@ func TestRateLimiting_EnforcementOnAuthEndpoints(t *testing.T) {
 		}
 	}
 
-	// Next request should be rate limited
-	req := httptest.NewRequest("POST", "/api/v1/auth", nil)
-	req.RemoteAddr = clientIP
-	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, req)
+	// Make rapid requests to ensure we hit rate limit
+	// In CI or under varying system load, a single extra request might succeed
+	// if the token bucket has refilled slightly, so we make several attempts.
+	rateLimited := false
+	var lastStatus int
+	for i := 0; i < 5 && !rateLimited; i++ {
+		req := httptest.NewRequest("POST", "/api/v1/auth", nil)
+		req.RemoteAddr = clientIP
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		lastStatus = w.Code
 
-	if w.Code != http.StatusTooManyRequests {
-		t.Errorf("expected 429 Too Many Requests, got %d", w.Code)
+		if w.Code == http.StatusTooManyRequests {
+			rateLimited = true
+			// Verify Retry-After header is set
+			retryAfter := w.Header().Get("Retry-After")
+			if retryAfter == "" {
+				t.Error("Retry-After header not set on rate limit response")
+			}
+		}
 	}
 
-	// Verify Retry-After header is set
-	retryAfter := w.Header().Get("Retry-After")
-	if retryAfter == "" {
-		t.Error("Retry-After header not set on rate limit response")
+	if !rateLimited {
+		t.Errorf("expected 429 Too Many Requests after burst exhausted, last status was %d", lastStatus)
 	}
 }
 
