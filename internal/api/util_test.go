@@ -59,17 +59,17 @@ func TestComputeETag(t *testing.T) {
 		{
 			name:  "simple string",
 			input: []byte("test"),
-			want:  `"` + computeSHA256("test") + `"`,
+			want:  `"sha256-` + computeSHA256("test") + `"`,
 		},
 		{
 			name:  "JSON data",
 			input: []byte(`{"key":"value"}`),
-			want:  `"` + computeSHA256(`{"key":"value"}`) + `"`,
+			want:  `"sha256-` + computeSHA256(`{"key":"value"}`) + `"`,
 		},
 		{
 			name:  "empty bytes",
 			input: []byte{},
-			want:  `"` + computeSHA256("") + `"`,
+			want:  `"sha256-` + computeSHA256("") + `"`,
 		},
 	}
 
@@ -132,12 +132,14 @@ func TestSeverityForStatus(t *testing.T) {
 		{"Created 201", 201, "OK"},
 		{"No Content 204", 204, "OK"},
 		{"Bad Request 400", 400, "Warning"},
-		{"Unauthorized 401", 401, "Warning"},
-		{"Forbidden 403", 403, "Warning"},
+		{"Unauthorized 401", 401, "Critical"},
+		{"Forbidden 403", 403, "Critical"},
 		{"Not Found 404", 404, "Warning"},
+		{"Method Not Allowed 405", 405, "Warning"},
+		{"Conflict 409", 409, "Warning"},
 		{"Internal Server Error 500", 500, "Critical"},
 		{"Service Unavailable 503", 503, "Critical"},
-		{"Unknown status 999", 999, "Warning"},
+		{"Unknown status 999", 999, "Critical"}, // >= 500 returns Critical
 	}
 
 	for _, tt := range tests {
