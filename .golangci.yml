@@ -82,10 +82,6 @@ issues:
         - staticcheck
       text: "S1039: unnecessary use of fmt.Sprintf"
 
-    # Allow ineffectual assignments (sometimes kept for clarity)
-    - linters:
-        - ineffassign
-
   # Show all issues, not just new ones
   new: false
 
