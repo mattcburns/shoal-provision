@@ -45,6 +45,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"time"
@@ -289,9 +290,10 @@ func (br *BuildRunner) LintCode() bool {
 			// Count issues but don't print full output to avoid CI failure
 			lines := strings.Split(strings.TrimSpace(stdout), "\n")
 			issueCount := 0
+			// Match lines with file:line:col: pattern (actual issues)
+			issuePattern := regexp.MustCompile(`\.go:\d+:\d+:`)
 			for _, line := range lines {
-				// Count lines that contain file:line:col: pattern (actual issues)
-				if strings.Contains(line, ".go:") && strings.Contains(line, ": Error return value") {
+				if issuePattern.MatchString(line) {
 					issueCount++
 				}
 			}
