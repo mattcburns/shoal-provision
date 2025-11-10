@@ -241,10 +241,8 @@ func (w *Worker) processJob(ctx context.Context, job *provisioner.Job) error {
 			_ = w.store.MarkJobStatus(ctx, job.ID, provisioner.JobStatusFailed, &validateStep)
 			return fmt.Errorf("validate recipe: ks_cfg missing for esxi job")
 		}
-		// Use package-level constant esxiMaxKickstartSize for discoverability.
-		const maxKickstartSize = esxiMaxKickstartSize
-		if len(ksCfg) > maxKickstartSize {
-			_ = w.appendEvent(ctx, job.ID, provisioner.EventLevelError, fmt.Sprintf("ESXi workflow: ks_cfg exceeds max size (%d > %d bytes)", len(ksCfg), maxKickstartSize), &validateStep)
+		if len(ksCfg) > esxiMaxKickstartSize {
+			_ = w.appendEvent(ctx, job.ID, provisioner.EventLevelError, fmt.Sprintf("ESXi workflow: ks_cfg exceeds max size (%d > %d bytes)", len(ksCfg), esxiMaxKickstartSize), &validateStep)
 			_ = w.store.MarkJobStatus(ctx, job.ID, provisioner.JobStatusFailed, &validateStep)
 			return fmt.Errorf("validate recipe: ks_cfg too large (%d bytes)", len(ksCfg))
 		}

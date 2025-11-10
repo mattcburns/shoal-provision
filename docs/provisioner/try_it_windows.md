@@ -90,4 +90,4 @@ Implementation will add:
 - Bootloader configuration unit (EFI/BCD handling)
 - Validation for unattend XML size and basic schema heuristics
 
-Track progress in `plans/004_Phase_6_Provisioner_Plan.md` and future Windows-specific design doc updates.
+Track progress in `plans/004_Phase_6_Provisioner_Plan.md`.

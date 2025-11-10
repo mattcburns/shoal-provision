@@ -9,7 +9,7 @@ Sample fixture files (these are embedded into the task ISO depending on recipe c
 - `fixtures/ks.cfg` (ESXi Kickstart; must be present for ESXi workflow)
 - `fixtures/unattend.xml` (Windows unattended install preview)
 
-Copy or adapt them when forming recipe JSON. Current size limit for `ks.cfg` is < 64KiB.
+Copy or adapt them when forming recipe JSON. Current size limit for `ks.cfg` is 64 KiB maximum.
 
 ## Workflow Guides
 Refer to per‑workflow instructions for environment variables, flags, and step-by-step mount & boot orchestration:

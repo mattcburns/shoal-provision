@@ -8,7 +8,7 @@ Shoal is designed for simple deployment as a single, self-contained binary with 
 
 **Quick Deployment (from source):**
 ```bash
-# Build & validate (single binary output at build/shoal)
+# Build and validate the Shoal binary
 go run build.go validate
 
 # Copy and run on target server
