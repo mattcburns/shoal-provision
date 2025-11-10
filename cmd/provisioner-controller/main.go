@@ -308,7 +308,7 @@ func logConfig(cfg Config) {
 
 // computeTaskMediaBase derives the base URL used by workers to mount
 // /media/tasks/{job_id}/task.iso, preferring the scheme/host from the
-// configured MaintenanceISOURL. Falls back to http://127.0.0.1:<port>.
+// configured MaintenanceISOURL. Falls back to http(s)://127.0.0.1:<port>.
 func computeTaskMediaBase(cfg Config) string {
 	if u, err := url.Parse(cfg.MaintenanceISOURL); err == nil && u.Scheme != "" && u.Host != "" {
 		return fmt.Sprintf("%s://%s/media/tasks", u.Scheme, u.Host)
@@ -317,7 +317,11 @@ func computeTaskMediaBase(cfg Config) string {
 	if strings.HasPrefix(host, ":") {
 		host = "127.0.0.1" + host
 	}
-	return "http://" + host + "/media/tasks"
+	scheme := "http"
+	if cfg.EnableTLS {
+		scheme = "https"
+	}
+	return scheme + "://" + host + "/media/tasks"
 }
 
 func newMux(cfg Config, ap *api.API, webhook http.Handler, mediaHandler *api.MediaHandler, rateLimiter *middleware.RateLimiter) http.Handler {
@@ -346,11 +350,9 @@ func newMux(cfg Config, ap *api.API, webhook http.Handler, mediaHandler *api.Med
 		authMiddleware := api.AuthMiddleware(authCfg, log.Default())
 
 		// Chain: rate limiter → auth → protected API
-		var wrapped http.Handler = protected
+		wrapped := authMiddleware(protected)
 		if rateLimiter != nil {
-			wrapped = rateLimiter.Middleware(authMiddleware(protected))
-		} else {
-			wrapped = authMiddleware(protected)
+			wrapped = rateLimiter.Middleware(wrapped)
 		}
 
 		mux.Handle("/api/v1/jobs", wrapped)

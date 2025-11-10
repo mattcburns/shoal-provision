@@ -32,6 +32,13 @@ import (
 	"time"
 )
 
+const (
+	// clockSkewTolerance is the maximum time difference allowed when validating
+	// signed URL expiration timestamps. This accounts for clock drift between
+	// the controller and BMCs fetching ISOs.
+	clockSkewTolerance = 60 * time.Second
+)
+
 // MediaConfig holds configuration for the media server.
 type MediaConfig struct {
 	// TaskISODir is the directory containing task ISOs.
@@ -128,9 +135,9 @@ func (h *MediaHandler) validateSignedURL(r *http.Request, jobID string) error {
 		return fmt.Errorf("invalid expires parameter")
 	}
 
-	// Check expiry with 60-second clock skew tolerance
+	// Check expiry with clock skew tolerance
 	now := time.Now().Unix()
-	if now > expires+60 {
+	if now > expires+int64(clockSkewTolerance.Seconds()) {
 		return fmt.Errorf("URL expired")
 	}
 

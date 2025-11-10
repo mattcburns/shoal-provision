@@ -108,12 +108,16 @@ func (rl *RateLimiter) allow(clientIP string) bool {
 
 	if !exists {
 		// Create new bucket for this client
-		bucket = &clientBucket{
-			tokens:     rl.config.BurstSize,
-			lastRefill: time.Now(),
-		}
+		// Use double-check pattern to prevent race condition
 		rl.mu.Lock()
-		rl.buckets[clientIP] = bucket
+		bucket, exists = rl.buckets[clientIP]
+		if !exists {
+			bucket = &clientBucket{
+				tokens:     rl.config.BurstSize,
+				lastRefill: time.Now(),
+			}
+			rl.buckets[clientIP] = bucket
+		}
 		rl.mu.Unlock()
 	}
 
@@ -159,17 +163,31 @@ func (rl *RateLimiter) cleanupLoop() {
 
 // cleanup removes client entries that haven't been used recently.
 func (rl *RateLimiter) cleanup() {
-	rl.mu.Lock()
-	defer rl.mu.Unlock()
-
 	threshold := time.Now().Add(-2 * rl.config.CleanupInterval)
+
+	// Collect IPs to delete first to avoid deadlock
+	var toDelete []string
+
+	rl.mu.RLock()
 	for ip, bucket := range rl.buckets {
 		bucket.mu.Lock()
 		if bucket.lastRefill.Before(threshold) {
-			delete(rl.buckets, ip)
+			toDelete = append(toDelete, ip)
 		}
 		bucket.mu.Unlock()
 	}
+	rl.mu.RUnlock()
+
+	if len(toDelete) == 0 {
+		return
+	}
+
+	// Delete outside iteration to avoid holding bucket locks
+	rl.mu.Lock()
+	for _, ip := range toDelete {
+		delete(rl.buckets, ip)
+	}
+	rl.mu.Unlock()
 }
 
 // Stop stops the cleanup goroutine.
