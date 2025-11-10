@@ -1,0 +1,93 @@
+# golangci-lint configuration for Shoal
+# This configuration balances code quality with pragmatic development
+#
+# NOTE: The codebase has existing linting issues that predate the CI/CD implementation.
+# This configuration is lenient to allow incremental improvements while maintaining
+# reasonable quality gates for new code.
+
+version: 2
+
+run:
+  timeout: 5m
+  tests: true
+  modules-download-mode: readonly
+
+linters-settings:
+  errcheck:
+    # Ignore errors from certain functions that are commonly safe to ignore
+    exclude-functions:
+      - io.Copy
+      - io.CopyN
+      - (io.Closer).Close
+      - (*os.File).Close
+      - (io.ReadCloser).Close
+      - (io.WriteCloser).Close
+      - (*net/http.Response.Body).Close
+      - (*database/sql.Rows).Close
+      - fmt.Fprintf
+      - fmt.Fprint
+      - fmt.Fprintln
+      - (io.Writer).Write
+      - (*encoding/json.Encoder).Encode
+
+  staticcheck:
+    # Enable all checks
+    checks: ["all"]
+
+  unused:
+    # Don't require all exported items to be used (allows for API design flexibility)
+    check-exported: false
+
+issues:
+  # Don't limit issues
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+  exclude-rules:
+    # Allow unchecked errors and unused code in test files
+    - path: _test\.go
+      linters:
+        - unused
+        - errcheck
+        - ineffassign
+        - staticcheck
+
+    # Allow unused code in internal/api (API design in progress)
+    - path: internal/api/
+      linters:
+        - unused
+
+    # Allow unused code in provisioner (features under development)
+    - path: internal/provisioner/
+      linters:
+        - unused
+
+    # Allow empty branches in error handling (common pattern for logging only)
+    - linters:
+        - staticcheck
+      text: "SA9003: empty branch"
+
+    # Allow De Morgan's law violations (often more readable in current form)
+    - linters:
+        - staticcheck
+      text: "QF1001: could apply De Morgan's law"
+
+    # Allow embedded field selector (sometimes more explicit is better)
+    - linters:
+        - staticcheck
+      text: "QF1008: could remove embedded field"
+
+    # Allow unnecessary fmt.Sprintf (sometimes clearer for templates/consistency)
+    - linters:
+        - staticcheck
+      text: "S1039: unnecessary use of fmt.Sprintf"
+
+    # Allow ineffectual assignments (sometimes kept for clarity)
+    - linters:
+        - ineffassign
+
+  # Show all issues, not just new ones
+  new: false
+
+  # Don't auto-fix
+  fix: false

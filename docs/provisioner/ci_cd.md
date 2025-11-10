@@ -39,7 +39,7 @@ The Shoal project uses GitHub Actions for continuous integration and delivery. T
 
 ### Release Pipeline
 
-**Trigger**: 
+**Trigger**:
 - Tag push matching `v*` pattern (e.g., `v1.0.0`)
 - Manual workflow dispatch
 

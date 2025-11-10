@@ -40,10 +40,10 @@ jobs:
         run: |
           echo "📦 Installing build and security tools..."
           go run build.go install-tools
-          
+
           # Install SBOM generation tool
           go install github.com/anchore/syft/cmd/syft@latest
-          
+
           # Install signing tool (cosign)
           go install github.com/sigstore/cosign/v2/cmd/cosign@latest
 
@@ -57,35 +57,35 @@ jobs:
         run: |
           echo "🏗️ Building binaries for all supported platforms..."
           go run build.go build-all
-          
+
           # Also build dispatcher binaries
           echo "🏗️ Building dispatcher binaries..."
           cd cmd/provisioner-dispatcher
-          
+
           # Linux amd64
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o ../../build/dispatcher-linux-amd64 .
-          
+
           # Linux arm64
           CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o ../../build/dispatcher-linux-arm64 .
-          
+
           cd ../..
-          
+
           echo "artifact_path=build" >> $GITHUB_OUTPUT
-          
+
           echo "✅ All binaries built"
           ls -lh build/
 
       - name: Generate SBOMs
         run: |
           echo "📋 Generating Software Bill of Materials (SBOMs)..."
-          
+
           # Generate SBOM for the Go project
           $HOME/go/bin/syft . -o spdx-json=build/shoal-sbom.spdx.json
           $HOME/go/bin/syft . -o cyclonedx-json=build/shoal-sbom.cyclonedx.json
-          
+
           # Generate text summary for easy viewing
           $HOME/go/bin/syft . -o table=build/shoal-sbom.txt
-          
+
           echo "✅ SBOMs generated"
           ls -lh build/*.json build/*.txt
 
@@ -103,16 +103,16 @@ jobs:
           COSIGN_EXPERIMENTAL: "true"
         run: |
           echo "🔐 Signing release artifacts..."
-          
+
           cd build
-          
+
           # Sign checksums file with cosign (keyless signing using OIDC)
           $HOME/go/bin/cosign sign-blob \
             --yes \
             --output-signature SHA256SUMS.sig \
             --output-certificate SHA256SUMS.pem \
             SHA256SUMS
-          
+
           echo "✅ Artifacts signed"
           ls -lh *.sig *.pem
 

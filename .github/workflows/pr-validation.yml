@@ -23,7 +23,7 @@ jobs:
     name: Validate Code Quality
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -44,15 +44,15 @@ jobs:
       - name: Check license headers
         run: |
           echo "📋 Checking AGPLv3 license headers on new/changed files..."
-          
+
           # Get list of changed Go files in this PR
           CHANGED_FILES=$(git diff --name-only --diff-filter=A origin/master...HEAD | grep '\.go$' || true)
-          
+
           if [ -z "$CHANGED_FILES" ]; then
             echo "✅ No new Go files to check"
             exit 0
           fi
-          
+
           MISSING_LICENSE=0
           for file in $CHANGED_FILES; do
             if [ -f "$file" ]; then
@@ -63,36 +63,36 @@ jobs:
               fi
             fi
           done
-          
+
           if [ $MISSING_LICENSE -eq 1 ]; then
             echo ""
             echo "Please add the AGPLv3 license header to new source files."
             echo "See AGENTS.md section 1.4 for the required header format."
             exit 1
           fi
-          
+
           echo "✅ All new files have proper license headers"
 
       - name: Check dependencies for license compatibility
         run: |
           echo "🔍 Scanning dependencies for AGPLv3 compatibility..."
-          
+
           # Extract licenses using go-licenses tool
           go install github.com/google/go-licenses@latest
-          
+
           # Get all dependencies and their licenses
           $HOME/go/bin/go-licenses csv ./... > licenses.csv 2>&1 || true
-          
+
           # Check for incompatible licenses (very basic check)
           # This is a starting point - enhance based on actual policy
           INCOMPATIBLE=0
-          
+
           if grep -iE '(GPL-2|LGPL|proprietary|commercial)' licenses.csv > /dev/null 2>&1; then
             echo "⚠️ Found potentially incompatible licenses:"
             grep -iE '(GPL-2|LGPL|proprietary|commercial)' licenses.csv || true
             INCOMPATIBLE=1
           fi
-          
+
           if [ $INCOMPATIBLE -eq 1 ]; then
             echo ""
             echo "⚠️ Warning: Some dependencies may have license compatibility issues"
@@ -105,15 +105,15 @@ jobs:
       - name: Run deadcode scan
         run: |
           echo "🔍 Running deadcode analysis..."
-          
+
           # Install deadcode if not available
           if ! command -v deadcode &> /dev/null; then
             go install golang.org/x/tools/cmd/deadcode@latest
           fi
-          
+
           # Run deadcode scan
           DEADCODE_OUTPUT=$($HOME/go/bin/deadcode ./... 2>&1 || true)
-          
+
           if [ -n "$DEADCODE_OUTPUT" ]; then
             echo "⚠️ Deadcode analysis found unreachable functions:"
             echo "$DEADCODE_OUTPUT"
@@ -132,64 +132,64 @@ jobs:
       - name: Check test coverage
         run: |
           echo "📊 Checking test coverage thresholds..."
-          
+
           # Extract coverage percentage from coverage.out
           COVERAGE=$(go tool cover -func=coverage.out | grep total | awk '{print $3}' | sed 's/%//')
-          
+
           # Set minimum coverage threshold (adjust as needed)
           MIN_COVERAGE=60
-          
+
           echo "Current coverage: ${COVERAGE}%"
           echo "Minimum required: ${MIN_COVERAGE}%"
-          
+
           # Compare coverage (using awk for float comparison)
           if awk -v cov="$COVERAGE" -v min="$MIN_COVERAGE" 'BEGIN {exit (cov < min) ? 0 : 1}'; then
             echo "❌ Coverage ${COVERAGE}% is below minimum ${MIN_COVERAGE}%"
             exit 1
           fi
-          
+
           echo "✅ Coverage threshold met"
 
       - name: Verify recipe schema validation
         run: |
           echo "📋 Verifying recipe schema tests..."
-          
+
           # Run recipe schema-specific tests
           go test -v ./pkg/provisioner/... -run TestRecipeSchema || {
             echo "❌ Recipe schema validation failed"
             exit 1
           }
-          
+
           echo "✅ Recipe schema tests passed"
 
       - name: Verify Redfish mock tests
         run: |
           echo "🔌 Verifying Redfish client mock tests..."
-          
+
           # Run Redfish-specific integration tests
           go test -v ./pkg/redfish/... || {
             echo "❌ Redfish mock tests failed"
             exit 1
           }
-          
+
           echo "✅ Redfish tests passed"
 
       - name: Build smoke test artifacts
         run: |
           echo "🏗️ Building smoke test artifacts..."
-          
+
           # Build controller binary
           go run build.go build
-          
+
           # Build dispatcher binary (static)
           echo "Building dispatcher..."
           cd cmd/provisioner-dispatcher
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o ../../build/dispatcher-linux-amd64 .
           cd ../..
-          
+
           # Verify binaries exist
           ls -lh build/
-          
+
           echo "✅ Smoke test artifacts built successfully"
 
       - name: Generate validation summary
@@ -197,9 +197,9 @@ jobs:
         run: |
           cat >> $GITHUB_STEP_SUMMARY <<EOF
           ## 🔍 PR Validation Summary
-          
+
           ### ✅ Checks Completed
-          
+
           - License headers verified for new files
           - Dependency license compatibility checked
           - Deadcode analysis completed
@@ -208,15 +208,15 @@ jobs:
           - Recipe schema validation passed
           - Redfish mock tests passed
           - Smoke test artifacts built
-          
+
           ### 📊 Metrics
-          
+
           - **Coverage**: $(go tool cover -func=coverage.out 2>/dev/null | grep total | awk '{print $3}' || echo "N/A")
           - **Go Version**: $(go version | awk '{print $3}')
           - **Build Time**: Completed in workflow
-          
+
           ### 📝 Next Steps
-          
+
           - Review any warnings from deadcode or license scans
           - Ensure all tests pass locally with \`go run build.go validate\`
           - Address any security warnings from gosec
@@ -231,7 +231,7 @@ jobs:
     if: |
       contains(github.event.pull_request.labels.*.name, 'containers') ||
       contains(github.event.pull_request.changed_files, 'images/')
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -244,36 +244,36 @@ jobs:
       - name: Lint Dockerfiles
         run: |
           echo "🔍 Linting Dockerfiles/Containerfiles..."
-          
+
           # Install hadolint for Dockerfile linting
           wget -qO /tmp/hadolint https://github.com/hadolint/hadolint/releases/latest/download/hadolint-Linux-x86_64
           chmod +x /tmp/hadolint
-          
+
           # Lint all Containerfiles
           find images/ -name 'Containerfile' -o -name 'Dockerfile' | while read -r file; do
             echo "Linting $file..."
             /tmp/hadolint "$file" || echo "⚠️ Linting issues in $file"
           done
-          
+
           echo "✅ Dockerfile linting complete"
 
       - name: Build maintenance OS image
         run: |
           echo "🏗️ Building maintenance OS bootc image..."
-          
+
           # Build the maintenance OS container image
           podman build \
             --file images/maintenance/Containerfile \
             --tag shoal-maintenance:pr-test \
             .
-          
+
           echo "✅ Maintenance OS image built successfully"
           podman images | grep shoal-maintenance
 
       - name: Verify image metadata
         run: |
           echo "🔍 Inspecting image metadata..."
-          
+
           podman inspect shoal-maintenance:pr-test | jq '.[0].Config.Labels'
-          
+
           echo "✅ Image metadata verified"
