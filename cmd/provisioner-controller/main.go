@@ -71,6 +71,8 @@ type Config struct {
 	MediaEnableIPBind  bool          // MEDIA_ENABLE_IP_BIND: enable IP binding in signed URLs
 	RateLimitRPM       int           // RATE_LIMIT_RPM: requests per minute per client IP (default: 10)
 	RateLimitBurst     int           // RATE_LIMIT_BURST: burst size for rate limiter (default: 5)
+	EnableCORS         bool          // ENABLE_CORS: enable CORS headers (default: false)
+	CORSAllowedOrigins string        // CORS_ALLOWED_ORIGINS: comma-separated list of allowed origins (default: *)
 }
 
 // defaultConfig returns sane defaults aligned with the design docs.
@@ -102,6 +104,8 @@ func defaultConfig() Config {
 		MediaEnableIPBind:  false,
 		RateLimitRPM:       10,
 		RateLimitBurst:     5,
+		EnableCORS:         false,
+		CORSAllowedOrigins: "*",
 	}
 }
 
@@ -181,6 +185,8 @@ func parseConfig() Config {
 		MediaEnableIPBind:  getenvBool("MEDIA_ENABLE_IP_BIND", def.MediaEnableIPBind),
 		RateLimitRPM:       getenvInt("RATE_LIMIT_RPM", def.RateLimitRPM),
 		RateLimitBurst:     getenvInt("RATE_LIMIT_BURST", def.RateLimitBurst),
+		EnableCORS:         getenvBool("ENABLE_CORS", def.EnableCORS),
+		CORSAllowedOrigins: getenv("CORS_ALLOWED_ORIGINS", def.CORSAllowedOrigins),
 	}
 
 	// Flags (override env if provided)
@@ -210,6 +216,8 @@ func parseConfig() Config {
 	flag.BoolVar(&cfg.MediaEnableIPBind, "media-enable-ip-bind", cfg.MediaEnableIPBind, "Enable IP binding in signed media URLs (env MEDIA_ENABLE_IP_BIND)")
 	flag.IntVar(&cfg.RateLimitRPM, "rate-limit-rpm", cfg.RateLimitRPM, "Rate limit requests per minute per client IP (env RATE_LIMIT_RPM)")
 	flag.IntVar(&cfg.RateLimitBurst, "rate-limit-burst", cfg.RateLimitBurst, "Rate limit burst size (env RATE_LIMIT_BURST)")
+	flag.BoolVar(&cfg.EnableCORS, "enable-cors", cfg.EnableCORS, "Enable CORS headers (env ENABLE_CORS)")
+	flag.StringVar(&cfg.CORSAllowedOrigins, "cors-allowed-origins", cfg.CORSAllowedOrigins, "CORS allowed origins, comma-separated (env CORS_ALLOWED_ORIGINS)")
 
 	flag.Parse()
 	return cfg
@@ -309,7 +317,7 @@ func computeTaskMediaBase(cfg Config) string {
 	return "http://" + host + "/media/tasks"
 }
 
-func newMux(cfg Config, ap *api.API, webhook http.Handler, mediaHandler *api.MediaHandler, rateLimiter *middleware.RateLimiter) *http.ServeMux {
+func newMux(cfg Config, ap *api.API, webhook http.Handler, mediaHandler *api.MediaHandler, rateLimiter *middleware.RateLimiter) http.Handler {
 	mux := http.NewServeMux()
 
 	// Health/ready
@@ -369,7 +377,19 @@ func newMux(cfg Config, ap *api.API, webhook http.Handler, mediaHandler *api.Med
 		})
 	})
 
-	return mux
+	// Wrap entire mux with security headers middleware
+	securityCfg := middleware.SecurityHeadersConfig{
+		EnableHSTS:            cfg.EnableTLS, // Only enable HSTS when TLS is active
+		HSTSMaxAge:            31536000,      // 1 year
+		HSTSIncludeSubdomains: false,
+		EnableCORS:            cfg.EnableCORS,
+		CORSAllowedOrigins:    strings.Split(cfg.CORSAllowedOrigins, ","),
+		CORSAllowedMethods:    []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
+		CORSAllowedHeaders:    []string{"Content-Type", "Authorization"},
+		CORSMaxAge:            3600,
+	}
+
+	return middleware.SecurityHeaders(securityCfg)(mux)
 }
 
 func reconcileProvisioningJobs(ctx context.Context, st *store.Store, logger *log.Logger) error {
