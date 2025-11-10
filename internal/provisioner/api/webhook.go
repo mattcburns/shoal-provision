@@ -98,9 +98,12 @@ func (dc *deliveryCache) seen(jobID, deliveryID string) bool {
 	return false
 }
 
-func (dc *deliveryCache) record(jobID, deliveryID string) {
+// record adds a delivery_id to the job's cache.
+// Returns true if newly inserted, false if already present (idempotent).
+// Implements atomic check-and-set semantics to prevent TOCTOU races.
+func (dc *deliveryCache) record(jobID, deliveryID string) bool {
 	if deliveryID == "" {
-		return
+		return false
 	}
 	dc.mu.Lock()
 	defer dc.mu.Unlock()
@@ -108,7 +111,7 @@ func (dc *deliveryCache) record(jobID, deliveryID string) {
 	// Check if already present (idempotent)
 	for _, id := range list {
 		if id == deliveryID {
-			return
+			return false // already exists
 		}
 	}
 	// Prepend (most recent first)
@@ -117,6 +120,15 @@ func (dc *deliveryCache) record(jobID, deliveryID string) {
 		list = list[:dc.max]
 	}
 	dc.cache[jobID] = list
+	return true // newly inserted
+}
+
+// remove deletes the cache entry for the given jobID.
+// Should be called when a job reaches a terminal state to prevent memory growth.
+func (dc *deliveryCache) remove(jobID string) {
+	dc.mu.Lock()
+	defer dc.mu.Unlock()
+	delete(dc.cache, jobID)
 }
 
 // NewWebhookHandler builds an http.HandlerFunc that processes webhook calls.
@@ -212,25 +224,24 @@ func NewWebhookHandler(store WebhookStore, secret string, logger *log.Logger, no
 			return
 		}
 
-		// Deduplication: check if delivery_id was seen before
-		if req.DeliveryID != "" && cache.seen(job.ID, req.DeliveryID) {
-			logf("idempotent duplicate delivery_id=%s for job=%s serial=%s; returning 200 OK", req.DeliveryID, job.ID, serial)
-			// Append idempotent event
-			_ = store.AppendJobEvent(ctx, provisioner.JobEvent{
-				JobID:   job.ID,
-				Time:    now(),
-				Level:   provisioner.EventLevelInfo,
-				Message: fmt.Sprintf("Idempotent webhook delivery (delivery_id=%s)", req.DeliveryID),
-				Step:    strPtr("webhook-duplicate"),
-			})
-			metrics.ObserveWebhookRequest("duplicate", time.Since(start))
-			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "idempotent": true})
-			return
-		}
-
-		// Record delivery_id for future deduplication
+		// Deduplication: atomically record delivery_id; if already present, treat as duplicate
+		// This implements check-and-set semantics to prevent TOCTOU races
 		if req.DeliveryID != "" {
-			cache.record(job.ID, req.DeliveryID)
+			isNew := cache.record(job.ID, req.DeliveryID)
+			if !isNew {
+				logf("idempotent duplicate delivery_id=%s for job=%s serial=%s; returning 200 OK", req.DeliveryID, job.ID, serial)
+				// Append idempotent event
+				_ = store.AppendJobEvent(ctx, provisioner.JobEvent{
+					JobID:   job.ID,
+					Time:    now(),
+					Level:   provisioner.EventLevelInfo,
+					Message: fmt.Sprintf("Idempotent webhook delivery (delivery_id=%s)", req.DeliveryID),
+					Step:    strPtr("webhook-duplicate"),
+				})
+				metrics.ObserveWebhookRequest("duplicate", time.Since(start))
+				writeJSON(w, http.StatusOK, map[string]any{"ok": true, "idempotent": true})
+				return
+			}
 		}
 
 		// Transition and append events

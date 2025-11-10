@@ -131,6 +131,7 @@ The controller implements exactly-once semantics using the `delivery_id` field:
 - LRU cache with 32-item limit per job
 - Thread-safe concurrent request handling
 - Cache persists for the lifetime of the controller process
+- Cache entries can be explicitly removed for completed jobs to prevent unbounded growth
 
 **Best Practice:** Always include `delivery_id` in webhook requests. A recommended format is:
 ```
@@ -188,9 +189,9 @@ shoal_provisioner_webhook_duration_seconds{status="success|failed|duplicate"}
 ```
 
 **Status Labels:**
-- `success` - Successfully processed success webhook (state transition or duplicate)
-- `failed` - Successfully processed failed webhook (state transition or duplicate)
-- `duplicate` - Duplicate `delivery_id` detected (idempotent response)
+- `success` - Successfully processed non-duplicate success webhook (state transition to succeeded)
+- `failed` - Successfully processed non-duplicate failed webhook (state transition to failed)
+- `duplicate` - Duplicate `delivery_id` detected (idempotent response, no state change)
 
 ## Example: cURL Request
 
