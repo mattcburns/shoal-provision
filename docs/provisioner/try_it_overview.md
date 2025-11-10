@@ -46,7 +46,7 @@ The controller currently runs workers that look for queued jobs (future endpoint
 ## Troubleshooting
 - Missing `ks_cfg` in an ESXi recipe will fail early in the `validate-recipe` step.
 - Oversized Kickstart (>64KiB) will also cause validation failure.
-- Use `REDfISH_MODE=noop` to run tests without hardware.
+- Use `REDFISH_MODE=noop` to run tests without hardware.
 
 ## License
 All fixture samples are provided under the project AGPLv3; adapt as needed.

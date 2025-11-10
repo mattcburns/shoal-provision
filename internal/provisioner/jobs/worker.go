@@ -94,6 +94,11 @@ type Worker struct {
 
 const esxiInstallTarget = "install-esxi.target"
 
+// esxiMaxKickstartSize limits Kickstart size embedded into task ISO.
+// 64KiB is a practical ceiling aligned with current design constraints; can be raised with
+// corresponding ISO builder and validation updates.
+const esxiMaxKickstartSize = 64 * 1024
+
 const (
 	opMountMaintenance      = metrics.OpMountMaintenance
 	opMountTask             = metrics.OpMountTask
@@ -226,7 +231,7 @@ func (w *Worker) processJob(ctx context.Context, job *provisioner.Job) error {
 	taskTarget := taskTargetFromRecipe(job.Recipe)
 	isESXi := strings.EqualFold(taskTarget, esxiInstallTarget)
 
-	// Phase 6: ESXi requires ks_cfg in recipe; validate early so we fail fast.
+	// ESXi handoff: require ks_cfg in recipe; validate early so we fail fast.
 	var ksCfg []byte
 	if isESXi {
 		validateStep := "validate-recipe"
@@ -236,7 +241,8 @@ func (w *Worker) processJob(ctx context.Context, job *provisioner.Job) error {
 			_ = w.store.MarkJobStatus(ctx, job.ID, provisioner.JobStatusFailed, &validateStep)
 			return fmt.Errorf("validate recipe: ks_cfg missing for esxi job")
 		}
-		const maxKickstartSize = 64 * 1024 // 64KiB reasonable constraint; align w/ design 022 size limits assumption
+		// Use package-level constant esxiMaxKickstartSize for discoverability.
+		const maxKickstartSize = esxiMaxKickstartSize
 		if len(ksCfg) > maxKickstartSize {
 			_ = w.appendEvent(ctx, job.ID, provisioner.EventLevelError, fmt.Sprintf("ESXi workflow: ks_cfg exceeds max size (%d > %d bytes)", len(ksCfg), maxKickstartSize), &validateStep)
 			_ = w.store.MarkJobStatus(ctx, job.ID, provisioner.JobStatusFailed, &validateStep)

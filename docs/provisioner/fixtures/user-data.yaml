@@ -1,7 +1,8 @@
 #cloud-config
 hostname: shoal-linux
 ssh_authorized_keys:
-  - ssh-ed25519 AAAAB3NzaC1yc2EAAAADAQABAAACAQClExampleKeyOnly user@example
+  # Example placeholder key. DO NOT USE IN PRODUCTION.
+  - ssh-ed25519 EXAMPLE-ONLY-NOT-A-REAL-KEY user@example
 users:
   - name: dev
     sudo: ALL=(ALL) NOPASSWD:ALL
