@@ -36,6 +36,8 @@ var (
 	redfishRequestDuration *prometheus.HistogramVec
 	redfishRetries         *prometheus.CounterVec
 	phaseDuration          *prometheus.HistogramVec
+	webhookRequests        *prometheus.CounterVec
+	webhookDuration        *prometheus.HistogramVec
 )
 
 const (
@@ -118,6 +120,21 @@ func ObserveProvisioningPhase(phase string, duration time.Duration) {
 	}
 }
 
+// ObserveWebhookRequest records a completed webhook request.
+// status should be "success", "failed", or "duplicate".
+func ObserveWebhookRequest(status string, duration time.Duration) {
+	labelStatus := sanitizeLabel(status, "unknown")
+
+	mu.RLock()
+	defer mu.RUnlock()
+	if webhookRequests != nil {
+		webhookRequests.WithLabelValues(labelStatus).Inc()
+	}
+	if webhookDuration != nil {
+		webhookDuration.WithLabelValues(labelStatus).Observe(durationSeconds(duration))
+	}
+}
+
 func resetLocked() {
 	registry := prometheus.NewRegistry()
 
@@ -151,13 +168,30 @@ func resetLocked() {
 		Buckets:   []float64{0.5, 1, 2, 5, 10, 30, 60, 120, 300, 600},
 	}, []string{"phase"})
 
-	registry.MustRegister(reqTotal, reqDuration, retries, phaseHist)
+	webhookTotal := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "shoal",
+		Subsystem: "provisioner",
+		Name:      "webhook_requests_total",
+		Help:      "Total webhook requests grouped by status (success, failed, duplicate).",
+	}, []string{"status"})
+
+	webhookHist := prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: "shoal",
+		Subsystem: "provisioner",
+		Name:      "webhook_duration_seconds",
+		Help:      "Duration of webhook request processing by status.",
+		Buckets:   []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1},
+	}, []string{"status"})
+
+	registry.MustRegister(reqTotal, reqDuration, retries, phaseHist, webhookTotal, webhookHist)
 
 	reg = registry
 	redfishRequests = reqTotal
 	redfishRequestDuration = reqDuration
 	redfishRetries = retries
 	phaseDuration = phaseHist
+	webhookRequests = webhookTotal
+	webhookDuration = webhookHist
 }
 
 func sanitizeVendor(v string) string {
