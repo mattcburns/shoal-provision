@@ -217,3 +217,59 @@ PR checklist for dead code sweeps:
 - [ ] Update or confirm allowlist section
 - [ ] Ensure tests still pass (`go run build.go validate`)
 - [ ] Summarize changes in PR description referencing this section
+
+### 4.2 Security Validation
+
+The validation pipeline (`go run build.go validate`) includes automated security checks. These are non-negotiable for production code.
+
+#### Security Checks Performed
+
+1. **gosec Static Analysis** (if installed)
+   - Scans for common security issues (SQL injection, weak crypto, etc.)
+   - Install: `go run build.go install-tools`
+   - Failures block the build
+
+2. **Secret Pattern Scanning**
+   - Searches for patterns like `password=`, `secret=`, `token=`, `api_key=`, `private_key=`
+   - Warns on potential leaks (does not block build)
+   - **Known false positives**: Pattern definitions in build.go itself, redacted logging examples
+   - **Real issue indicators**: Plaintext values after `=` sign (e.g., `password=admin123`)
+
+3. **Comprehensive Security Tests**
+   - Credential redaction (no secrets in logs)
+   - Rate limiting (DoS protection, bypass prevention)
+   - Security headers (OWASP compliance)
+   - Password hashing (Argon2id strength, bcrypt upgrade)
+   - Auth enforcement (protected endpoints require auth)
+   - Located in: `internal/provisioner/security_test.go`
+
+#### Interpreting Security Warnings
+
+When `go run build.go validate` shows secret warnings:
+
+```bash
+⚠ Found potential secret pattern 'password=':
+    ./cmd/provisioner-controller/main.go:289:   log.Printf("  webhook_secret=%s", redactedSecret(cfg.WebhookSecret))
+```
+
+**This is SAFE** because:
+- The value is passed through `redactedSecret()` (credential redaction)
+- The pattern `password=` appears, but no plaintext password follows
+
+**This is UNSAFE** (example of what to fix):
+```bash
+⚠ Found potential secret pattern 'password=':
+    ./config/app.go:123:   dbURL := "postgres://user:mypassword123@localhost/db"
+```
+Fix: Use environment variables or secret management, and redact in logs.
+
+#### Security Compliance Checklist
+
+Before merging security-related changes:
+- [ ] Run `go run build.go validate` - all checks pass
+- [ ] Review secret pattern warnings - confirm false positives only
+- [ ] Verify all new secrets use redaction (`crypto.RedactSecret`, etc.)
+- [ ] Confirm auth enforcement on new protected endpoints
+- [ ] Update `docs/provisioner/security.md` if adding security features
+- [ ] Test secret rotation procedures (webhook, JWT, etc.)
+- [ ] Verify TLS configuration in production deployment guides
