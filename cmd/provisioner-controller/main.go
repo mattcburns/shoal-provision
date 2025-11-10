@@ -55,6 +55,7 @@ type Config struct {
 	RegistryStorage    string        // REGISTRY_STORAGE
 	AuthMode           string        // AUTH_MODE: basic|jwt|none
 	WebhookSecret      string        // WEBHOOK_SECRET (do not log value)
+	WebhookSecretOld   string        // WEBHOOK_SECRET_OLD (do not log value; for secret rotation)
 	WorkerConcurrency  int           // WORKER_CONCURRENCY
 	RedfishTimeout     time.Duration // REDFISH_TIMEOUT
 	RedfishRetries     int           // REDFISH_RETRIES
@@ -169,6 +170,7 @@ func parseConfig() Config {
 		RegistryStorage:    getenv("REGISTRY_STORAGE", def.RegistryStorage),
 		AuthMode:           getenv("AUTH_MODE", def.AuthMode),
 		WebhookSecret:      getenv("WEBHOOK_SECRET", def.WebhookSecret),
+		WebhookSecretOld:   getenv("WEBHOOK_SECRET_OLD", def.WebhookSecretOld),
 		WorkerConcurrency:  getenvInt("WORKER_CONCURRENCY", def.WorkerConcurrency),
 		RedfishTimeout:     getenvDuration("REDFISH_TIMEOUT", def.RedfishTimeout),
 		RedfishRetries:     getenvInt("REDFISH_RETRIES", def.RedfishRetries),
@@ -200,6 +202,7 @@ func parseConfig() Config {
 	flag.StringVar(&cfg.RegistryStorage, "registry-storage", cfg.RegistryStorage, "Embedded registry storage path (env REGISTRY_STORAGE)")
 	flag.StringVar(&cfg.AuthMode, "auth-mode", cfg.AuthMode, "Auth mode: basic|jwt|none (env AUTH_MODE)")
 	flag.StringVar(&cfg.WebhookSecret, "webhook-secret", cfg.WebhookSecret, "Webhook shared secret (env WEBHOOK_SECRET)")
+	flag.StringVar(&cfg.WebhookSecretOld, "webhook-secret-old", cfg.WebhookSecretOld, "Old webhook shared secret for rotation (env WEBHOOK_SECRET_OLD)")
 	flag.IntVar(&cfg.WorkerConcurrency, "workers", cfg.WorkerConcurrency, "Worker concurrency (env WORKER_CONCURRENCY)")
 	flag.DurationVar(&cfg.RedfishTimeout, "redfish-timeout", cfg.RedfishTimeout, "Redfish request timeout (env REDFISH_TIMEOUT)")
 	flag.IntVar(&cfg.RedfishRetries, "redfish-retries", cfg.RedfishRetries, "Redfish retry count (env REDFISH_RETRIES)")
@@ -438,7 +441,7 @@ func main() {
 	defer st.Close()
 
 	ap := api.New(st, cfg.MaintenanceISOURL, log.Default())
-	wbh := api.NewWebhookHandler(st, cfg.WebhookSecret, log.Default(), nil)
+	wbh := api.NewWebhookHandler(st, cfg.WebhookSecret, cfg.WebhookSecretOld, log.Default(), nil)
 
 	// Create media handler with signed URL support
 	mediaCfg := api.MediaConfig{

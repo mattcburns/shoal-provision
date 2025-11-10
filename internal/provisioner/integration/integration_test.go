@@ -79,7 +79,7 @@ func TestIntegration_EndToEndPhase1Success(t *testing.T) {
 	ap.Register(mux)
 
 	webhookSecret := "testsecret"
-	wh := api.NewWebhookHandler(st, webhookSecret, nil, func() time.Time { return time.Now().UTC() })
+	wh := api.NewWebhookHandler(st, webhookSecret, "", nil, func() time.Time { return time.Now().UTC() })
 	mux.Handle("/api/v1/status-webhook/", wh)
 
 	// Media tasks handler serving files from builder root:
@@ -228,7 +228,7 @@ func TestIntegration_EndToEndPhase1Failed(t *testing.T) {
 	ap := api.New(st, "http://localhost/isos/bootc-maintenance.iso", nil)
 	ap.Register(mux)
 	webhookSecret := "testsecret"
-	wh := api.NewWebhookHandler(st, webhookSecret, nil, func() time.Time { return time.Now().UTC() })
+	wh := api.NewWebhookHandler(st, webhookSecret, "", nil, func() time.Time { return time.Now().UTC() })
 	mux.Handle("/api/v1/status-webhook/", wh)
 	mux.HandleFunc("/media/tasks/", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -349,7 +349,7 @@ func TestIntegration_EndToEndPhase1TimeoutFailure(t *testing.T) {
 	ap := api.New(st, "http://localhost/isos/bootc-maintenance.iso", nil)
 	ap.Register(mux)
 	// Webhook registered but we won't call it to force timeout
-	mux.Handle("/api/v1/status-webhook/", api.NewWebhookHandler(st, "secret", nil, func() time.Time { return time.Now().UTC() }))
+	mux.Handle("/api/v1/status-webhook/", api.NewWebhookHandler(st, "secret", "", nil, func() time.Time { return time.Now().UTC() }))
 	mux.HandleFunc("/media/tasks/", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.NotFound(w, r)
