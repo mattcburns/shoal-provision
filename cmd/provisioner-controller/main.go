@@ -26,7 +26,6 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -63,6 +62,12 @@ type Config struct {
 	JobLeaseTTL        time.Duration // JOB_LEASE_TTL
 	JobStuckTimeout    time.Duration // JOB_STUCK_TIMEOUT
 	LogLevel           string        // LOG_LEVEL: info|debug
+	TLSCertFile        string        // TLS_CERT_FILE: path to TLS certificate
+	TLSKeyFile         string        // TLS_KEY_FILE: path to TLS private key
+	EnableTLS          bool          // ENABLE_TLS: enable HTTPS (default: false for backwards compatibility)
+	MediaSigningSecret string        // MEDIA_SIGNING_SECRET: HMAC secret for signed media URLs
+	MediaSignedURLTTL  time.Duration // MEDIA_SIGNED_URL_TTL: expiry duration for signed media URLs
+	MediaEnableIPBind  bool          // MEDIA_ENABLE_IP_BIND: enable IP binding in signed URLs
 }
 
 // defaultConfig returns sane defaults aligned with the design docs.
@@ -86,6 +91,12 @@ func defaultConfig() Config {
 		JobLeaseTTL:        10 * time.Minute,
 		JobStuckTimeout:    4 * time.Hour,
 		LogLevel:           "info",
+		TLSCertFile:        "",
+		TLSKeyFile:         "",
+		EnableTLS:          false,
+		MediaSigningSecret: "",
+		MediaSignedURLTTL:  30 * time.Minute,
+		MediaEnableIPBind:  false,
 	}
 }
 
@@ -157,6 +168,12 @@ func parseConfig() Config {
 		JobLeaseTTL:        getenvDuration("JOB_LEASE_TTL", def.JobLeaseTTL),
 		JobStuckTimeout:    getenvDuration("JOB_STUCK_TIMEOUT", def.JobStuckTimeout),
 		LogLevel:           getenv("LOG_LEVEL", def.LogLevel),
+		TLSCertFile:        getenv("TLS_CERT_FILE", def.TLSCertFile),
+		TLSKeyFile:         getenv("TLS_KEY_FILE", def.TLSKeyFile),
+		EnableTLS:          getenvBool("ENABLE_TLS", def.EnableTLS),
+		MediaSigningSecret: getenv("MEDIA_SIGNING_SECRET", def.MediaSigningSecret),
+		MediaSignedURLTTL:  getenvDuration("MEDIA_SIGNED_URL_TTL", def.MediaSignedURLTTL),
+		MediaEnableIPBind:  getenvBool("MEDIA_ENABLE_IP_BIND", def.MediaEnableIPBind),
 	}
 
 	// Flags (override env if provided)
@@ -178,6 +195,12 @@ func parseConfig() Config {
 	flag.DurationVar(&cfg.JobLeaseTTL, "job-lease-ttl", cfg.JobLeaseTTL, "Job lease TTL (env JOB_LEASE_TTL)")
 	flag.DurationVar(&cfg.JobStuckTimeout, "job-stuck-timeout", cfg.JobStuckTimeout, "Job stuck timeout (env JOB_STUCK_TIMEOUT)")
 	flag.StringVar(&cfg.LogLevel, "log-level", cfg.LogLevel, "Log level: info|debug (env LOG_LEVEL)")
+	flag.StringVar(&cfg.TLSCertFile, "tls-cert", cfg.TLSCertFile, "Path to TLS certificate file (env TLS_CERT_FILE)")
+	flag.StringVar(&cfg.TLSKeyFile, "tls-key", cfg.TLSKeyFile, "Path to TLS private key file (env TLS_KEY_FILE)")
+	flag.BoolVar(&cfg.EnableTLS, "enable-tls", cfg.EnableTLS, "Enable HTTPS/TLS (env ENABLE_TLS)")
+	flag.StringVar(&cfg.MediaSigningSecret, "media-signing-secret", cfg.MediaSigningSecret, "HMAC secret for signed media URLs (env MEDIA_SIGNING_SECRET)")
+	flag.DurationVar(&cfg.MediaSignedURLTTL, "media-signed-url-ttl", cfg.MediaSignedURLTTL, "Expiry duration for signed media URLs (env MEDIA_SIGNED_URL_TTL)")
+	flag.BoolVar(&cfg.MediaEnableIPBind, "media-enable-ip-bind", cfg.MediaEnableIPBind, "Enable IP binding in signed media URLs (env MEDIA_ENABLE_IP_BIND)")
 
 	flag.Parse()
 	return cfg
@@ -209,66 +232,6 @@ func notImplementedHandler(msg string) http.HandlerFunc {
 			Error:   "not_implemented",
 			Message: msg,
 		})
-	}
-}
-
-func jobsHandler(w http.ResponseWriter, r *http.Request) {
-	switch r.Method {
-	case http.MethodPost:
-		notImplementedHandler("POST /api/v1/jobs is not implemented yet")(w, r)
-	default:
-		http.NotFound(w, r)
-	}
-}
-
-func jobByIDHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.NotFound(w, r)
-		return
-	}
-	// Extract job_id from path: /api/v1/jobs/{id}
-	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/v1/jobs/"), "/")
-	if len(parts) < 1 || parts[0] == "" {
-		http.NotFound(w, r)
-		return
-	}
-	jobID := parts[0]
-	_ = jobID
-	notImplementedHandler("GET /api/v1/jobs/{id} is not implemented yet")(w, r)
-}
-
-func webhookHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.NotFound(w, r)
-		return
-	}
-	// Extract serial from path: /api/v1/status-webhook/{serial}
-	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/v1/status-webhook/"), "/")
-	if len(parts) < 1 || parts[0] == "" {
-		http.NotFound(w, r)
-		return
-	}
-	serial := parts[0]
-	_ = serial
-	notImplementedHandler("POST /api/v1/status-webhook/{serial} is not implemented yet")(w, r)
-}
-
-func tasksMediaHandler(cfg Config) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		// GET /media/tasks/{job_id}/task.iso
-		if r.Method != http.MethodGet {
-			http.NotFound(w, r)
-			return
-		}
-		trim := strings.TrimPrefix(r.URL.Path, "/media/tasks/")
-		parts := strings.Split(trim, "/")
-		if len(parts) != 2 || parts[0] == "" || parts[1] != "task.iso" {
-			http.NotFound(w, r)
-			return
-		}
-		jobID := parts[0]
-		fpath := filepath.Join(cfg.TaskISODir, jobID, "task.iso")
-		http.ServeFile(w, r, fpath)
 	}
 }
 
@@ -312,6 +275,15 @@ func logConfig(cfg Config) {
 	log.Printf("  job_lease_ttl=%s", cfg.JobLeaseTTL)
 	log.Printf("  job_stuck_timeout=%s", cfg.JobStuckTimeout)
 	log.Printf("  log_level=%s", cfg.LogLevel)
+	log.Printf("  enable_tls=%v", cfg.EnableTLS)
+	if cfg.EnableTLS {
+		if cfg.TLSCertFile != "" {
+			log.Printf("  tls_cert_file=%s", cfg.TLSCertFile)
+		}
+		if cfg.TLSKeyFile != "" {
+			log.Printf("  tls_key_file=%s", cfg.TLSKeyFile)
+		}
+	}
 }
 
 // computeTaskMediaBase derives the base URL used by workers to mount
@@ -328,7 +300,7 @@ func computeTaskMediaBase(cfg Config) string {
 	return "http://" + host + "/media/tasks"
 }
 
-func newMux(cfg Config, ap *api.API, webhook http.Handler) *http.ServeMux {
+func newMux(cfg Config, ap *api.API, webhook http.Handler, mediaHandler *api.MediaHandler) *http.ServeMux {
 	mux := http.NewServeMux()
 
 	// Health/ready
@@ -358,8 +330,10 @@ func newMux(cfg Config, ap *api.API, webhook http.Handler) *http.ServeMux {
 	// Webhook (separate auth via shared secret)
 	mux.Handle("/api/v1/status-webhook/", webhook)
 
-	// Media serving (task ISO)
-	mux.HandleFunc("/media/tasks/", tasksMediaHandler(cfg))
+	// Media serving (task ISO with optional signed URLs)
+	if mediaHandler != nil {
+		mux.Handle("/media/tasks/", mediaHandler)
+	}
 
 	// Embedded registry (optional)
 	if cfg.EnableRegistry {
@@ -426,6 +400,17 @@ func main() {
 
 	ap := api.New(st, cfg.MaintenanceISOURL, log.Default())
 	wbh := api.NewWebhookHandler(st, cfg.WebhookSecret, log.Default(), nil)
+
+	// Create media handler with signed URL support
+	mediaCfg := api.MediaConfig{
+		TaskISODir:      cfg.TaskISODir,
+		SigningSecret:   cfg.MediaSigningSecret,
+		SignedURLExpiry: cfg.MediaSignedURLTTL,
+		EnableIPBinding: cfg.MediaEnableIPBind,
+		Logger:          log.Default(),
+	}
+	mediaHandler := api.NewMediaHandler(mediaCfg)
+
 	if err := reconcileProvisioningJobs(context.Background(), st, log.Default()); err != nil {
 		log.Printf("reconcile provisioning jobs: %v", err)
 	}
@@ -472,7 +457,7 @@ func main() {
 	// Prepare server with conservative timeouts
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           newMux(cfg, ap, wbh),
+		Handler:           newMux(cfg, ap, wbh, mediaHandler),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      60 * time.Second,
@@ -482,8 +467,19 @@ func main() {
 	// Start server
 	errCh := make(chan error, 1)
 	go func() {
-		log.Printf("HTTP server listening on %s", cfg.HTTPAddr)
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		var err error
+		if cfg.EnableTLS {
+			if cfg.TLSCertFile == "" || cfg.TLSKeyFile == "" {
+				errCh <- fmt.Errorf("TLS enabled but TLS_CERT_FILE or TLS_KEY_FILE not provided")
+				return
+			}
+			log.Printf("HTTPS server listening on %s (TLS enabled)", cfg.HTTPAddr)
+			err = srv.ListenAndServeTLS(cfg.TLSCertFile, cfg.TLSKeyFile)
+		} else {
+			log.Printf("HTTP server listening on %s (TLS disabled)", cfg.HTTPAddr)
+			err = srv.ListenAndServe()
+		}
+		if err != nil && err != http.ErrServerClosed {
 			errCh <- fmt.Errorf("http server error: %w", err)
 		}
 	}()
