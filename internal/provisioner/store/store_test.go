@@ -310,3 +310,302 @@ func TestListJobsByStatusAndRequeueProvisioning(t *testing.T) {
 func ptrString(s string) *string { return &s }
 
 func ptrTime(ti time.Time) *time.Time { return &ti }
+
+// TestSettingsSetAndGet validates settings upsert and retrieval.
+func TestSettingsSetAndGet(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	// Set a value
+	if err := s.SetSetting(ctx, "test_key", "test_value"); err != nil {
+		t.Fatalf("SetSetting failed: %v", err)
+	}
+
+	// Get it back
+	val, err := s.GetSetting(ctx, "test_key")
+	if err != nil {
+		t.Fatalf("GetSetting failed: %v", err)
+	}
+	if val != "test_value" {
+		t.Fatalf("expected 'test_value', got %q", val)
+	}
+
+	// Update the value
+	if err := s.SetSetting(ctx, "test_key", "new_value"); err != nil {
+		t.Fatalf("SetSetting (update) failed: %v", err)
+	}
+
+	val, err = s.GetSetting(ctx, "test_key")
+	if err != nil {
+		t.Fatalf("GetSetting (after update) failed: %v", err)
+	}
+	if val != "new_value" {
+		t.Fatalf("expected 'new_value', got %q", val)
+	}
+
+	// Get non-existent key
+	_, err = s.GetSetting(ctx, "nonexistent")
+	if err != ErrNotFound {
+		t.Fatalf("expected ErrNotFound for nonexistent key, got %v", err)
+	}
+}
+
+// TestUpdateJobTaskISOPath validates setting the task ISO path.
+func TestUpdateJobTaskISOPath(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	// Create server and job
+	ser := provisioner.Server{
+		Serial:     "SER-001",
+		BMCAddress: "https://bmc.local",
+		BMCUser:    "root",
+		BMCPass:    "pass",
+	}
+	if err := s.UpsertServer(ctx, ser); err != nil {
+		t.Fatalf("UpsertServer failed: %v", err)
+	}
+
+	job := provisioner.NewJob(ser.Serial, json.RawMessage(`{"task_target":"test"}`), "http://maint.iso")
+	job.ID = "job-123"
+	if err := s.InsertJob(ctx, &job); err != nil {
+		t.Fatalf("InsertJob failed: %v", err)
+	}
+
+	// Update task ISO path
+	testPath := "/tasks/job-123/task.iso"
+	if err := s.UpdateJobTaskISOPath(ctx, job.ID, testPath); err != nil {
+		t.Fatalf("UpdateJobTaskISOPath failed: %v", err)
+	}
+
+	// Verify it was set
+	updated, err := s.GetJobByID(ctx, job.ID)
+	if err != nil {
+		t.Fatalf("GetJobByID failed: %v", err)
+	}
+	if updated.TaskISOPath == nil || *updated.TaskISOPath != testPath {
+		t.Fatalf("expected task_iso_path=%q, got %v", testPath, updated.TaskISOPath)
+	}
+}
+
+// TestExtendLease validates lease extension with worker ownership checks.
+func TestExtendLease(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	// Setup server and job
+	ser := provisioner.Server{
+		Serial:     "SER-002",
+		BMCAddress: "https://bmc.local",
+		BMCUser:    "root",
+		BMCPass:    "pass",
+	}
+	if err := s.UpsertServer(ctx, ser); err != nil {
+		t.Fatalf("UpsertServer failed: %v", err)
+	}
+
+	job := provisioner.NewJob(ser.Serial, json.RawMessage(`{"task_target":"test"}`), "http://maint.iso")
+	job.ID = "job-lease"
+	if err := s.InsertJob(ctx, &job); err != nil {
+		t.Fatalf("InsertJob failed: %v", err)
+	}
+
+	// Acquire the job with worker-1
+	acquired, err := s.AcquireQueuedJob(ctx, "worker-1", 5*time.Minute)
+	if err != nil {
+		t.Fatalf("AcquireQueuedJob failed: %v", err)
+	}
+	if acquired.ID != job.ID {
+		t.Fatalf("acquired wrong job: %s", acquired.ID)
+	}
+
+	// Extend lease as correct worker
+	extended, err := s.ExtendLease(ctx, job.ID, "worker-1", 10*time.Minute)
+	if err != nil {
+		t.Fatalf("ExtendLease failed: %v", err)
+	}
+	if !extended {
+		t.Fatal("expected lease extension to succeed")
+	}
+
+	// Try to extend as different worker (should fail)
+	extended, err = s.ExtendLease(ctx, job.ID, "worker-2", 10*time.Minute)
+	if err != nil {
+		t.Fatalf("ExtendLease (wrong worker) failed: %v", err)
+	}
+	if extended {
+		t.Fatal("expected lease extension by wrong worker to fail")
+	}
+
+	// Extend non-existent job
+	extended, err = s.ExtendLease(ctx, "no-such-job", "worker-1", 10*time.Minute)
+	if err != nil {
+		t.Fatalf("ExtendLease (no job) failed: %v", err)
+	}
+	if extended {
+		t.Fatal("expected lease extension of nonexistent job to fail")
+	}
+}
+
+// TestStealExpiredLease validates lease stealing after expiry.
+func TestStealExpiredLease(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	// Setup server and job
+	ser := provisioner.Server{
+		Serial:     "SER-003",
+		BMCAddress: "https://bmc.local",
+		BMCUser:    "root",
+		BMCPass:    "pass",
+	}
+	if err := s.UpsertServer(ctx, ser); err != nil {
+		t.Fatalf("UpsertServer failed: %v", err)
+	}
+
+	job := provisioner.NewJob(ser.Serial, json.RawMessage(`{"task_target":"test"}`), "http://maint.iso")
+	job.ID = "job-steal"
+	if err := s.InsertJob(ctx, &job); err != nil {
+		t.Fatalf("InsertJob failed: %v", err)
+	}
+
+	// Acquire with very short lease (1 millisecond)
+	_, err := s.AcquireQueuedJob(ctx, "worker-old", 1*time.Millisecond)
+	if err != nil {
+		t.Fatalf("AcquireQueuedJob failed: %v", err)
+	}
+
+	// Wait for lease to expire
+	time.Sleep(10 * time.Millisecond)
+
+	// Steal the lease with a new worker
+	stolen, err := s.StealExpiredLease(ctx, job.ID, "worker-new", 5*time.Minute)
+	if err != nil {
+		t.Fatalf("StealExpiredLease failed: %v", err)
+	}
+	if !stolen {
+		t.Fatal("expected lease steal to succeed")
+	}
+
+	// Verify new worker owns the job
+	updated, err := s.GetJobByID(ctx, job.ID)
+	if err != nil {
+		t.Fatalf("GetJobByID failed: %v", err)
+	}
+	if updated.WorkerID == nil || *updated.WorkerID != "worker-new" {
+		t.Fatalf("expected worker_id='worker-new', got %v", updated.WorkerID)
+	}
+
+	// Try to steal a job with active lease (should fail)
+	stolen, err = s.StealExpiredLease(ctx, job.ID, "worker-another", 5*time.Minute)
+	if err != nil {
+		t.Fatalf("StealExpiredLease (active lease) failed: %v", err)
+	}
+	if stolen {
+		t.Fatal("expected steal of active lease to fail")
+	}
+}
+
+// TestAppendJobEvent and ListJobEvents validates event logging.
+func TestAppendAndListJobEvents(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	// Setup server and job
+	ser := provisioner.Server{
+		Serial:     "SER-004",
+		BMCAddress: "https://bmc.local",
+		BMCUser:    "root",
+		BMCPass:    "pass",
+	}
+	if err := s.UpsertServer(ctx, ser); err != nil {
+		t.Fatalf("UpsertServer failed: %v", err)
+	}
+
+	job := provisioner.NewJob(ser.Serial, json.RawMessage(`{"task_target":"test"}`), "http://maint.iso")
+	job.ID = "job-events"
+	if err := s.InsertJob(ctx, &job); err != nil {
+		t.Fatalf("InsertJob failed: %v", err)
+	}
+
+	// Append first event
+	ev1 := provisioner.JobEvent{
+		JobID:   job.ID,
+		Time:    time.Now().UTC(),
+		Level:   provisioner.EventLevelInfo,
+		Message: "Starting provisioning",
+		Step:    ptrString("partition.target"),
+	}
+	if err := s.AppendJobEvent(ctx, ev1); err != nil {
+		t.Fatalf("AppendJobEvent (1) failed: %v", err)
+	}
+
+	// Append second event
+	ev2 := provisioner.JobEvent{
+		JobID:   job.ID,
+		Time:    time.Now().UTC().Add(1 * time.Second),
+		Level:   provisioner.EventLevelError,
+		Message: "Disk formatting failed",
+		Step:    ptrString("partition.target"),
+	}
+	if err := s.AppendJobEvent(ctx, ev2); err != nil {
+		t.Fatalf("AppendJobEvent (2) failed: %v", err)
+	}
+
+	// Append third event without step
+	ev3 := provisioner.JobEvent{
+		JobID:   job.ID,
+		Time:    time.Now().UTC().Add(2 * time.Second),
+		Level:   provisioner.EventLevelInfo,
+		Message: "Cleanup completed",
+		Step:    nil,
+	}
+	if err := s.AppendJobEvent(ctx, ev3); err != nil {
+		t.Fatalf("AppendJobEvent (3) failed: %v", err)
+	}
+
+	// List all events
+	events, err := s.ListJobEvents(ctx, job.ID, 0)
+	if err != nil {
+		t.Fatalf("ListJobEvents (all) failed: %v", err)
+	}
+	if len(events) != 3 {
+		t.Fatalf("expected 3 events, got %d", len(events))
+	}
+
+	// Verify first event
+	if events[0].JobID != job.ID || events[0].Level != provisioner.EventLevelInfo || events[0].Message != "Starting provisioning" {
+		t.Fatalf("unexpected first event: %+v", events[0])
+	}
+	if events[0].Step == nil || *events[0].Step != "partition.target" {
+		t.Fatalf("expected step='partition.target', got %v", events[0].Step)
+	}
+
+	// Verify second event
+	if events[1].Level != provisioner.EventLevelError || events[1].Message != "Disk formatting failed" {
+		t.Fatalf("unexpected second event: %+v", events[1])
+	}
+
+	// Verify third event (no step)
+	if events[2].Step != nil {
+		t.Fatalf("expected nil step for third event, got %v", events[2].Step)
+	}
+
+	// List with limit
+	limited, err := s.ListJobEvents(ctx, job.ID, 2)
+	if err != nil {
+		t.Fatalf("ListJobEvents (limit 2) failed: %v", err)
+	}
+	if len(limited) != 2 {
+		t.Fatalf("expected 2 events with limit, got %d", len(limited))
+	}
+
+	// List events for nonexistent job (should return empty, not error)
+	noEvents, err := s.ListJobEvents(ctx, "no-such-job", 0)
+	if err != nil {
+		t.Fatalf("ListJobEvents (nonexistent) failed: %v", err)
+	}
+	if len(noEvents) != 0 {
+		t.Fatalf("expected 0 events for nonexistent job, got %d", len(noEvents))
+	}
+}
