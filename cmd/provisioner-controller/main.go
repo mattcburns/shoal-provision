@@ -50,6 +50,7 @@ type Config struct {
 	StorageRoot        string        // STORAGE_ROOT
 	TaskISODir         string        // TASK_ISO_DIR
 	MaintenanceISOURL  string        // MAINTENANCE_ISO_URL
+	ESXiInstallerURL   string        // ESXI_INSTALLER_URL
 	EnableRegistry     bool          // ENABLE_REGISTRY
 	RegistryStorage    string        // REGISTRY_STORAGE
 	AuthMode           string        // AUTH_MODE: basic|jwt|none
@@ -72,6 +73,7 @@ func defaultConfig() Config {
 		StorageRoot:        "./var/shoal",
 		TaskISODir:         "./var/shoal/task-isos",
 		MaintenanceISOURL:  "http://localhost:8080/media/isos/bootc-maintenance.iso",
+		ESXiInstallerURL:   "",
 		EnableRegistry:     false,
 		RegistryStorage:    "./var/shoal/oci",
 		AuthMode:           "none",
@@ -142,6 +144,7 @@ func parseConfig() Config {
 		StorageRoot:        getenv("STORAGE_ROOT", def.StorageRoot),
 		TaskISODir:         getenv("TASK_ISO_DIR", def.TaskISODir),
 		MaintenanceISOURL:  getenv("MAINTENANCE_ISO_URL", def.MaintenanceISOURL),
+		ESXiInstallerURL:   getenv("ESXI_INSTALLER_URL", def.ESXiInstallerURL),
 		EnableRegistry:     getenvBool("ENABLE_REGISTRY", def.EnableRegistry),
 		RegistryStorage:    getenv("REGISTRY_STORAGE", def.RegistryStorage),
 		AuthMode:           getenv("AUTH_MODE", def.AuthMode),
@@ -162,6 +165,7 @@ func parseConfig() Config {
 	flag.StringVar(&cfg.StorageRoot, "storage-root", cfg.StorageRoot, "Storage root directory (env STORAGE_ROOT)")
 	flag.StringVar(&cfg.TaskISODir, "task-iso-dir", cfg.TaskISODir, "Task ISO output directory (env TASK_ISO_DIR)")
 	flag.StringVar(&cfg.MaintenanceISOURL, "maintenance-iso-url", cfg.MaintenanceISOURL, "Maintenance ISO URL (env MAINTENANCE_ISO_URL)")
+	flag.StringVar(&cfg.ESXiInstallerURL, "esxi-installer-url", cfg.ESXiInstallerURL, "ESXi vendor installer ISO URL (env ESXI_INSTALLER_URL)")
 	flag.BoolVar(&cfg.EnableRegistry, "enable-registry", cfg.EnableRegistry, "Enable embedded OCI registry (env ENABLE_REGISTRY)")
 	flag.StringVar(&cfg.RegistryStorage, "registry-storage", cfg.RegistryStorage, "Embedded registry storage path (env REGISTRY_STORAGE)")
 	flag.StringVar(&cfg.AuthMode, "auth-mode", cfg.AuthMode, "Auth mode: basic|jwt|none (env AUTH_MODE)")
@@ -291,6 +295,11 @@ func logConfig(cfg Config) {
 	log.Printf("  storage_root=%s", cfg.StorageRoot)
 	log.Printf("  task_iso_dir=%s", cfg.TaskISODir)
 	log.Printf("  maintenance_iso_url=%s", cfg.MaintenanceISOURL)
+	if cfg.ESXiInstallerURL != "" {
+		log.Printf("  esxi_installer_url=%s", cfg.ESXiInstallerURL)
+	} else {
+		log.Printf("  esxi_installer_url=<unset>")
+	}
 	log.Printf("  enable_registry=%v", cfg.EnableRegistry)
 	log.Printf("  registry_storage=%s", cfg.RegistryStorage)
 	log.Printf("  auth_mode=%s", cfg.AuthMode)
@@ -454,6 +463,7 @@ func main() {
 			RedfishTimeout:    cfg.RedfishTimeout,
 			TaskISOMediaBase:  mediaBase,
 			LogEveryHeartbeat: false,
+			ESXIInstallerURL:  cfg.ESXiInstallerURL,
 		}
 		w := jobs.NewWorker(st, builder, rfFactory, wcfg, log.Default())
 		go w.Run(workerCtx)
