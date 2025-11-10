@@ -35,6 +35,7 @@ import (
 	"shoal/internal/provisioner/iso"
 	"shoal/internal/provisioner/jobs"
 	"shoal/internal/provisioner/metrics"
+	"shoal/internal/provisioner/middleware"
 	"shoal/internal/provisioner/redfish"
 	"shoal/internal/provisioner/store"
 	"shoal/pkg/provisioner"
@@ -68,6 +69,8 @@ type Config struct {
 	MediaSigningSecret string        // MEDIA_SIGNING_SECRET: HMAC secret for signed media URLs
 	MediaSignedURLTTL  time.Duration // MEDIA_SIGNED_URL_TTL: expiry duration for signed media URLs
 	MediaEnableIPBind  bool          // MEDIA_ENABLE_IP_BIND: enable IP binding in signed URLs
+	RateLimitRPM       int           // RATE_LIMIT_RPM: requests per minute per client IP (default: 10)
+	RateLimitBurst     int           // RATE_LIMIT_BURST: burst size for rate limiter (default: 5)
 }
 
 // defaultConfig returns sane defaults aligned with the design docs.
@@ -97,6 +100,8 @@ func defaultConfig() Config {
 		MediaSigningSecret: "",
 		MediaSignedURLTTL:  30 * time.Minute,
 		MediaEnableIPBind:  false,
+		RateLimitRPM:       10,
+		RateLimitBurst:     5,
 	}
 }
 
@@ -174,6 +179,8 @@ func parseConfig() Config {
 		MediaSigningSecret: getenv("MEDIA_SIGNING_SECRET", def.MediaSigningSecret),
 		MediaSignedURLTTL:  getenvDuration("MEDIA_SIGNED_URL_TTL", def.MediaSignedURLTTL),
 		MediaEnableIPBind:  getenvBool("MEDIA_ENABLE_IP_BIND", def.MediaEnableIPBind),
+		RateLimitRPM:       getenvInt("RATE_LIMIT_RPM", def.RateLimitRPM),
+		RateLimitBurst:     getenvInt("RATE_LIMIT_BURST", def.RateLimitBurst),
 	}
 
 	// Flags (override env if provided)
@@ -201,6 +208,8 @@ func parseConfig() Config {
 	flag.StringVar(&cfg.MediaSigningSecret, "media-signing-secret", cfg.MediaSigningSecret, "HMAC secret for signed media URLs (env MEDIA_SIGNING_SECRET)")
 	flag.DurationVar(&cfg.MediaSignedURLTTL, "media-signed-url-ttl", cfg.MediaSignedURLTTL, "Expiry duration for signed media URLs (env MEDIA_SIGNED_URL_TTL)")
 	flag.BoolVar(&cfg.MediaEnableIPBind, "media-enable-ip-bind", cfg.MediaEnableIPBind, "Enable IP binding in signed media URLs (env MEDIA_ENABLE_IP_BIND)")
+	flag.IntVar(&cfg.RateLimitRPM, "rate-limit-rpm", cfg.RateLimitRPM, "Rate limit requests per minute per client IP (env RATE_LIMIT_RPM)")
+	flag.IntVar(&cfg.RateLimitBurst, "rate-limit-burst", cfg.RateLimitBurst, "Rate limit burst size (env RATE_LIMIT_BURST)")
 
 	flag.Parse()
 	return cfg
@@ -300,7 +309,7 @@ func computeTaskMediaBase(cfg Config) string {
 	return "http://" + host + "/media/tasks"
 }
 
-func newMux(cfg Config, ap *api.API, webhook http.Handler, mediaHandler *api.MediaHandler) *http.ServeMux {
+func newMux(cfg Config, ap *api.API, webhook http.Handler, mediaHandler *api.MediaHandler, rateLimiter *middleware.RateLimiter) *http.ServeMux {
 	mux := http.NewServeMux()
 
 	// Health/ready
@@ -309,6 +318,7 @@ func newMux(cfg Config, ap *api.API, webhook http.Handler, mediaHandler *api.Med
 	mux.Handle("/metrics", metrics.Handler())
 
 	// Protected Jobs API (auth: basic|jwt|none via cfg.AuthMode)
+	// Apply rate limiting to prevent DoS attacks on authentication endpoints
 	if ap != nil {
 		protected := http.NewServeMux()
 		ap.Register(protected)
@@ -322,7 +332,16 @@ func newMux(cfg Config, ap *api.API, webhook http.Handler, mediaHandler *api.Med
 			JWTIssuer:     getenv("JWT_ISSUER", ""),
 			Header:        "Authorization",
 		}
-		wrapped := api.AuthMiddleware(authCfg, log.Default())(protected)
+		authMiddleware := api.AuthMiddleware(authCfg, log.Default())
+
+		// Chain: rate limiter → auth → protected API
+		var wrapped http.Handler = protected
+		if rateLimiter != nil {
+			wrapped = rateLimiter.Middleware(authMiddleware(protected))
+		} else {
+			wrapped = authMiddleware(protected)
+		}
+
 		mux.Handle("/api/v1/jobs", wrapped)
 		mux.Handle("/api/v1/jobs/", wrapped)
 	}
@@ -411,6 +430,15 @@ func main() {
 	}
 	mediaHandler := api.NewMediaHandler(mediaCfg)
 
+	// Create rate limiter for API endpoints
+	rateLimiterCfg := middleware.RateLimitConfig{
+		RequestsPerMinute: cfg.RateLimitRPM,
+		BurstSize:         cfg.RateLimitBurst,
+		CleanupInterval:   5 * time.Minute,
+	}
+	rateLimiter := middleware.NewRateLimiter(rateLimiterCfg)
+	defer rateLimiter.Stop()
+
 	if err := reconcileProvisioningJobs(context.Background(), st, log.Default()); err != nil {
 		log.Printf("reconcile provisioning jobs: %v", err)
 	}
@@ -457,7 +485,7 @@ func main() {
 	// Prepare server with conservative timeouts
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           newMux(cfg, ap, wbh, mediaHandler),
+		Handler:           newMux(cfg, ap, wbh, mediaHandler, rateLimiter),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      60 * time.Second,
