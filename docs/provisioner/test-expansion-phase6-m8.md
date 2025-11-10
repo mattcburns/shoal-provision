@@ -1,7 +1,7 @@
 # Test Expansion - Phase 6 Milestone 8
 
-Status: In Progress  
-Date: 2025-11-10  
+Status: In Progress
+Date: 2025-11-10
 Reference: design/035_Test_Strategy.md, plans/004_Phase_6_Provisioner_Plan.md
 
 ## Summary
