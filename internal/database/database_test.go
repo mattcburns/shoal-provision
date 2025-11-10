@@ -391,6 +391,326 @@ func TestCleanupExpiredSessions(t *testing.T) {
 	}
 }
 
+func TestGetSetSetting(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+
+	db, err := New(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to create database: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	ctx := context.Background()
+	if err := db.Migrate(ctx); err != nil {
+		t.Fatalf("Migration failed: %v", err)
+	}
+
+	// Test setting and getting a value
+	key := "test_setting"
+	value := "test_value"
+
+	err = db.SetSetting(ctx, key, value)
+	if err != nil {
+		t.Fatalf("SetSetting failed: %v", err)
+	}
+
+	// Retrieve the setting
+	retrieved, err := db.GetSetting(ctx, key)
+	if err != nil {
+		t.Fatalf("GetSetting failed: %v", err)
+	}
+
+	if retrieved != value {
+		t.Errorf("Expected value %q, got %q", value, retrieved)
+	}
+
+	// Test updating an existing setting
+	newValue := "updated_value"
+	err = db.SetSetting(ctx, key, newValue)
+	if err != nil {
+		t.Fatalf("SetSetting (update) failed: %v", err)
+	}
+
+	retrieved, err = db.GetSetting(ctx, key)
+	if err != nil {
+		t.Fatalf("GetSetting (after update) failed: %v", err)
+	}
+
+	if retrieved != newValue {
+		t.Errorf("Expected updated value %q, got %q", newValue, retrieved)
+	}
+
+	// Test getting non-existent setting
+	retrieved, err = db.GetSetting(ctx, "nonexistent_key")
+	if err != nil {
+		t.Fatalf("GetSetting for non-existent key failed: %v", err)
+	}
+	// GetSetting returns empty string for non-existent keys, not an error
+	if retrieved != "" {
+		t.Errorf("Expected empty string for non-existent setting, got %q", retrieved)
+	}
+}
+
+func TestEnsureServiceUUID(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+
+	db, err := New(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to create database: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	ctx := context.Background()
+	if err := db.Migrate(ctx); err != nil {
+		t.Fatalf("Migration failed: %v", err)
+	}
+
+	// First call should create a UUID
+	uuid1, err := db.EnsureServiceUUID(ctx)
+	if err != nil {
+		t.Fatalf("EnsureServiceUUID failed: %v", err)
+	}
+
+	if uuid1 == "" {
+		t.Fatal("UUID should not be empty")
+	}
+
+	// Second call should return the same UUID
+	uuid2, err := db.EnsureServiceUUID(ctx)
+	if err != nil {
+		t.Fatalf("EnsureServiceUUID (second call) failed: %v", err)
+	}
+
+	if uuid1 != uuid2 {
+		t.Errorf("UUID should be consistent: got %q then %q", uuid1, uuid2)
+	}
+}
+
+func TestSessionCRUD(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+
+	db, err := New(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to create database: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	ctx := context.Background()
+	if err := db.Migrate(ctx); err != nil {
+		t.Fatalf("Migration failed: %v", err)
+	}
+
+	// Create a user first (sessions have foreign key to users)
+	user := &models.User{
+		Username:     "testuser",
+		PasswordHash: "hashed_password",
+		Role:         "admin",
+		Enabled:      true,
+	}
+	err = db.CreateUser(ctx, user)
+	if err != nil {
+		t.Fatalf("CreateUser failed: %v", err)
+	}
+
+	// Test GetSession (should return nil for non-existent)
+	result, err := db.GetSession(ctx, "nonexistent-id")
+	if err != nil {
+		t.Fatalf("GetSession should not error for non-existent: %v", err)
+	}
+	if result != nil {
+		t.Error("Expected nil session for non-existent ID")
+	}
+
+	// Test GetSessions (should be empty initially)
+	sessions, err := db.GetSessions(ctx)
+	if err != nil {
+		t.Fatalf("GetSessions failed: %v", err)
+	}
+	if len(sessions) != 0 {
+		t.Errorf("Expected 0 sessions, got %d", len(sessions))
+	}
+
+	// Create a session via CreateSession
+	session := &models.Session{
+		ID:        "session-test-123", // ID must be set by caller
+		Token:     "test-token-123",
+		UserID:    user.ID,
+		ExpiresAt: time.Now().Add(1 * time.Hour),
+		CreatedAt: time.Now(),
+	}
+	err = db.CreateSession(ctx, session)
+	if err != nil {
+		t.Fatalf("CreateSession failed: %v", err)
+	}
+
+	// Test GetSession (by ID)
+	retrieved, err := db.GetSession(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("GetSession failed: %v", err)
+	}
+	if retrieved == nil {
+		t.Fatal("GetSession returned nil")
+	}
+	if retrieved.Token != session.Token {
+		t.Errorf("Expected token %q, got %q", session.Token, retrieved.Token)
+	}
+	if retrieved.UserID != session.UserID {
+		t.Errorf("Expected UserID %q, got %q", session.UserID, retrieved.UserID)
+	}
+
+	// Test GetSessions
+	sessions, err = db.GetSessions(ctx)
+	if err != nil {
+		t.Fatalf("GetSessions failed: %v", err)
+	}
+	if len(sessions) != 1 {
+		t.Errorf("Expected 1 session, got %d", len(sessions))
+	}
+
+	// Test DeleteSessionByID
+	err = db.DeleteSessionByID(ctx, retrieved.ID)
+	if err != nil {
+		t.Fatalf("DeleteSessionByID failed: %v", err)
+	}
+
+	// Verify deletion
+	sessions, err = db.GetSessions(ctx)
+	if err != nil {
+		t.Fatalf("GetSessions (after delete) failed: %v", err)
+	}
+	if len(sessions) != 0 {
+		t.Errorf("Expected 0 sessions after delete, got %d", len(sessions))
+	}
+}
+
+func TestUserCRUD(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+
+	db, err := New(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to create database: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	ctx := context.Background()
+	if err := db.Migrate(ctx); err != nil {
+		t.Fatalf("Migration failed: %v", err)
+	}
+
+	// Test GetUsers (empty initially)
+	users, err := db.GetUsers(ctx)
+	if err != nil {
+		t.Fatalf("GetUsers failed: %v", err)
+	}
+	if len(users) != 0 {
+		t.Errorf("Expected 0 users initially, got %d", len(users))
+	}
+
+	// Test CountUsers (should be 0)
+	count, err := db.CountUsers(ctx)
+	if err != nil {
+		t.Fatalf("CountUsers failed: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("Expected count 0, got %d", count)
+	}
+
+	// Test CreateUser
+	user := &models.User{
+		ID:           "user-test-123", // ID must be set by caller
+		Username:     "testuser",
+		PasswordHash: "hashed_password_123",
+		Role:         "admin",
+		Enabled:      true,
+	}
+	err = db.CreateUser(ctx, user)
+	if err != nil {
+		t.Fatalf("CreateUser failed: %v", err)
+	}
+
+	// Test GetUser
+	retrieved, err := db.GetUser(ctx, user.ID)
+	if err != nil {
+		t.Fatalf("GetUser failed: %v", err)
+	}
+	if retrieved.Username != user.Username {
+		t.Errorf("Expected username %q, got %q", user.Username, retrieved.Username)
+	}
+
+	// Test GetUserByUsername
+	byUsername, err := db.GetUserByUsername(ctx, user.Username)
+	if err != nil {
+		t.Fatalf("GetUserByUsername failed: %v", err)
+	}
+	if byUsername.ID != user.ID {
+		t.Errorf("Expected user ID %q, got %q", user.ID, byUsername.ID)
+	}
+
+	// Test GetUsers (should have 1)
+	users, err = db.GetUsers(ctx)
+	if err != nil {
+		t.Fatalf("GetUsers failed: %v", err)
+	}
+	if len(users) != 1 {
+		t.Errorf("Expected 1 user, got %d", len(users))
+	}
+
+	// Test CountUsers (should be 1)
+	count, err = db.CountUsers(ctx)
+	if err != nil {
+		t.Fatalf("CountUsers failed: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("Expected count 1, got %d", count)
+	}
+
+	// Test UpdateUser
+	user.Role = "operator"
+	user.Enabled = false
+	err = db.UpdateUser(ctx, user)
+	if err != nil {
+		t.Fatalf("UpdateUser failed: %v", err)
+	}
+
+	updated, err := db.GetUser(ctx, user.ID)
+	if err != nil {
+		t.Fatalf("GetUser (after update) failed: %v", err)
+	}
+	if updated.Role != "operator" {
+		t.Errorf("Expected role 'operator', got %q", updated.Role)
+	}
+	if updated.Enabled {
+		t.Error("Expected Enabled=false")
+	}
+
+	// Test DeleteUser
+	err = db.DeleteUser(ctx, user.ID)
+	if err != nil {
+		t.Fatalf("DeleteUser failed: %v", err)
+	}
+
+	// Verify deletion - GetUser should return nil (no error, just nil user)
+	deleted, err := db.GetUser(ctx, user.ID)
+	if err != nil {
+		t.Fatalf("GetUser after delete returned error: %v", err)
+	}
+	if deleted != nil {
+		t.Error("Expected nil user after deletion")
+	}
+
+	count, err = db.CountUsers(ctx)
+	if err != nil {
+		t.Fatalf("CountUsers (after delete) failed: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("Expected count 0 after delete, got %d", count)
+	}
+}
+
 func BenchmarkCreateBMC(b *testing.B) {
 	tmpDir := b.TempDir()
 	dbPath := filepath.Join(tmpDir, "benchmark.db")
