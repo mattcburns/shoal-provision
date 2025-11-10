@@ -80,24 +80,6 @@ func newDeliveryCache(maxPerJob int) *deliveryCache {
 	}
 }
 
-func (dc *deliveryCache) seen(jobID, deliveryID string) bool {
-	if deliveryID == "" {
-		return false
-	}
-	dc.mu.RLock()
-	list, ok := dc.cache[jobID]
-	dc.mu.RUnlock()
-	if !ok {
-		return false
-	}
-	for _, id := range list {
-		if id == deliveryID {
-			return true
-		}
-	}
-	return false
-}
-
 // record adds a delivery_id to the job's cache.
 // Returns true if newly inserted, false if already present (idempotent).
 // Implements atomic check-and-set semantics to prevent TOCTOU races.
