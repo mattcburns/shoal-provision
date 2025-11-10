@@ -967,3 +967,377 @@ func TestProfilesSnapshotAPI(t *testing.T) {}
 
 // Profiles Diff removed in Design 014
 func TestProfilesDiffAPI(t *testing.T) {}
+
+// User Management Tests
+
+func TestHandleUsers(t *testing.T) {
+	ts := createTestSetup(t)
+	defer ts.DB.Close()
+
+	// Create additional test users
+	testUsers := []*models.User{
+		{ID: "user2", Username: "operator1", PasswordHash: "hash", Role: "operator", Enabled: true},
+		{ID: "user3", Username: "viewer1", PasswordHash: "hash", Role: "viewer", Enabled: false},
+	}
+	for _, u := range testUsers {
+		_ = ts.DB.CreateUser(context.Background(), u)
+	}
+
+	tests := []struct {
+		name           string
+		queryParams    string
+		expectStatus   int
+		expectContains []string
+	}{
+		{
+			name:         "display users list",
+			expectStatus: http.StatusOK,
+			expectContains: []string{
+				"Manage Users",
+				"admin", // Test user from setup
+				"operator1",
+				"viewer1",
+				"Add New User",
+			},
+		},
+		{
+			name:         "display success message",
+			queryParams:  "?message=User+created+successfully",
+			expectStatus: http.StatusOK,
+			expectContains: []string{
+				"User created successfully",
+				"Manage Users",
+			},
+		},
+		{
+			name:         "display error message",
+			queryParams:  "?error=User+not+found",
+			expectStatus: http.StatusOK,
+			expectContains: []string{
+				"User not found",
+				"Manage Users",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/users"+tt.queryParams, nil)
+			req.AddCookie(&http.Cookie{Name: "session_token", Value: ts.Session.Token})
+
+			rec := httptest.NewRecorder()
+			ts.Handler.ServeHTTP(rec, req)
+
+			if rec.Code != tt.expectStatus {
+				t.Errorf("expected status %d, got %d", tt.expectStatus, rec.Code)
+			}
+
+			body := rec.Body.String()
+			for _, expected := range tt.expectContains {
+				if !strings.Contains(body, expected) {
+					t.Errorf("expected body to contain %q, but it didn't", expected)
+				}
+			}
+		})
+	}
+}
+
+func TestHandleAddUser(t *testing.T) {
+	ts := createTestSetup(t)
+	defer ts.DB.Close()
+
+	tests := []struct {
+		name           string
+		method         string
+		formData       map[string]string
+		expectStatus   int
+		expectRedirect string
+		expectContains []string
+	}{
+		{
+			name:         "GET shows add user form",
+			method:       http.MethodGet,
+			expectStatus: http.StatusOK,
+			expectContains: []string{
+				"Add New User",
+				"Username:",
+				"Password:",
+				"Role:",
+			},
+		},
+		{
+			name:   "POST creates new user successfully",
+			method: http.MethodPost,
+			formData: map[string]string{
+				"username": "newuser",
+				"password": "newpassword123",
+				"role":     "viewer",
+				"enabled":  "on",
+			},
+			expectStatus:   http.StatusSeeOther,
+			expectRedirect: "/users?message=User+created+successfully",
+		},
+		{
+			name:   "POST rejects missing username",
+			method: http.MethodPost,
+			formData: map[string]string{
+				"password": "pass123",
+				"role":     "viewer",
+			},
+			expectStatus:   http.StatusSeeOther,
+			expectRedirect: "/users/add?error=All+fields+are+required",
+		},
+		{
+			name:   "POST rejects missing password",
+			method: http.MethodPost,
+			formData: map[string]string{
+				"username": "newuser2",
+				"role":     "viewer",
+			},
+			expectStatus:   http.StatusSeeOther,
+			expectRedirect: "/users/add?error=All+fields+are+required",
+		},
+		{
+			name:   "POST rejects duplicate username",
+			method: http.MethodPost,
+			formData: map[string]string{
+				"username": "admin", // Already exists from setup
+				"password": "password123",
+				"role":     "viewer",
+			},
+			expectStatus:   http.StatusSeeOther,
+			expectRedirect: "/users/add?error=Username+already+exists",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var req *http.Request
+			if tt.method == http.MethodPost {
+				form := url.Values{}
+				for k, v := range tt.formData {
+					form.Set(k, v)
+				}
+				req = httptest.NewRequest(tt.method, "/users/add", strings.NewReader(form.Encode()))
+				req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			} else {
+				req = httptest.NewRequest(tt.method, "/users/add", nil)
+			}
+			req.AddCookie(&http.Cookie{Name: "session_token", Value: ts.Session.Token})
+
+			rec := httptest.NewRecorder()
+			ts.Handler.ServeHTTP(rec, req)
+
+			if rec.Code != tt.expectStatus {
+				t.Errorf("expected status %d, got %d", tt.expectStatus, rec.Code)
+			}
+
+			if tt.expectRedirect != "" {
+				location := rec.Header().Get("Location")
+				if location != tt.expectRedirect {
+					t.Errorf("expected redirect to %q, got %q", tt.expectRedirect, location)
+				}
+			}
+
+			if len(tt.expectContains) > 0 {
+				body := rec.Body.String()
+				for _, expected := range tt.expectContains {
+					if !strings.Contains(body, expected) {
+						t.Errorf("expected body to contain %q", expected)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestHandleEditUser(t *testing.T) {
+	ts := createTestSetup(t)
+	defer ts.DB.Close()
+
+	// Create a test user to edit
+	editUser := &models.User{
+		ID:           "edit-user-1",
+		Username:     "editme",
+		PasswordHash: "oldhash",
+		Role:         "viewer",
+		Enabled:      true,
+	}
+	_ = ts.DB.CreateUser(context.Background(), editUser)
+
+	tests := []struct {
+		name           string
+		method         string
+		userID         string
+		formData       map[string]string
+		expectStatus   int
+		expectRedirect string
+		expectContains []string
+	}{
+		{
+			name:         "GET shows edit user form",
+			method:       http.MethodGet,
+			userID:       editUser.ID,
+			expectStatus: http.StatusOK,
+			expectContains: []string{
+				"Edit User",
+				editUser.Username,
+			},
+		},
+		{
+			name:           "GET with missing user ID redirects",
+			method:         http.MethodGet,
+			userID:         "",
+			expectStatus:   http.StatusSeeOther,
+			expectRedirect: "/users?error=Missing+user+ID",
+		},
+		{
+			name:   "POST updates user successfully",
+			method: http.MethodPost,
+			userID: editUser.ID,
+			formData: map[string]string{
+				"role":    "operator",
+				"enabled": "on",
+			},
+			expectStatus:   http.StatusSeeOther,
+			expectRedirect: "/users?message=User+updated+successfully",
+		},
+		{
+			name:   "POST updates user password",
+			method: http.MethodPost,
+			userID: editUser.ID,
+			formData: map[string]string{
+				"password": "newpassword123",
+				"role":     "viewer",
+			},
+			expectStatus:   http.StatusSeeOther,
+			expectRedirect: "/users?message=User+updated+successfully",
+		},
+		{
+			name:           "POST with invalid user ID redirects",
+			method:         http.MethodPost,
+			userID:         "nonexistent",
+			formData:       map[string]string{"role": "viewer"},
+			expectStatus:   http.StatusSeeOther,
+			expectRedirect: "/users?error=User+not+found",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reqURL := "/users/edit"
+			if tt.userID != "" {
+				reqURL += "?id=" + tt.userID
+			}
+
+			var req *http.Request
+			if tt.method == http.MethodPost {
+				form := url.Values{}
+				for k, v := range tt.formData {
+					form.Set(k, v)
+				}
+				req = httptest.NewRequest(tt.method, reqURL, strings.NewReader(form.Encode()))
+				req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			} else {
+				req = httptest.NewRequest(tt.method, reqURL, nil)
+			}
+			req.AddCookie(&http.Cookie{Name: "session_token", Value: ts.Session.Token})
+
+			rec := httptest.NewRecorder()
+			ts.Handler.ServeHTTP(rec, req)
+
+			if rec.Code != tt.expectStatus {
+				t.Errorf("expected status %d, got %d", tt.expectStatus, rec.Code)
+			}
+
+			if tt.expectRedirect != "" {
+				location := rec.Header().Get("Location")
+				if location != tt.expectRedirect {
+					t.Errorf("expected redirect to %q, got %q", tt.expectRedirect, location)
+				}
+			}
+
+			if len(tt.expectContains) > 0 {
+				body := rec.Body.String()
+				for _, expected := range tt.expectContains {
+					if !strings.Contains(body, expected) {
+						t.Errorf("expected body to contain %q", expected)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestHandleDeleteUser(t *testing.T) {
+	ts := createTestSetup(t)
+	defer ts.DB.Close()
+
+	// Create a test user to delete
+	deleteUser := &models.User{
+		ID:           "delete-user-1",
+		Username:     "deleteme",
+		PasswordHash: "hash",
+		Role:         "viewer",
+		Enabled:      true,
+	}
+	_ = ts.DB.CreateUser(context.Background(), deleteUser)
+
+	tests := []struct {
+		name           string
+		userID         string
+		expectStatus   int
+		expectRedirect string
+	}{
+		{
+			name:           "DELETE user successfully",
+			userID:         deleteUser.ID,
+			expectStatus:   http.StatusSeeOther,
+			expectRedirect: "/users?message=User+deleted+successfully",
+		},
+		{
+			name:           "DELETE with missing user ID redirects",
+			userID:         "",
+			expectStatus:   http.StatusSeeOther,
+			expectRedirect: "/users?error=Missing+user+ID",
+		},
+		{
+			name:           "DELETE nonexistent user redirects",
+			userID:         "nonexistent",
+			expectStatus:   http.StatusSeeOther,
+			expectRedirect: "/users?error=User+not+found",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reqURL := "/users/delete"
+			if tt.userID != "" {
+				reqURL += "?id=" + tt.userID
+			}
+
+			req := httptest.NewRequest(http.MethodGet, reqURL, nil)
+			req.AddCookie(&http.Cookie{Name: "session_token", Value: ts.Session.Token})
+
+			rec := httptest.NewRecorder()
+			ts.Handler.ServeHTTP(rec, req)
+
+			if rec.Code != tt.expectStatus {
+				t.Errorf("expected status %d, got %d", tt.expectStatus, rec.Code)
+			}
+
+			if tt.expectRedirect != "" {
+				location := rec.Header().Get("Location")
+				if location != tt.expectRedirect {
+					t.Errorf("expected redirect to %q, got %q", tt.expectRedirect, location)
+				}
+			}
+		})
+	}
+
+	// Verify the user was actually deleted
+	deletedUser, err := ts.DB.GetUser(context.Background(), deleteUser.ID)
+	if err == nil && deletedUser != nil {
+		t.Error("expected user to be deleted, but it still exists")
+	}
+}
