@@ -187,3 +187,243 @@ func goldenPlaceholder(jobID string, recipe []byte, a iso.Assets) []byte {
 
 	return b.Bytes()
 }
+
+// TestFileBuilder_ErrorPaths validates error handling for invalid inputs.
+func TestFileBuilder_ErrorPaths(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	builder := iso.NewFileBuilder(root)
+	ctx := context.Background()
+	validRecipe := []byte(`{"task_target":"install-linux.target"}`)
+	validAssets := iso.Assets{}
+
+	// Empty jobID
+	_, err := builder.BuildTaskISO(ctx, "", validRecipe, validAssets)
+	if err == nil || !bytes.Contains([]byte(err.Error()), []byte("invalid jobID")) {
+		t.Fatalf("expected invalid jobID error, got %v", err)
+	}
+
+	// Invalid jobID format (not UUID-like)
+	_, err = builder.BuildTaskISO(ctx, "invalid-id!", validRecipe, validAssets)
+	if err == nil || !bytes.Contains([]byte(err.Error()), []byte("invalid jobID")) {
+		t.Fatalf("expected invalid jobID error, got %v", err)
+	}
+
+	// Empty recipe
+	_, err = builder.BuildTaskISO(ctx, "job-0001", []byte{}, validAssets)
+	if err == nil || !bytes.Contains([]byte(err.Error()), []byte("recipe is required")) {
+		t.Fatalf("expected recipe required error, got %v", err)
+	}
+
+	// Null recipe
+	_, err = builder.BuildTaskISO(ctx, "job-0002", []byte("null"), validAssets)
+	if err == nil || !bytes.Contains([]byte(err.Error()), []byte("recipe is required")) {
+		t.Fatalf("expected recipe required error for null, got %v", err)
+	}
+
+	// Canceled context
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = builder.BuildTaskISO(canceledCtx, "job-0003", validRecipe, validAssets)
+	if err == nil || err != context.Canceled {
+		t.Fatalf("expected context.Canceled error, got %v", err)
+	}
+
+	// Empty root directory
+	emptyBuilder := iso.NewFileBuilder("")
+	_, err = emptyBuilder.BuildTaskISO(ctx, "job-0004", validRecipe, validAssets)
+	if err == nil || !bytes.Contains([]byte(err.Error()), []byte("root directory is empty")) {
+		t.Fatalf("expected empty root error, got %v", err)
+	}
+}
+
+// TestFileBuilder_MinimalAssets validates builds with minimal assets.
+func TestFileBuilder_MinimalAssets(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	builder := iso.NewFileBuilder(root)
+	ctx := context.Background()
+
+	jobID := "job-minimal"
+	recipe := []byte(`{"task_target":"install-linux.target"}`)
+	// No optional assets
+	assets := iso.Assets{}
+
+	res, err := builder.BuildTaskISO(ctx, jobID, recipe, assets)
+	if err != nil {
+		t.Fatalf("BuildTaskISO with minimal assets failed: %v", err)
+	}
+
+	// Verify output exists and is valid
+	content, err := os.ReadFile(res.Path)
+	if err != nil {
+		t.Fatalf("read task.iso: %v", err)
+	}
+
+	// Should contain only recipe in placeholder
+	if !bytes.Contains(content, []byte("recipe.json")) {
+		t.Fatal("expected recipe.json in placeholder")
+	}
+	// Should NOT contain optional assets
+	if bytes.Contains(content, []byte("user-data")) {
+		t.Fatal("unexpected user-data in minimal placeholder")
+	}
+	if bytes.Contains(content, []byte("unattend.xml")) {
+		t.Fatal("unexpected unattend.xml in minimal placeholder")
+	}
+	if bytes.Contains(content, []byte("ks.cfg")) {
+		t.Fatal("unexpected ks.cfg in minimal placeholder")
+	}
+}
+
+// TestFileBuilder_AllAssets validates builds with all optional assets populated.
+func TestFileBuilder_AllAssets(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	builder := iso.NewFileBuilder(root)
+	ctx := context.Background()
+
+	jobID := "job-full"
+	recipe := []byte(`{"task_target":"install-windows.target"}`)
+	assets := iso.Assets{
+		RecipeSchema: []byte(`{"$id":"https://example.com/recipe.schema.json","type":"object"}`),
+		UserData:     []byte("#cloud-config\nhostname: full-test\n"),
+		UnattendXML:  []byte("<unattend version=\"1.0\"><settings/></unattend>"),
+		Kickstart:    []byte("lang en_US\nkeyboard us\n"),
+	}
+
+	res, err := builder.BuildTaskISO(ctx, jobID, recipe, assets)
+	if err != nil {
+		t.Fatalf("BuildTaskISO with all assets failed: %v", err)
+	}
+
+	// Verify output contains all assets
+	content, err := os.ReadFile(res.Path)
+	if err != nil {
+		t.Fatalf("read task.iso: %v", err)
+	}
+
+	required := []string{"recipe.json", "recipe.schema.json", "user-data", "unattend.xml", "ks.cfg"}
+	for _, asset := range required {
+		if !bytes.Contains(content, []byte(asset)) {
+			t.Fatalf("expected %s in full placeholder", asset)
+		}
+	}
+
+	// Verify auxiliary files were written to job directory
+	jobDir := filepath.Join(root, jobID)
+	for _, file := range []string{"recipe.json", "recipe.schema.json", "user-data", "unattend.xml", "ks.cfg"} {
+		path := filepath.Join(jobDir, file)
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("expected auxiliary file %s, got error: %v", file, err)
+		}
+	}
+}
+
+// TestFileBuilder_DeterminismWithSourceDateEpoch validates SOURCE_DATE_EPOCH handling.
+// Note: The current FileBuilder implementation is already deterministic (no timestamps).
+// This test documents that behavior and ensures it remains stable.
+func TestFileBuilder_DeterminismWithSourceDateEpoch(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	builder := iso.NewFileBuilder(root)
+	ctx := context.Background()
+
+	jobID := "job-epoch"
+	recipe := []byte(`{"task_target":"install-linux.target","target_disk":"/dev/sda"}`)
+	assets := iso.Assets{
+		UserData: []byte("#cloud-config\nhostname: epoch-test\n"),
+	}
+
+	// Set SOURCE_DATE_EPOCH environment variable for reproducibility
+	oldEnv := os.Getenv("SOURCE_DATE_EPOCH")
+	os.Setenv("SOURCE_DATE_EPOCH", "1609459200") // 2021-01-01 00:00:00 UTC
+	defer func() {
+		if oldEnv != "" {
+			os.Setenv("SOURCE_DATE_EPOCH", oldEnv)
+		} else {
+			os.Unsetenv("SOURCE_DATE_EPOCH")
+		}
+	}()
+
+	// Build #1
+	res1, err := builder.BuildTaskISO(ctx, jobID, recipe, assets)
+	if err != nil {
+		t.Fatalf("BuildTaskISO (1) failed: %v", err)
+	}
+	content1, err := os.ReadFile(res1.Path)
+	if err != nil {
+		t.Fatalf("read task.iso (1): %v", err)
+	}
+	hash1 := res1.SHA256
+
+	// Remove the ISO to force rebuild
+	if err := os.Remove(res1.Path); err != nil {
+		t.Fatalf("remove task.iso: %v", err)
+	}
+
+	// Build #2 with same SOURCE_DATE_EPOCH
+	res2, err := builder.BuildTaskISO(ctx, jobID, recipe, assets)
+	if err != nil {
+		t.Fatalf("BuildTaskISO (2) failed: %v", err)
+	}
+	content2, err := os.ReadFile(res2.Path)
+	if err != nil {
+		t.Fatalf("read task.iso (2): %v", err)
+	}
+	hash2 := res2.SHA256
+
+	// Verify deterministic output
+	if !bytes.Equal(content1, content2) {
+		t.Fatal("content changed between builds with same SOURCE_DATE_EPOCH")
+	}
+	if hash1 != hash2 {
+		t.Fatalf("SHA changed between builds with same SOURCE_DATE_EPOCH: %s vs %s", hash1, hash2)
+	}
+}
+
+// TestFileBuilder_ConcurrentBuilds validates thread safety for concurrent builds.
+func TestFileBuilder_ConcurrentBuilds(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	builder := iso.NewFileBuilder(root)
+	ctx := context.Background()
+
+	recipe := []byte(`{"task_target":"install-linux.target"}`)
+	assets := iso.Assets{
+		UserData: []byte("#cloud-config\nhostname: concurrent\n"),
+	}
+
+	// Build multiple ISOs concurrently
+	const numJobs = 10
+	type result struct {
+		jobID string
+		res   *iso.Result
+		err   error
+	}
+	results := make(chan result, numJobs)
+
+	for i := 0; i < numJobs; i++ {
+		jobID := fmt.Sprintf("job-concurrent-%02d", i)
+		go func(id string) {
+			res, err := builder.BuildTaskISO(ctx, id, recipe, assets)
+			results <- result{jobID: id, res: res, err: err}
+		}(jobID)
+	}
+
+	// Collect results
+	for i := 0; i < numJobs; i++ {
+		r := <-results
+		if r.err != nil {
+			t.Errorf("concurrent build %s failed: %v", r.jobID, r.err)
+		}
+		if r.res == nil {
+			t.Errorf("concurrent build %s returned nil result", r.jobID)
+		}
+	}
+}
