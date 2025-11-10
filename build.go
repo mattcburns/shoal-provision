@@ -547,7 +547,7 @@ func (br *BuildRunner) InstallTools() bool {
 		{
 			name:    "golangci-lint",
 			pkg:     "github.com/golangci/golangci-lint/cmd/golangci-lint",
-			version: "latest",
+			version: "v2.6.1", // v2.x required for .golangci.yml version: 2
 			check:   []string{"golangci-lint", "--version"},
 		},
 		{
