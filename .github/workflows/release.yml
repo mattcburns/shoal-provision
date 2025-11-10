@@ -58,17 +58,9 @@ jobs:
           echo "🏗️ Building binaries for all supported platforms..."
           go run build.go build-all
 
-          # Also build dispatcher binaries
+          # Build dispatcher binaries using centralized build command
           echo "🏗️ Building dispatcher binaries..."
-          cd cmd/provisioner-dispatcher
-
-          # Linux amd64
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o ../../build/dispatcher-linux-amd64 .
-
-          # Linux arm64
-          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o ../../build/dispatcher-linux-arm64 .
-
-          cd ../..
+          go run build.go build-dispatcher
 
           echo "artifact_path=build" >> $GITHUB_OUTPUT
 
@@ -159,7 +151,7 @@ jobs:
           | macOS | ARM64 | \`shoal-darwin-arm64\` |
           | Windows | x86_64 | \`shoal-windows-amd64.exe\` |
 
-          ### � Dispatcher Binaries
+          ### 🛰️ Dispatcher Binaries
 
           Static binaries for the provisioner dispatcher (used inside maintenance OS):
 
@@ -175,7 +167,7 @@ jobs:
           - **CycloneDX JSON**: \`shoal-sbom.cyclonedx.json\`
           - **Text summary**: \`shoal-sbom.txt\`
 
-          ###  Security
+          ### 🔐 Security
 
           - **SHA256 Checksums**: All binaries include SHA256 checksums in \`SHA256SUMS\`
           - **Digital Signatures**: Checksums are signed with cosign (keyless OIDC) - see \`SHA256SUMS.sig\` and \`SHA256SUMS.pem\`
