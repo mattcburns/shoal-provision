@@ -33,7 +33,19 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.25'  # Updated to match project requirements
+          go-version: '1.23'  # Updated to match project requirements
+          cache: true
+
+      - name: Install build tools
+        run: |
+          echo "📦 Installing build and security tools..."
+          go run build.go install-tools
+          
+          # Install SBOM generation tool
+          go install github.com/anchore/syft/cmd/syft@latest
+          
+          # Install signing tool (cosign)
+          go install github.com/sigstore/cosign/v2/cmd/cosign@latest
 
       - name: Validate code quality
         run: |
@@ -45,15 +57,64 @@ jobs:
         run: |
           echo "🏗️ Building binaries for all supported platforms..."
           go run build.go build-all
+          
+          # Also build dispatcher binaries
+          echo "🏗️ Building dispatcher binaries..."
+          cd cmd/provisioner-dispatcher
+          
+          # Linux amd64
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o ../../build/dispatcher-linux-amd64 .
+          
+          # Linux arm64
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o ../../build/dispatcher-linux-arm64 .
+          
+          cd ../..
+          
           echo "artifact_path=build" >> $GITHUB_OUTPUT
+          
+          echo "✅ All binaries built"
+          ls -lh build/
+
+      - name: Generate SBOMs
+        run: |
+          echo "📋 Generating Software Bill of Materials (SBOMs)..."
+          
+          # Generate SBOM for the Go project
+          $HOME/go/bin/syft . -o spdx-json=build/shoal-sbom.spdx.json
+          $HOME/go/bin/syft . -o cyclonedx-json=build/shoal-sbom.cyclonedx.json
+          
+          # Generate text summary for easy viewing
+          $HOME/go/bin/syft . -o table=build/shoal-sbom.txt
+          
+          echo "✅ SBOMs generated"
+          ls -lh build/*.json build/*.txt
 
       - name: Generate checksums
         run: |
           cd build
           echo "📋 Generating SHA256 checksums..."
-          sha256sum shoal-* > SHA256SUMS
+          sha256sum shoal-* dispatcher-* *.json *.txt > SHA256SUMS 2>/dev/null || sha256sum shoal-* dispatcher-* > SHA256SUMS
           echo "Generated checksums:"
           cat SHA256SUMS
+
+      - name: Sign artifacts
+        if: github.event_name == 'push'  # Only sign on actual tag pushes, not manual dispatch
+        env:
+          COSIGN_EXPERIMENTAL: "true"
+        run: |
+          echo "🔐 Signing release artifacts..."
+          
+          cd build
+          
+          # Sign checksums file with cosign (keyless signing using OIDC)
+          $HOME/go/bin/cosign sign-blob \
+            --yes \
+            --output-signature SHA256SUMS.sig \
+            --output-certificate SHA256SUMS.pem \
+            SHA256SUMS
+          
+          echo "✅ Artifacts signed"
+          ls -lh *.sig *.pem
 
       - name: Determine release type
         id: release-type
@@ -98,10 +159,28 @@ jobs:
           | macOS | ARM64 | \`shoal-darwin-arm64\` |
           | Windows | x86_64 | \`shoal-windows-amd64.exe\` |
 
-          ### 🔐 Security
+          ### � Dispatcher Binaries
+
+          Static binaries for the provisioner dispatcher (used inside maintenance OS):
+
+          | Platform | Architecture | Binary |
+          |----------|--------------|--------|
+          | Linux | x86_64 | \`dispatcher-linux-amd64\` |
+          | Linux | ARM64 | \`dispatcher-linux-arm64\` |
+
+          ### 📋 Software Bill of Materials (SBOM)
+
+          This release includes SBOMs in multiple formats:
+          - **SPDX JSON**: \`shoal-sbom.spdx.json\`
+          - **CycloneDX JSON**: \`shoal-sbom.cyclonedx.json\`
+          - **Text summary**: \`shoal-sbom.txt\`
+
+          ###  Security
 
           - **SHA256 Checksums**: All binaries include SHA256 checksums in \`SHA256SUMS\`
+          - **Digital Signatures**: Checksums are signed with cosign (keyless OIDC) - see \`SHA256SUMS.sig\` and \`SHA256SUMS.pem\`
           - **Verify downloads**: \`sha256sum -c SHA256SUMS\` (Linux/macOS) or check manually
+          - **Verify signature**: \`cosign verify-blob --certificate SHA256SUMS.pem --signature SHA256SUMS.sig SHA256SUMS\`
 
           ### 🚀 Installation
 
@@ -132,7 +211,13 @@ jobs:
           prerelease: ${{ steps.release-type.outputs.prerelease }}
           files: |
             build/shoal-*
+            build/dispatcher-*
             build/SHA256SUMS
+            build/SHA256SUMS.sig
+            build/SHA256SUMS.pem
+            build/*.spdx.json
+            build/*.cyclonedx.json
+            build/*.txt
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Release Summary

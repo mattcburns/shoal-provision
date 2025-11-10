@@ -23,6 +23,7 @@ Usage:
     go run build.go                    # Run full build and test pipeline
     go run build.go test              # Run tests only
     go run build.go build             # Build binary only
+    go run build.go build-dispatcher  # Build dispatcher binaries
     go run build.go clean             # Clean build artifacts
     go run build.go fmt               # Format Go code
     go run build.go lint              # Run linting (if available)
@@ -470,6 +471,64 @@ func (br *BuildRunner) BuildAllPlatforms() bool {
 	return allOk
 }
 
+// BuildDispatcher builds the provisioner dispatcher binary (static)
+func (br *BuildRunner) BuildDispatcher() bool {
+	br.printHeader("Building Provisioner Dispatcher")
+
+	dispatcherPath := filepath.Join(br.rootDir, "cmd", "provisioner-dispatcher")
+	if _, err := os.Stat(dispatcherPath); os.IsNotExist(err) {
+		br.printWarning("Dispatcher source not found - skipping")
+		return true // Not a hard failure
+	}
+
+	platforms := []SupportedPlatform{
+		{"linux", "amd64"},
+		{"linux", "arm64"},
+	}
+
+	allOk := true
+	for _, platform := range platforms {
+		binaryName := fmt.Sprintf("dispatcher-%s-%s", platform.GOOS, platform.GOARCH)
+		binaryPath := filepath.Join(br.buildDir, binaryName)
+
+		br.printStep(fmt.Sprintf("Building dispatcher for %s/%s", platform.GOOS, platform.GOARCH))
+
+		// Build static binary with minimal size
+		cmd := exec.Command("go", "build", "-ldflags=-s -w", "-o", binaryPath, ".")
+		cmd.Dir = dispatcherPath
+		cmd.Env = append(os.Environ(),
+			"CGO_ENABLED=0",
+			fmt.Sprintf("GOOS=%s", platform.GOOS),
+			fmt.Sprintf("GOARCH=%s", platform.GOARCH),
+		)
+
+		var stderr bytes.Buffer
+		cmd.Stderr = &stderr
+
+		if err := cmd.Run(); err != nil {
+			br.printError(fmt.Sprintf("Failed to build dispatcher for %s/%s: %v", platform.GOOS, platform.GOARCH, err))
+			if stderr.Len() > 0 {
+				fmt.Printf("STDERR:\n%s\n", stderr.String())
+			}
+			allOk = false
+			continue
+		}
+
+		// Verify binary was created
+		info, err := os.Stat(binaryPath)
+		if err != nil {
+			br.printError(fmt.Sprintf("Failed to build dispatcher for %s/%s", platform.GOOS, platform.GOARCH))
+			allOk = false
+			continue
+		}
+
+		sizeMB := float64(info.Size()) / (1024 * 1024)
+		br.printSuccess(fmt.Sprintf("Built: %s (%.1f MB)", binaryPath, sizeMB))
+	}
+
+	return allOk
+}
+
 // InstallTools installs development tools (golangci-lint and gosec)
 func (br *BuildRunner) InstallTools() bool {
 	br.printHeader("Installing Development Tools")
@@ -743,21 +802,22 @@ func main() {
 
 	// Validate command
 	validCommands := map[string]bool{
-		"build":         true,
-		"test":          true,
-		"clean":         true,
-		"fmt":           true,
-		"lint":          true,
-		"coverage":      true,
-		"deps":          true,
-		"validate":      true,
-		"build-all":     true,
-		"install-tools": true,
+		"build":            true,
+		"build-dispatcher": true,
+		"test":             true,
+		"clean":            true,
+		"fmt":              true,
+		"lint":             true,
+		"coverage":         true,
+		"deps":             true,
+		"validate":         true,
+		"build-all":        true,
+		"install-tools":    true,
 	}
 
 	if !validCommands[command] {
 		fmt.Fprintf(os.Stderr, "Invalid command: %s\n", command)
-		fmt.Fprintf(os.Stderr, "Valid commands: build, test, clean, fmt, lint, coverage, deps, validate, build-all, install-tools\n")
+		fmt.Fprintf(os.Stderr, "Valid commands: build, build-dispatcher, test, clean, fmt, lint, coverage, deps, validate, build-all, install-tools\n")
 		os.Exit(1)
 	}
 
@@ -815,6 +875,11 @@ func main() {
 		success = runner.CheckPrerequisites() &&
 			runner.DownloadDependencies() &&
 			runner.BuildAllPlatforms()
+
+	case "build-dispatcher":
+		success = runner.CheckPrerequisites() &&
+			runner.DownloadDependencies() &&
+			runner.BuildDispatcher()
 
 	case "install-tools":
 		success = runner.CheckPrerequisites() && runner.InstallTools()
