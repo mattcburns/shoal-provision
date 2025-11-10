@@ -34,7 +34,7 @@ Per design 035:
 - pkg/crypto: 90.1% ✅
 
 **After Initial Expansion:**
-- Global coverage: TBD (in progress)
+- Global coverage: 59.2%
 - internal/provisioner/api: 81.7% ⚠️ (improved, but still needs 90% as critical package)
 - internal/provisioner/jobs: 67.8% ❌ (no change yet)
 - internal/provisioner/iso: 80.2% ⚠️ (needs 90%)
