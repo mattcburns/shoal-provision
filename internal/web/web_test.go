@@ -1341,3 +1341,352 @@ func TestHandleDeleteUser(t *testing.T) {
 		t.Error("expected user to be deleted, but it still exists")
 	}
 }
+
+func TestHandlePowerControl(t *testing.T) {
+	ts := createTestSetup(t)
+	defer ts.DB.Close()
+
+	// Create a test BMC
+	testBMC := &models.BMC{
+		Name:     "test-bmc-power",
+		Address:  "https://192.0.2.1",
+		Username: "admin",
+		Password: "secret",
+		Enabled:  true,
+	}
+	if err := ts.DB.CreateBMC(context.Background(), testBMC); err != nil {
+		t.Fatalf("Failed to create test BMC: %v", err)
+	}
+
+	tests := []struct {
+		name           string
+		bmcID          string
+		action         string
+		expectStatus   int
+		expectRedirect string
+	}{
+		{
+			name:           "missing parameters",
+			bmcID:          "",
+			action:         "",
+			expectStatus:   http.StatusSeeOther,
+			expectRedirect: "/bmcs?error=Missing+parameters",
+		},
+		{
+			name:           "invalid BMC ID",
+			bmcID:          "invalid",
+			action:         "On",
+			expectStatus:   http.StatusSeeOther,
+			expectRedirect: "/bmcs?error=Invalid+BMC+ID",
+		},
+		{
+			name:           "BMC not found",
+			bmcID:          "999999",
+			action:         "On",
+			expectStatus:   http.StatusSeeOther,
+			expectRedirect: "/bmcs?error=BMC+not+found",
+		},
+		// Note: Power control test that actually calls BMC service would timeout
+		// We've tested the validation logic above
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reqURL := "/bmcs/power?id=" + tt.bmcID + "&action=" + tt.action
+			req := httptest.NewRequest(http.MethodGet, reqURL, nil)
+			req.AddCookie(&http.Cookie{Name: "session_token", Value: ts.Session.Token})
+
+			rec := httptest.NewRecorder()
+			ts.Handler.ServeHTTP(rec, req)
+
+			if rec.Code != tt.expectStatus {
+				t.Errorf("expected status %d, got %d", tt.expectStatus, rec.Code)
+			}
+
+			if tt.expectRedirect != "" {
+				location := rec.Header().Get("Location")
+				if location != tt.expectRedirect {
+					t.Errorf("expected redirect to %q, got %q", tt.expectRedirect, location)
+				}
+			}
+		})
+	}
+}
+
+func TestHandleTestConnection(t *testing.T) {
+	ts := createTestSetup(t)
+	defer ts.DB.Close()
+
+	tests := []struct {
+		name         string
+		method       string
+		body         string
+		expectStatus int
+		expectJSON   map[string]interface{}
+	}{
+		{
+			name:         "rejects non-POST requests",
+			method:       http.MethodGet,
+			expectStatus: http.StatusMethodNotAllowed,
+		},
+		{
+			name:         "rejects invalid JSON",
+			method:       http.MethodPost,
+			body:         "invalid json",
+			expectStatus: http.StatusOK,
+			expectJSON: map[string]interface{}{
+				"success": false,
+				"message": "Invalid request format",
+			},
+		},
+		{
+			name:         "rejects empty address",
+			method:       http.MethodPost,
+			body:         `{"address":""}`,
+			expectStatus: http.StatusOK,
+			expectJSON: map[string]interface{}{
+				"success": false,
+				"message": "BMC address is required",
+			},
+		},
+		// Note: Test with invalid address would timeout trying to connect
+		// We've tested the validation logic above
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var req *http.Request
+			if tt.body != "" {
+				req = httptest.NewRequest(tt.method, "/api/bmcs/test-connection", strings.NewReader(tt.body))
+				req.Header.Set("Content-Type", "application/json")
+			} else {
+				req = httptest.NewRequest(tt.method, "/api/bmcs/test-connection", nil)
+			}
+			req.AddCookie(&http.Cookie{Name: "session_token", Value: ts.Session.Token})
+
+			rec := httptest.NewRecorder()
+			ts.Handler.ServeHTTP(rec, req)
+
+			if rec.Code != tt.expectStatus {
+				t.Errorf("expected status %d, got %d", tt.expectStatus, rec.Code)
+			}
+
+			if tt.expectJSON != nil && rec.Code == http.StatusOK {
+				var response map[string]interface{}
+				if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+					t.Fatalf("failed to parse JSON response: %v", err)
+				}
+
+				for key, expectedValue := range tt.expectJSON {
+					if actualValue, ok := response[key]; ok {
+						if expectedValue != nil && actualValue != expectedValue {
+							t.Errorf("expected %s to be %v, got %v", key, expectedValue, actualValue)
+						}
+					} else {
+						t.Errorf("expected response to contain key %q", key)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestHandleBMCSettingsAPI(t *testing.T) {
+	ts := createTestSetup(t)
+	defer ts.DB.Close()
+
+	// Create a test BMC
+	testBMC := &models.BMC{
+		Name:     "test-bmc-settings",
+		Address:  "https://192.0.2.2",
+		Username: "admin",
+		Password: "secret",
+		Enabled:  true,
+	}
+	if err := ts.DB.CreateBMC(context.Background(), testBMC); err != nil {
+		t.Fatalf("Failed to create test BMC: %v", err)
+	}
+
+	tests := []struct {
+		name           string
+		method         string
+		queryParams    string
+		expectStatus   int
+		expectContains string
+	}{
+		{
+			name:         "rejects non-GET requests",
+			method:       http.MethodPost,
+			queryParams:  "?name=test-bmc-settings",
+			expectStatus: http.StatusMethodNotAllowed,
+		},
+		{
+			name:           "rejects missing BMC name",
+			method:         http.MethodGet,
+			queryParams:    "",
+			expectStatus:   http.StatusBadRequest,
+			expectContains: "BMC name is required",
+		},
+		// Note: Test with actual BMC would timeout trying to discover settings
+		// We've tested the validation logic above
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(tt.method, "/api/bmcs/settings"+tt.queryParams, nil)
+			req.AddCookie(&http.Cookie{Name: "session_token", Value: ts.Session.Token})
+
+			rec := httptest.NewRecorder()
+			ts.Handler.ServeHTTP(rec, req)
+
+			if rec.Code != tt.expectStatus {
+				t.Errorf("expected status %d, got %d", tt.expectStatus, rec.Code)
+			}
+
+			if tt.expectContains != "" {
+				body := rec.Body.String()
+				if !strings.Contains(body, tt.expectContains) {
+					t.Errorf("expected body to contain %q, got %q", tt.expectContains, body)
+				}
+			}
+		})
+	}
+}
+
+func TestHandleUpdateSetting(t *testing.T) {
+	ts := createTestSetup(t)
+	defer ts.DB.Close()
+
+	// Create a test BMC
+	testBMC := &models.BMC{
+		Name:     "test-bmc-update",
+		Address:  "https://192.0.2.3",
+		Username: "admin",
+		Password: "secret",
+		Enabled:  true,
+	}
+	if err := ts.DB.CreateBMC(context.Background(), testBMC); err != nil {
+		t.Fatalf("Failed to create test BMC: %v", err)
+	}
+
+	// Create a test setting descriptor for Boot.BootOrder
+	bootOrderDesc := &models.SettingDescriptor{
+		ID:           "boot-order-desc-1",
+		BMCName:      testBMC.Name,
+		ResourcePath: "/redfish/v1/Systems/1",
+		Attribute:    "Boot.BootOrder",
+		DisplayName:  "Boot Order",
+		Description:  "Boot device order",
+		Type:         "array",
+		ReadOnly:     false,
+		OEM:          false,
+	}
+	if err := ts.DB.UpsertSettingDescriptors(context.Background(), testBMC.Name, []models.SettingDescriptor{*bootOrderDesc}); err != nil {
+		t.Fatalf("Failed to create boot order descriptor: %v", err)
+	}
+
+	// Create a non-boot-order setting descriptor
+	otherDesc := &models.SettingDescriptor{
+		ID:           "bios-mode-desc-1",
+		BMCName:      testBMC.Name,
+		ResourcePath: "/redfish/v1/Systems/1/Bios",
+		Attribute:    "BiosMode",
+		DisplayName:  "BIOS Mode",
+		Description:  "BIOS boot mode",
+		Type:         "string",
+		ReadOnly:     false,
+		OEM:          false,
+	}
+	if err := ts.DB.UpsertSettingDescriptors(context.Background(), testBMC.Name, []models.SettingDescriptor{*otherDesc}); err != nil {
+		t.Fatalf("Failed to create other descriptor: %v", err)
+	}
+
+	// Create viewer user (non-operator)
+	viewerUser := &models.User{
+		ID:           "viewer-user",
+		Username:     "viewer",
+		PasswordHash: "hash",
+		Role:         "viewer",
+		Enabled:      true,
+	}
+	_ = ts.DB.CreateUser(context.Background(), viewerUser)
+	viewerSession := &models.Session{
+		ID:        "viewer-session",
+		Token:     "viewer-token",
+		UserID:    viewerUser.ID,
+		ExpiresAt: time.Now().Add(24 * time.Hour),
+	}
+	_ = ts.DB.CreateSession(context.Background(), viewerSession)
+
+	tests := []struct {
+		name           string
+		bmcName        string
+		descriptorID   string
+		body           string
+		sessionToken   string
+		expectStatus   int
+		expectContains string
+	}{
+		{
+			name:           "rejects non-operator user",
+			bmcName:        testBMC.Name,
+			descriptorID:   bootOrderDesc.ID,
+			body:           `{"value":["Pxe","Hdd"]}`,
+			sessionToken:   viewerSession.Token,
+			expectStatus:   http.StatusForbidden,
+			expectContains: "operator privileges required",
+		},
+		{
+			name:           "rejects invalid JSON",
+			bmcName:        testBMC.Name,
+			descriptorID:   bootOrderDesc.ID,
+			body:           "invalid json",
+			sessionToken:   ts.Session.Token,
+			expectStatus:   http.StatusBadRequest,
+			expectContains: "invalid request body",
+		},
+		{
+			name:           "rejects nonexistent descriptor",
+			bmcName:        testBMC.Name,
+			descriptorID:   "nonexistent-descriptor-id",
+			body:           `{"value":["Pxe"]}`,
+			sessionToken:   ts.Session.Token,
+			expectStatus:   http.StatusNotFound,
+			expectContains: "setting descriptor not found",
+		},
+		{
+			name:           "rejects non-boot-order setting",
+			bmcName:        testBMC.Name,
+			descriptorID:   otherDesc.ID,
+			body:           `{"value":"UEFI"}`,
+			sessionToken:   ts.Session.Token,
+			expectStatus:   http.StatusForbidden,
+			expectContains: "Only Boot.BootOrder settings can be updated",
+		},
+		// Note: Test that actually updates BMC setting would timeout
+		// We've tested all validation logic above
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reqURL := fmt.Sprintf("/api/bmcs/%s/settings/%s", tt.bmcName, tt.descriptorID)
+			req := httptest.NewRequest(http.MethodPatch, reqURL, strings.NewReader(tt.body))
+			req.Header.Set("Content-Type", "application/json")
+			req.AddCookie(&http.Cookie{Name: "session_token", Value: tt.sessionToken})
+
+			rec := httptest.NewRecorder()
+			ts.Handler.ServeHTTP(rec, req)
+
+			if rec.Code != tt.expectStatus {
+				t.Errorf("expected status %d, got %d", tt.expectStatus, rec.Code)
+			}
+
+			if tt.expectContains != "" {
+				body := rec.Body.String()
+				if !strings.Contains(body, tt.expectContains) {
+					t.Errorf("expected body to contain %q, got %q", tt.expectContains, body)
+				}
+			}
+		})
+	}
+}
