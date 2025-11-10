@@ -35,15 +35,23 @@ The bare-metal provisioner provides automated server provisioning via Redfish an
   - Support for oras and podman clients
   - Content-addressable storage with garbage collection
   - Integration with Linux and Windows provisioning workflows
+- **Phase 6 (Hardening & ESXi Handoff):** In Progress ⚙
+  - ESXi dual-ISO handoff workflow (vendor installer ISO + task.iso with /ks.cfg)
+  - Redfish operation robustness (timeouts, retries, idempotency)
+  - Expanded test strategy & operational docs
 
 **Documentation:**
 - Architecture: `design/020_Provisioner_Architecture.md`
-- Phase 3 Plan: `design/039_Provisioner_Phase_3_Plan.md`
-- Phase 5 Plan: `plans/003_Phase_5_Provisioner_Plan.md`
 - Controller: `design/021_Provisioner_Controller_Service.md`
-- Workflows: `design/029_Workflow_Linux.md`
+- Recipe Schema & Validation: `design/022_Recipe_Schema_and_Validation.md`
+- ESXi Workflow: `design/031_Workflow_ESXi.md` and `docs/provisioner/esxi_handoff.md`
+- Linux Workflow: `design/029_Workflow_Linux.md`
+- Redfish Operations Hardening: `design/028_Redfish_Operations.md`
 - Registry: `docs/provisioner/embedded_registry.md`
+- Plans: `plans/003_Phase_5_Provisioner_Plan.md`, `plans/004_Phase_6_Provisioner_Plan.md`
 - Webhook Examples: `docs/webhook_examples/`
+
+Fixture samples for quick starts live in `docs/provisioner/fixtures/` (cloud-init `user-data.yaml`, ESXi `ks.cfg`, Windows `unattend.xml`). See the overview below.
 
 ## Quick Start
 
@@ -56,6 +64,13 @@ go run build.go validate
 ```
 
 Open http://localhost:8080 and log in with `admin` / `admin` (change immediately).
+
+### Try it quick previews
+
+- Overview: `docs/provisioner/try_it_overview.md`
+- Linux workflow: `docs/provisioner/try_it_linux.md`
+- ESXi handoff (Phase 6): `docs/provisioner/try_it_esxi.md`
+- Windows workflow (planned): `docs/provisioner/try_it_windows.md`
 
 Alternatively, download a prebuilt binary from [Releases](https://github.com/mattcburns/shoal/releases), make it executable, and run it.
 

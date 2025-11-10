@@ -67,13 +67,18 @@ go run build.go lint    # Static analysis
 go run build.go test    # Test execution
 ```
 
-## Provisioner Phase 3 (Linux workflow)
+## Provisioner (Linux, Windows, ESXi)
 
-Active work for the provisioner’s Phase 3 happens on the branch `feature/provisioner-phase3`.
+Active provisioner work is tracked in the `plans/` and `design/` docs. Current milestone: Phase 6 (hardening & ESXi handoff).
 
-- Designs: see `design/020_Provisioner_Architecture.md`, `021_Provisioner_Controller_Service.md`, `025_Dispatcher_Go_Binary.md`, `026_Systemd_and_Quadlet_Orchestration.md`, and `029_Workflow_Linux.md`.
-- Planning: `design/039_Provisioner_Phase_3_Plan.md` tracks scope, milestones, and acceptance criteria.
-- Tests: end-to-end coverage for the dispatcher plus planner wrappers lives in `internal/provisioner/integration/linux_workflow_integration_test.go` (happy path + failure attribution).
+- Designs: `design/020_Provisioner_Architecture.md`, `021_Provisioner_Controller_Service.md`, `025_Dispatcher_Go_Binary.md`, `026_Systemd_and_Quadlet_Orchestration.md`, `028_Redfish_Operations.md`, `029_Workflow_Linux.md`, `031_Workflow_ESXi.md`.
+- Plans: `plans/004_Phase_6_Provisioner_Plan.md`.
+- ESXi handoff details: `docs/provisioner/esxi_handoff.md`.
+- Try-it overview: `docs/provisioner/try_it_overview.md`.
+- Try-it guides: `docs/provisioner/try_it_linux.md`, `docs/provisioner/try_it_esxi.md`.
+- Windows preview guide: `docs/provisioner/try_it_windows.md`.
+ - Fixture samples: `docs/provisioner/fixtures/` (`user-data.yaml`, `ks.cfg`, `unattend.xml`).
+- Tests: Linux workflow integration tests at `internal/provisioner/integration/linux_workflow_integration_test.go`. ESXi logic is covered by unit tests in `internal/provisioner/jobs`.
 - Maintenance OS image: build the bootc maintenance ISO with `./scripts/build_maintenance_os.sh` (assets under `images/maintenance/`). See details below.
 
 Before sending a PR:
@@ -83,6 +88,28 @@ go run build.go validate
 ```
 
 Ensure new source files carry the AGPLv3 header (see `AGENTS.md`).
+
+### Provisioner controller configuration
+
+Key environment variables and flags (flags override env):
+
+- `MAINTENANCE_ISO_URL` / `--maintenance-iso-url`: maintenance OS ISO (Linux/Windows flows)
+- `ESXI_INSTALLER_URL` / `--esxi-installer-url`: vendor ESXi installer ISO (ESXi handoff)
+- `TASK_ISO_DIR` / `--task-iso-dir`: where task ISOs are written (served at `/media/tasks/{job}/task.iso`)
+- `REDFISH_MODE` / `--redfish-mode`: `http` or `noop` (stub for development)
+- `REDFISH_TIMEOUT` / `--redfish-timeout`: per-request timeout
+- `REDFISH_RETRIES` / `--redfish-retries`: retry budget for Redfish operations
+
+ESXi recipes must include:
+
+```json
+{
+	"task_target": "install-esxi.target",
+	"ks_cfg": "vmaccepteula\ninstall --firstdisk --overwritevmfs\nreboot\n"
+}
+```
+
+The controller embeds `ks_cfg` at `/ks.cfg` in `task.iso`, mounts the vendor installer ISO as CD1, and performs a dual‑ISO handoff via Redfish.
 
 ### Building the Maintenance OS ISO
 

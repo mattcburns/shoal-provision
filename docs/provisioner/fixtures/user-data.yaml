@@ -1,0 +1,9 @@
+#cloud-config
+hostname: shoal-linux
+ssh_authorized_keys:
+  - ssh-ed25519 AAAAB3NzaC1yc2EAAAADAQABAAACAQClExampleKeyOnly user@example
+users:
+  - name: dev
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    groups: [wheel]
+    shell: /bin/bash

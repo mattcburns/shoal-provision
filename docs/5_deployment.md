@@ -8,8 +8,8 @@ Shoal is designed for simple deployment as a single, self-contained binary with 
 
 **Quick Deployment (from source):**
 ```bash
-# Build for production
-python3 build.py build
+# Build & validate (single binary output at build/shoal)
+go run build.go validate
 
 # Copy and run on target server
 scp build/shoal user@server:/opt/shoal/
@@ -25,6 +25,39 @@ Download pre-built binaries from the project's [GitHub Releases](https://github.
 curl -L -o shoal "https://github.com/mattcburns/shoal/releases/latest/download/shoal-linux-amd64"
 chmod +x shoal && ./shoal
 ```
+
+## Provisioner Deployment Notes (Phase 6)
+
+When enabling the provisioner controller (planned to merge into main binary or run as a side service):
+
+Environment variables / flags of interest:
+
+| Purpose | Env Var | Flag | Notes |
+|---------|---------|------|-------|
+| Maintenance OS ISO (Linux/Windows) | `MAINTENANCE_ISO_URL` | `--maintenance-iso-url` | HTTP(S) URL reachable by BMCs |
+| ESXi vendor installer ISO | `ESXI_INSTALLER_URL` | `--esxi-installer-url` | Required for ESXi workflows |
+| Task ISO output directory | `TASK_ISO_DIR` | `--task-iso-dir` | Defaults to `./var/shoal/task-isos` |
+| Redfish client mode | `REDFISH_MODE` | `--redfish-mode` | `noop` for labs; `http` for real BMCs |
+| Redfish timeout | `REDFISH_TIMEOUT` | `--redfish-timeout` | Per-request duration |
+| Redfish retries | `REDFISH_RETRIES` | `--redfish-retries` | Exponential backoff logic |
+
+Example (ESXi enabled):
+```bash
+export ESXI_INSTALLER_URL="https://controller.internal/static/VMware-VMvisor-Installer-8.0U2.iso"
+export MAINTENANCE_ISO_URL="https://controller.internal/media/isos/bootc-maintenance.iso"
+export TASK_ISO_DIR="/var/lib/shoal/task-isos"
+./build/shoal --redfish-mode noop
+```
+
+ESXi job recipe excerpt:
+```json
+{
+    "task_target": "install-esxi.target",
+    "ks_cfg": "vmaccepteula\ninstall --firstdisk --overwritevmfs\nreboot\n"
+}
+```
+
+The controller serves task ISOs at `/media/tasks/{job_id}/task.iso`.
 
 ## Security
 

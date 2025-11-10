@@ -75,6 +75,10 @@ type WorkerConfig struct {
 	ESXIStableWindow      time.Duration
 	ESXIPollIntervalStart time.Duration
 	ESXIPollIntervalMax   time.Duration
+
+	// ESXi vendor installer ISO URL (CD1) used for ESXi workflow handoff.
+	// Example: https://controller.internal:8080/static/VMware-VMvisor-Installer-8.0U2.iso
+	ESXIInstallerURL string
 }
 
 // Worker performs job orchestration per the design documents.
@@ -222,6 +226,25 @@ func (w *Worker) processJob(ctx context.Context, job *provisioner.Job) error {
 	taskTarget := taskTargetFromRecipe(job.Recipe)
 	isESXi := strings.EqualFold(taskTarget, esxiInstallTarget)
 
+	// Phase 6: ESXi requires ks_cfg in recipe; validate early so we fail fast.
+	var ksCfg []byte
+	if isESXi {
+		validateStep := "validate-recipe"
+		ksCfg = kickstartFromRecipe(job.Recipe)
+		if len(ksCfg) == 0 {
+			_ = w.appendEvent(ctx, job.ID, provisioner.EventLevelError, "ESXi workflow: ks_cfg missing in recipe", &validateStep)
+			_ = w.store.MarkJobStatus(ctx, job.ID, provisioner.JobStatusFailed, &validateStep)
+			return fmt.Errorf("validate recipe: ks_cfg missing for esxi job")
+		}
+		const maxKickstartSize = 64 * 1024 // 64KiB reasonable constraint; align w/ design 022 size limits assumption
+		if len(ksCfg) > maxKickstartSize {
+			_ = w.appendEvent(ctx, job.ID, provisioner.EventLevelError, fmt.Sprintf("ESXi workflow: ks_cfg exceeds max size (%d > %d bytes)", len(ksCfg), maxKickstartSize), &validateStep)
+			_ = w.store.MarkJobStatus(ctx, job.ID, provisioner.JobStatusFailed, &validateStep)
+			return fmt.Errorf("validate recipe: ks_cfg too large (%d bytes)", len(ksCfg))
+		}
+		_ = w.appendEvent(ctx, job.ID, provisioner.EventLevelInfo, fmt.Sprintf("ESXi workflow: ks_cfg accepted size=%d bytes", len(ksCfg)), &validateStep)
+	}
+
 	// Resolve server
 	srv, err := w.store.GetServerBySerial(ctx, job.ServerSerial)
 	if err != nil {
@@ -231,11 +254,13 @@ func (w *Worker) processJob(ctx context.Context, job *provisioner.Job) error {
 		return fmt.Errorf("resolve server: %w", err)
 	}
 
-	// Build task ISO (stub)
+	// Build task ISO (stub + optional ks.cfg for ESXi). For ESXi we embed ks.cfg at /ks.cfg
 	step = "build-task-iso"
-	res, err := w.isoBuilder.BuildTaskISO(ctx, job.ID, job.Recipe, iso.Assets{
-		RecipeSchema: w.assetsSchema,
-	})
+	assets := iso.Assets{RecipeSchema: w.assetsSchema}
+	if isESXi && len(ksCfg) > 0 {
+		assets.Kickstart = ksCfg
+	}
+	res, err := w.isoBuilder.BuildTaskISO(ctx, job.ID, job.Recipe, assets)
 	if err != nil {
 		_ = w.appendEvent(ctx, job.ID, provisioner.EventLevelError, fmt.Sprintf("Task ISO build failed: %v", err), &step)
 		_ = w.store.MarkJobStatus(ctx, job.ID, provisioner.JobStatusFailed, &step)
@@ -255,13 +280,22 @@ func (w *Worker) processJob(ctx context.Context, job *provisioner.Job) error {
 	defer rf.Close()
 
 	// Orchestration
-	// 1) Mount maintenance.iso (CD1)
+	// 1) Mount vendor installer (ESXi) or maintenance.iso (Linux/Windows) as CD1
 	step = "mount-maintenance"
+	mountURL := job.MaintenanceISOURL
+	if isESXi {
+		if strings.TrimSpace(w.cfg.ESXIInstallerURL) == "" {
+			_ = w.appendEvent(ctx, job.ID, provisioner.EventLevelError, "ESXi workflow: ESXI_INSTALLER_URL not configured", &step)
+			_ = w.store.MarkJobStatus(ctx, job.ID, provisioner.JobStatusFailed, &step)
+			return fmt.Errorf("esxi: ESXIInstallerURL is empty")
+		}
+		mountURL = w.cfg.ESXIInstallerURL
+	}
 	if err := w.runRedfishOp(ctx, job, step, opMountMaintenance, func(c context.Context) error {
-		return rf.MountVirtualMedia(c, 1, job.MaintenanceISOURL)
+		return rf.MountVirtualMedia(c, 1, mountURL)
 	}); err != nil {
 		_ = w.store.MarkJobStatus(ctx, job.ID, provisioner.JobStatusFailed, &step)
-		return fmt.Errorf("mount maintenance: %w", err)
+		return fmt.Errorf("mount maintenance/vendor: %w", err)
 	}
 
 	// 2) Mount task.iso (CD2) using controller media URL base
@@ -658,4 +692,23 @@ func taskTargetFromRecipe(recipe json.RawMessage) string {
 		return ""
 	}
 	return strings.TrimSpace(payload.TaskTarget)
+}
+
+// kickstartFromRecipe extracts the ks_cfg string from the job recipe, if present.
+// It returns the raw bytes for inclusion in the task ISO at /ks.cfg for ESXi handoff.
+func kickstartFromRecipe(recipe json.RawMessage) []byte {
+	if len(recipe) == 0 {
+		return nil
+	}
+	var payload struct {
+		KSCfg string `json:"ks_cfg"`
+	}
+	if err := json.Unmarshal(recipe, &payload); err != nil {
+		return nil
+	}
+	s := strings.TrimSpace(payload.KSCfg)
+	if s == "" {
+		return nil
+	}
+	return []byte(s)
 }
