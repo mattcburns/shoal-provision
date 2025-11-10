@@ -518,6 +518,10 @@ func TestGC_ManualGC_ContextCancellation(t *testing.T) {
 			t.Logf("Got error %v instead of context.Canceled (acceptable)", err)
 		}
 	}
+
+	// Give GC goroutines time to fully exit before temp dir cleanup
+	// This prevents "directory not empty" errors on CI
+	time.Sleep(50 * time.Millisecond)
 }
 
 func TestGC_ConcurrentOperations(t *testing.T) {
