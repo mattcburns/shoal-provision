@@ -33,8 +33,10 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
+	"shoal/internal/provisioner/metrics"
 	"shoal/pkg/provisioner"
 )
 
@@ -50,8 +52,65 @@ type WebhookStore interface {
 
 // WebhookRequest is the payload for the webhook POST.
 type WebhookRequest struct {
-	Status     string  `json:"status"`                // "success" or "failed"
-	FailedStep *string `json:"failed_step,omitempty"` // e.g., "bootloader-linux.service"
+	Status      string  `json:"status"`                // "success" or "failed"
+	FailedStep  *string `json:"failed_step,omitempty"` // e.g., "bootloader-linux.service"
+	DeliveryID  string  `json:"delivery_id,omitempty"` // unique ID for deduplication
+	TaskTarget  string  `json:"task_target,omitempty"` // e.g., "install-linux.target"
+	Started     string  `json:"started_at,omitempty"`  // RFC3339
+	Finished    string  `json:"finished_at,omitempty"` // RFC3339
+	DispatcherV string  `json:"dispatcher_version,omitempty"`
+	SchemaID    string  `json:"schema_id,omitempty"`
+}
+
+// deliveryCache provides simple LRU-style deduplication of delivery IDs per job.
+// Thread-safe. Max 32 delivery_ids kept per job (design doc guidance).
+type deliveryCache struct {
+	mu    sync.RWMutex
+	cache map[string][]string // jobID -> delivery_id list (LRU-like)
+	max   int
+}
+
+func newDeliveryCache(maxPerJob int) *deliveryCache {
+	if maxPerJob <= 0 {
+		maxPerJob = 32
+	}
+	return &deliveryCache{
+		cache: make(map[string][]string),
+		max:   maxPerJob,
+	}
+}
+
+// record adds a delivery_id to the job's cache.
+// Returns true if newly inserted, false if already present (idempotent).
+// Implements atomic check-and-set semantics to prevent TOCTOU races.
+func (dc *deliveryCache) record(jobID, deliveryID string) bool {
+	if deliveryID == "" {
+		return false
+	}
+	dc.mu.Lock()
+	defer dc.mu.Unlock()
+	list := dc.cache[jobID]
+	// Check if already present (idempotent)
+	for _, id := range list {
+		if id == deliveryID {
+			return false // already exists
+		}
+	}
+	// Prepend (most recent first)
+	list = append([]string{deliveryID}, list...)
+	if len(list) > dc.max {
+		list = list[:dc.max]
+	}
+	dc.cache[jobID] = list
+	return true // newly inserted
+}
+
+// remove deletes the cache entry for the given jobID.
+// Should be called when a job reaches a terminal state to prevent memory growth.
+func (dc *deliveryCache) remove(jobID string) {
+	dc.mu.Lock()
+	defer dc.mu.Unlock()
+	delete(dc.cache, jobID)
 }
 
 // NewWebhookHandler builds an http.HandlerFunc that processes webhook calls.
@@ -61,6 +120,7 @@ func NewWebhookHandler(store WebhookStore, secret string, logger *log.Logger, no
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
 	}
+	cache := newDeliveryCache(32) // 32 delivery_ids per job
 	redact := func(s string) string {
 		if s == "" {
 			return ""
@@ -87,6 +147,8 @@ func NewWebhookHandler(store WebhookStore, secret string, logger *log.Logger, no
 	}
 
 	return func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+
 		// Method check
 		if r.Method != http.MethodPost {
 			http.NotFound(w, r)
@@ -144,6 +206,26 @@ func NewWebhookHandler(store WebhookStore, secret string, logger *log.Logger, no
 			return
 		}
 
+		// Deduplication: atomically record delivery_id; if already present, treat as duplicate
+		// This implements check-and-set semantics to prevent TOCTOU races
+		if req.DeliveryID != "" {
+			isNew := cache.record(job.ID, req.DeliveryID)
+			if !isNew {
+				logf("idempotent duplicate delivery_id=%s for job=%s serial=%s; returning 200 OK", req.DeliveryID, job.ID, serial)
+				// Append idempotent event
+				_ = store.AppendJobEvent(ctx, provisioner.JobEvent{
+					JobID:   job.ID,
+					Time:    now(),
+					Level:   provisioner.EventLevelInfo,
+					Message: fmt.Sprintf("Idempotent webhook delivery (delivery_id=%s)", req.DeliveryID),
+					Step:    strPtr("webhook-duplicate"),
+				})
+				metrics.ObserveWebhookRequest("duplicate", time.Since(start))
+				writeJSON(w, http.StatusOK, map[string]any{"ok": true, "idempotent": true})
+				return
+			}
+		}
+
 		// Transition and append events
 		switch st {
 		case "success":
@@ -155,13 +237,18 @@ func NewWebhookHandler(store WebhookStore, secret string, logger *log.Logger, no
 				})
 				return
 			}
+			msg := "Webhook reported success"
+			if req.DeliveryID != "" {
+				msg = fmt.Sprintf("%s (delivery_id=%s)", msg, req.DeliveryID)
+			}
 			_ = store.AppendJobEvent(ctx, provisioner.JobEvent{
 				JobID:   job.ID,
 				Time:    now(),
 				Level:   provisioner.EventLevelInfo,
-				Message: "Webhook reported success",
+				Message: msg,
 				Step:    strPtr("webhook-success"),
 			})
+			metrics.ObserveWebhookRequest("success", time.Since(start))
 		case "failed":
 			failedStep := req.FailedStep
 			if failedStep == nil || strings.TrimSpace(*failedStep) == "" {
@@ -180,6 +267,9 @@ func NewWebhookHandler(store WebhookStore, secret string, logger *log.Logger, no
 			if failedStep != nil {
 				msg = fmt.Sprintf("%s at step %s", msg, *failedStep)
 			}
+			if req.DeliveryID != "" {
+				msg = fmt.Sprintf("%s (delivery_id=%s)", msg, req.DeliveryID)
+			}
 			_ = store.AppendJobEvent(ctx, provisioner.JobEvent{
 				JobID:   job.ID,
 				Time:    now(),
@@ -187,6 +277,7 @@ func NewWebhookHandler(store WebhookStore, secret string, logger *log.Logger, no
 				Message: msg,
 				Step:    failedStep,
 			})
+			metrics.ObserveWebhookRequest("failed", time.Since(start))
 		default:
 			// Should not happen due to earlier validation
 			writeJSON(w, http.StatusBadRequest, jsonError{

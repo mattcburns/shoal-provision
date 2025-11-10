@@ -306,3 +306,225 @@ func TestWebhook_AuthAndTransitions(t *testing.T) {
 		t.Fatalf("expected some events appended by webhook, got 0")
 	}
 }
+
+// TestWebhook_DeliveryIDDeduplication verifies that webhooks with duplicate delivery_id
+// are handled idempotently: they return 200 OK without changing job state or appending
+// duplicate success/failure events. Tests both success and failed scenarios.
+func TestWebhook_DeliveryIDDeduplication(t *testing.T) {
+	s := newInMemoryStore(t)
+	seedServer(t, s, "SER-DUP")
+	mux := newTestMux(t, s, "secret123")
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	client := srv.Client()
+	headers := map[string]string{"X-Webhook-Secret": "secret123"}
+
+	// === Test 1: Duplicate delivery_id for success transition ===
+	// Create job
+	reqBody := map[string]any{
+		"server_serial": "SER-DUP",
+		"recipe":        map[string]any{"task_target": "install-linux.target", "target_disk": "/dev/sda"},
+	}
+	resp, data := doJSON(t, client, http.MethodPost, srv.URL+"/api/v1/jobs", reqBody, nil)
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("create job expected 202, got %d: %s", resp.StatusCode, string(data))
+	}
+	var cj createJobResp
+	if err := json.Unmarshal(data, &cj); err != nil {
+		t.Fatalf("decode createJob: %v", err)
+	}
+
+	// Mark provisioning
+	if err := s.MarkJobStatus(context.Background(), cj.JobID, provisioner.JobStatusProvisioning, nil); err != nil {
+		t.Fatalf("mark provisioning failed: %v", err)
+	}
+
+	// First success webhook with delivery_id
+	deliveryID1 := "delivery-success-abc123"
+	webhookPayload1 := map[string]any{
+		"status":      "success",
+		"delivery_id": deliveryID1,
+	}
+	resp1, data1 := doJSON(t, client, http.MethodPost, srv.URL+"/api/v1/status-webhook/SER-DUP", webhookPayload1, headers)
+	if resp1.StatusCode != http.StatusOK {
+		t.Fatalf("first success webhook expected 200, got %d: %s", resp1.StatusCode, string(data1))
+	}
+	var result1 map[string]any
+	if err := json.Unmarshal(data1, &result1); err != nil {
+		t.Fatalf("decode first webhook response: %v", err)
+	}
+	if result1["ok"] != true {
+		t.Fatalf("first webhook expected ok=true, got %v", result1)
+	}
+	if result1["idempotent"] != nil && result1["idempotent"] == true {
+		t.Fatalf("first webhook should not be idempotent, got %v", result1)
+	}
+
+	// Verify job succeeded
+	job, err := s.GetJobByID(context.Background(), cj.JobID)
+	if err != nil {
+		t.Fatalf("GetJobByID failed: %v", err)
+	}
+	if job.Status != provisioner.JobStatusSucceeded {
+		t.Fatalf("expected job succeeded, got %s", job.Status)
+	}
+
+	// Manually revert job to provisioning to simulate duplicate delivery (test scenario)
+	if err := s.MarkJobStatus(context.Background(), cj.JobID, provisioner.JobStatusProvisioning, nil); err != nil {
+		t.Fatalf("revert to provisioning failed: %v", err)
+	}
+
+	// Count events before duplicate
+	evsBefore, err := s.ListJobEvents(context.Background(), cj.JobID, 0)
+	if err != nil {
+		t.Fatalf("ListJobEvents failed: %v", err)
+	}
+	countBefore := len(evsBefore)
+
+	// Send duplicate webhook with same delivery_id
+	resp2, data2 := doJSON(t, client, http.MethodPost, srv.URL+"/api/v1/status-webhook/SER-DUP", webhookPayload1, headers)
+	if resp2.StatusCode != http.StatusOK {
+		t.Fatalf("duplicate webhook expected 200, got %d: %s", resp2.StatusCode, string(data2))
+	}
+	var result2 map[string]any
+	if err := json.Unmarshal(data2, &result2); err != nil {
+		t.Fatalf("decode duplicate webhook response: %v", err)
+	}
+	if result2["ok"] != true {
+		t.Fatalf("duplicate webhook expected ok=true, got %v", result2)
+	}
+	if result2["idempotent"] != true {
+		t.Fatalf("duplicate webhook expected idempotent=true, got %v", result2)
+	}
+
+	// Verify job status unchanged (still provisioning, NOT transitioned to succeeded again)
+	job2, err := s.GetJobByID(context.Background(), cj.JobID)
+	if err != nil {
+		t.Fatalf("GetJobByID after duplicate failed: %v", err)
+	}
+	if job2.Status != provisioner.JobStatusProvisioning {
+		t.Fatalf("duplicate webhook should not change status; expected provisioning, got %s", job2.Status)
+	}
+
+	// Verify only one new event added (webhook-duplicate), not a second success event
+	evsAfter, err := s.ListJobEvents(context.Background(), cj.JobID, 0)
+	if err != nil {
+		t.Fatalf("ListJobEvents after duplicate failed: %v", err)
+	}
+	countAfter := len(evsAfter)
+	if countAfter != countBefore+1 {
+		t.Fatalf("expected exactly 1 new event (webhook-duplicate), got %d events before, %d after", countBefore, countAfter)
+	}
+
+	// Verify the new event is webhook-duplicate
+	lastEvent := evsAfter[countAfter-1]
+	if lastEvent.Step == nil || *lastEvent.Step != "webhook-duplicate" {
+		t.Fatalf("expected last event step=webhook-duplicate, got %v", lastEvent.Step)
+	}
+	if !strings.Contains(lastEvent.Message, deliveryID1) {
+		t.Fatalf("expected duplicate event to contain delivery_id %s, got message: %s", deliveryID1, lastEvent.Message)
+	}
+
+	// === Test 2: Multiple duplicates and then different delivery_id ===
+	// Send third request with same delivery_id - should still be idempotent
+	resp3, data3 := doJSON(t, client, http.MethodPost, srv.URL+"/api/v1/status-webhook/SER-DUP", webhookPayload1, headers)
+	if resp3.StatusCode != http.StatusOK {
+		t.Fatalf("third webhook expected 200, got %d: %s", resp3.StatusCode, string(data3))
+	}
+	var result3 map[string]any
+	if err := json.Unmarshal(data3, &result3); err != nil {
+		t.Fatalf("decode third webhook response: %v", err)
+	}
+	if result3["idempotent"] != true {
+		t.Fatalf("third webhook expected idempotent=true, got %v", result3)
+	}
+
+	// Verify different delivery_id is processed normally
+	webhookPayload2 := map[string]any{
+		"status":      "success",
+		"delivery_id": "delivery-success-xyz789",
+	}
+	resp4, data4 := doJSON(t, client, http.MethodPost, srv.URL+"/api/v1/status-webhook/SER-DUP", webhookPayload2, headers)
+	if resp4.StatusCode != http.StatusOK {
+		t.Fatalf("new delivery_id webhook expected 200, got %d: %s", resp4.StatusCode, string(data4))
+	}
+	var result4 map[string]any
+	if err := json.Unmarshal(data4, &result4); err != nil {
+		t.Fatalf("decode new delivery_id response: %v", err)
+	}
+	if result4["idempotent"] == true {
+		t.Fatalf("new delivery_id should not be idempotent, got %v", result4)
+	}
+
+	// Verify new delivery_id caused transition to succeeded
+	job3, err := s.GetJobByID(context.Background(), cj.JobID)
+	if err != nil {
+		t.Fatalf("GetJobByID after new delivery_id failed: %v", err)
+	}
+	if job3.Status != provisioner.JobStatusSucceeded {
+		t.Fatalf("new delivery_id should transition to succeeded, got %s", job3.Status)
+	}
+
+	// === Test 3: Deduplication for failed webhooks ===
+	// Create second job for failed path
+	resp5, data5 := doJSON(t, client, http.MethodPost, srv.URL+"/api/v1/jobs", reqBody, nil)
+	if resp5.StatusCode != http.StatusAccepted {
+		t.Fatalf("create job2 expected 202, got %d: %s", resp5.StatusCode, string(data5))
+	}
+	var cj2 createJobResp
+	if err := json.Unmarshal(data5, &cj2); err != nil {
+		t.Fatalf("decode createJob2: %v", err)
+	}
+	if err := s.MarkJobStatus(context.Background(), cj2.JobID, provisioner.JobStatusProvisioning, nil); err != nil {
+		t.Fatalf("mark provisioning job2 failed: %v", err)
+	}
+
+	// First failed webhook with delivery_id
+	deliveryID2 := "delivery-failed-123"
+	failedStep := "bootloader-linux.service"
+	webhookPayload3 := map[string]any{
+		"status":      "failed",
+		"failed_step": failedStep,
+		"delivery_id": deliveryID2,
+	}
+	resp6, data6 := doJSON(t, client, http.MethodPost, srv.URL+"/api/v1/status-webhook/SER-DUP", webhookPayload3, headers)
+	if resp6.StatusCode != http.StatusOK {
+		t.Fatalf("first failed webhook expected 200, got %d: %s", resp6.StatusCode, string(data6))
+	}
+
+	// Verify failed transition
+	job4, err := s.GetJobByID(context.Background(), cj2.JobID)
+	if err != nil {
+		t.Fatalf("GetJobByID job2 failed: %v", err)
+	}
+	if job4.Status != provisioner.JobStatusFailed {
+		t.Fatalf("expected job2 failed, got %s", job4.Status)
+	}
+
+	// Revert to provisioning for duplicate test
+	if err := s.MarkJobStatus(context.Background(), cj2.JobID, provisioner.JobStatusProvisioning, nil); err != nil {
+		t.Fatalf("revert job2 to provisioning failed: %v", err)
+	}
+
+	// Send duplicate failed webhook
+	resp7, data7 := doJSON(t, client, http.MethodPost, srv.URL+"/api/v1/status-webhook/SER-DUP", webhookPayload3, headers)
+	if resp7.StatusCode != http.StatusOK {
+		t.Fatalf("duplicate failed webhook expected 200, got %d: %s", resp7.StatusCode, string(data7))
+	}
+	var result7 map[string]any
+	if err := json.Unmarshal(data7, &result7); err != nil {
+		t.Fatalf("decode duplicate failed response: %v", err)
+	}
+	if result7["idempotent"] != true {
+		t.Fatalf("duplicate failed webhook expected idempotent=true, got %v", result7)
+	}
+
+	// Verify status unchanged
+	job5, err := s.GetJobByID(context.Background(), cj2.JobID)
+	if err != nil {
+		t.Fatalf("GetJobByID after duplicate failed: %v", err)
+	}
+	if job5.Status != provisioner.JobStatusProvisioning {
+		t.Fatalf("duplicate failed webhook should not transition, expected provisioning, got %s", job5.Status)
+	}
+}
