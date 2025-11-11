@@ -32,9 +32,11 @@ import (
 	"time"
 
 	"shoal/internal/api"
+	"shoal/internal/auth"
+	"shoal/internal/bmc"
 	"shoal/internal/database"
 	"shoal/internal/web"
-	"shoal/pkg/auth"
+	pkgauth "shoal/pkg/auth"
 	"shoal/pkg/models"
 )
 
@@ -71,7 +73,9 @@ func setupTestServer(t *testing.T) *TestServer {
 	}
 
 	// Create handlers
-	apiHandler := api.New(db)
+	authService := auth.New(db)
+	bmcService := bmc.New(db)
+	apiHandler := api.New(db, authService, bmcService)
 	webHandler := web.New(db)
 
 	// Create combined server
@@ -101,7 +105,7 @@ func (ts *TestServer) Close() {
 // createTestAdminUser creates a test admin user for integration tests
 func createTestAdminUser(ctx context.Context, db *database.DB) error {
 	// Hash the test password
-	passwordHash, err := auth.HashPassword("admin")
+	passwordHash, err := pkgauth.HashPassword("admin")
 	if err != nil {
 		return fmt.Errorf("failed to hash password: %w", err)
 	}

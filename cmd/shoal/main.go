@@ -30,10 +30,12 @@ import (
 	"time"
 
 	"shoal/internal/api"
+	"shoal/internal/auth"
+	"shoal/internal/bmc"
 	"shoal/internal/database"
 	"shoal/internal/logging"
 	"shoal/internal/web"
-	"shoal/pkg/auth"
+	pkgauth "shoal/pkg/auth"
 	"shoal/pkg/models"
 )
 
@@ -86,7 +88,9 @@ func main() {
 	mux := http.NewServeMux()
 
 	// Register API routes
-	apiHandler := api.New(db)
+	authService := auth.New(db)
+	bmcService := bmc.New(db)
+	apiHandler := api.New(db, authService, bmcService)
 	mux.Handle("/redfish/", apiHandler)
 
 	// Register web interface routes
@@ -150,7 +154,7 @@ func createDefaultAdminUser(ctx context.Context, db *database.DB) error {
 	}
 
 	// Hash the password
-	passwordHash, err := auth.HashPassword(defaultPassword)
+	passwordHash, err := pkgauth.HashPassword(defaultPassword)
 	if err != nil {
 		return fmt.Errorf("failed to hash password: %w", err)
 	}

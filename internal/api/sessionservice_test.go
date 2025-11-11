@@ -27,8 +27,10 @@ import (
 	"path/filepath"
 	"testing"
 
+	"shoal/internal/auth"
+	"shoal/internal/bmc"
 	"shoal/internal/database"
-	"shoal/pkg/auth"
+	pkgauth "shoal/pkg/auth"
 	"shoal/pkg/models"
 )
 
@@ -49,8 +51,8 @@ func setupTestAPI(t *testing.T) (http.Handler, *database.DB) {
 		t.Fatalf("migration failed: %v", err)
 	}
 
-	// Create admin user
-	passwordHash, err := auth.HashPassword("admin")
+	// Hash password for the admin user
+	passwordHash, err := pkgauth.HashPassword("admin")
 	if err != nil {
 		t.Fatalf("failed to hash password: %v", err)
 	}
@@ -74,7 +76,9 @@ func setupTestAPI(t *testing.T) (http.Handler, *database.DB) {
 		t.Fatalf("failed to create admin user: %v", err)
 	}
 
-	apiHandler := New(db)
+	authService := auth.New(db)
+	bmcService := bmc.New(db)
+	apiHandler := New(db, authService, bmcService)
 	return apiHandler, db
 }
 

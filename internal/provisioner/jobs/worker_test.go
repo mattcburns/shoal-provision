@@ -33,12 +33,12 @@ import (
 )
 
 type fakeStore struct {
-	mu              sync.Mutex
-	job             *provisioner.Job
-	extendCount     int
-	lastLeaseJID    string
-	lastLeaseWID    string
-	events          []provisioner.JobEvent
+	mu           sync.Mutex
+	job          *provisioner.Job
+	extendCount  int
+	lastLeaseJID string
+	lastLeaseWID string
+	events       []provisioner.JobEvent
 	// Overridable handlers
 	acquireJobFunc    func(ctx context.Context, workerID string, leaseTTL time.Duration) (*provisioner.Job, error)
 	getServerFunc     func(ctx context.Context, serial string) (*provisioner.Server, error)
@@ -288,7 +288,7 @@ func TestWorker_RunLoopCancellation(t *testing.T) {
 	w := newWorkerForTest(t, fs, "cancel-test", 5*time.Millisecond, 100*time.Millisecond, 30*time.Millisecond, 500*time.Millisecond)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	
+
 	done := make(chan struct{})
 	go func() {
 		w.Run(ctx)
@@ -334,7 +334,7 @@ func TestWorker_ProcessJobMissingServer(t *testing.T) {
 	}
 
 	w := newWorkerForTest(t, fs, "test", 10*time.Millisecond, 100*time.Millisecond, 30*time.Millisecond, 500*time.Millisecond)
-	
+
 	job := &provisioner.Job{
 		ID:           "job-missing-server",
 		ServerSerial: "NONEXISTENT",
@@ -404,7 +404,7 @@ func TestWorker_ComposeTaskMediaURL(t *testing.T) {
 	t.Parallel()
 
 	fs := &fakeStore{}
-	
+
 	// Test with valid base URL
 	w1 := newWorkerForTest(t, fs, "test", 10*time.Millisecond, 100*time.Millisecond, 30*time.Millisecond, 500*time.Millisecond)
 	url, err := w1.composeTaskMediaURL("job-123")
@@ -440,7 +440,7 @@ func TestWorker_LoggingCoverage(t *testing.T) {
 	t.Parallel()
 
 	fs := &fakeStore{}
-	
+
 	// Test with LogEveryHeartbeat = true
 	cfg1 := WorkerConfig{
 		WorkerID:          "verbose",

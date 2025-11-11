@@ -62,9 +62,14 @@ type Handler struct {
 	bmcSvc *bmc.Service
 }
 
-// New creates a new API handler
-func New(db *database.DB) http.Handler {
-	return NewRouter(db)
+// New creates a new API handler and router.
+func New(db *database.DB, authSvc *auth.Authenticator, bmcSvc *bmc.Service) http.Handler {
+	handler := &Handler{
+		db:     db,
+		auth:   authSvc,
+		bmcSvc: bmcSvc,
+	}
+	return NewRouter(handler)
 }
 
 // isValidCorrelationID validates that a correlation ID is safe for logging.

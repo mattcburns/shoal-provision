@@ -20,21 +20,12 @@ package api
 
 import (
 	"net/http"
-
-	"shoal/internal/auth"
-	"shoal/internal/bmc"
-	"shoal/internal/database"
 )
 
 // NewRouter constructs an API router using the existing Handler methods.
 // This does not change any routes or behavior; it simply centralizes mux setup
 // so other code can delegate to it.
-func NewRouter(db *database.DB) http.Handler {
-	h := &Handler{
-		db:     db,
-		auth:   auth.New(db),
-		bmcSvc: bmc.New(db),
-	}
+func NewRouter(h *Handler) http.Handler {
 	return newMux(h)
 }
 
