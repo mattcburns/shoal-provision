@@ -272,3 +272,114 @@ func TestErrorResponseExtendedInfoReferencesBaseRegistry(t *testing.T) {
 		t.Fatalf("expected Resolution string in ExtendedInfo")
 	}
 }
+
+func TestHandleRegistriesCollection(t *testing.T) {
+	handler, db := setupTestAPI(t)
+	defer func() { _ = db.Close() }()
+
+	// Login to access /Registries endpoints
+	loginBody, _ := json.Marshal(map[string]string{"UserName": "admin", "Password": "admin"})
+	req := httptest.NewRequest(http.MethodPost, "/redfish/v1/SessionService/Sessions", bytes.NewReader(loginBody))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201 Created on login, got %d", rec.Code)
+	}
+	token := rec.Header().Get("X-Auth-Token")
+
+	tests := []struct {
+		name           string
+		method         string
+		expectedStatus int
+		checkResponse  func(*testing.T, *httptest.ResponseRecorder)
+	}{
+		{
+			name:           "GET registries collection",
+			method:         http.MethodGet,
+			expectedStatus: http.StatusOK,
+			checkResponse: func(t *testing.T, rec *httptest.ResponseRecorder) {
+				var coll map[string]interface{}
+				if err := json.Unmarshal(rec.Body.Bytes(), &coll); err != nil {
+					t.Fatalf("failed to parse response: %v", err)
+				}
+				if coll["@odata.context"] != "/redfish/v1/$metadata#MessageRegistryFileCollection.MessageRegistryFileCollection" {
+					t.Errorf("unexpected @odata.context: %v", coll["@odata.context"])
+				}
+				if coll["@odata.type"] != "#MessageRegistryFileCollection.MessageRegistryFileCollection" {
+					t.Errorf("unexpected @odata.type: %v", coll["@odata.type"])
+				}
+				if coll["Name"] != "Message Registry File Collection" {
+					t.Errorf("unexpected Name: %v", coll["Name"])
+				}
+				members, ok := coll["Members"].([]interface{})
+				if !ok {
+					t.Fatalf("expected Members to be an array")
+				}
+				// Should have at least Base.json registry
+				if len(members) == 0 {
+					t.Error("expected at least one registry member")
+				}
+				// Check that members have proper structure
+				foundBase := false
+				for _, m := range members {
+					member, ok := m.(map[string]interface{})
+					if !ok {
+						continue
+					}
+					odataID, _ := member["@odata.id"].(string)
+					if strings.Contains(odataID, "/Base") {
+						foundBase = true
+					}
+				}
+				if !foundBase {
+					t.Error("expected to find Base registry in members")
+				}
+			},
+		},
+		{
+			name:           "OPTIONS registries collection",
+			method:         http.MethodOptions,
+			expectedStatus: http.StatusNoContent,
+			checkResponse: func(t *testing.T, rec *httptest.ResponseRecorder) {
+				if allow := rec.Header().Get("Allow"); allow != "GET" {
+					t.Errorf("expected Allow header 'GET', got %q", allow)
+				}
+			},
+		},
+		{
+			name:           "POST registries collection (not allowed)",
+			method:         http.MethodPost,
+			expectedStatus: http.StatusMethodNotAllowed,
+			checkResponse: func(t *testing.T, rec *httptest.ResponseRecorder) {
+				var errResp map[string]interface{}
+				if err := json.Unmarshal(rec.Body.Bytes(), &errResp); err != nil {
+					t.Fatalf("failed to parse error response: %v", err)
+				}
+				errObj, ok := errResp["error"].(map[string]interface{})
+				if !ok {
+					t.Error("expected error object in response")
+				} else if code, _ := errObj["code"].(string); code != "Base.1.0.MethodNotAllowed" {
+					t.Errorf("expected error code Base.1.0.MethodNotAllowed, got %q", code)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(tt.method, "/redfish/v1/Registries", nil)
+			req.Header.Set("X-Auth-Token", token)
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+
+			if rec.Code != tt.expectedStatus {
+				t.Errorf("expected status %d, got %d", tt.expectedStatus, rec.Code)
+			}
+
+			if tt.checkResponse != nil {
+				tt.checkResponse(t, rec)
+			}
+		})
+	}
+}
