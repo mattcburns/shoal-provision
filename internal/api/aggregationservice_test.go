@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -196,12 +197,14 @@ func TestHandleConnectionMethodsCollection(t *testing.T) {
 	tests := []struct {
 		name           string
 		method         string
+		body           string
 		expectedStatus int
 		checkResponse  func(*testing.T, *httptest.ResponseRecorder)
 	}{
 		{
 			name:           "GET empty collection",
 			method:         http.MethodGet,
+			body:           "",
 			expectedStatus: http.StatusOK,
 			checkResponse: func(t *testing.T, rec *httptest.ResponseRecorder) {
 				var coll map[string]interface{}
@@ -216,6 +219,7 @@ func TestHandleConnectionMethodsCollection(t *testing.T) {
 		{
 			name:           "OPTIONS collection",
 			method:         http.MethodOptions,
+			body:           "",
 			expectedStatus: http.StatusNoContent,
 			checkResponse: func(t *testing.T, rec *httptest.ResponseRecorder) {
 				allow := rec.Header().Get("Allow")
@@ -227,14 +231,85 @@ func TestHandleConnectionMethodsCollection(t *testing.T) {
 		{
 			name:           "DELETE collection (not allowed)",
 			method:         http.MethodDelete,
+			body:           "",
 			expectedStatus: http.StatusMethodNotAllowed,
 			checkResponse:  nil,
+		},
+		{
+			name:           "POST with malformed JSON",
+			method:         http.MethodPost,
+			body:           `{invalid json}`,
+			expectedStatus: http.StatusBadRequest,
+			checkResponse: func(t *testing.T, rec *httptest.ResponseRecorder) {
+				var errResp map[string]interface{}
+				if err := json.Unmarshal(rec.Body.Bytes(), &errResp); err != nil {
+					t.Fatalf("failed to parse error response: %v", err)
+				}
+				errObj, ok := errResp["error"].(map[string]interface{})
+				if !ok {
+					t.Error("expected error object in response")
+				} else if code, _ := errObj["code"].(string); code != "Base.1.0.MalformedJSON" {
+					t.Errorf("expected error code Base.1.0.MalformedJSON, got %q", code)
+				}
+			},
+		},
+		{
+			name:           "POST with missing required fields",
+			method:         http.MethodPost,
+			body:           `{"Name":"test"}`,
+			expectedStatus: http.StatusBadRequest,
+			checkResponse: func(t *testing.T, rec *httptest.ResponseRecorder) {
+				var errResp map[string]interface{}
+				if err := json.Unmarshal(rec.Body.Bytes(), &errResp); err != nil {
+					t.Fatalf("failed to parse error response: %v", err)
+				}
+				errObj, ok := errResp["error"].(map[string]interface{})
+				if !ok {
+					t.Error("expected error object in response")
+				} else if code, _ := errObj["code"].(string); code != "Base.1.0.PropertyMissing" {
+					t.Errorf("expected error code Base.1.0.PropertyMissing, got %q", code)
+				}
+			},
+		},
+		{
+			name:   "POST with invalid BMC address",
+			method: http.MethodPost,
+			body: `{
+				"Name": "test-bmc",
+				"ConnectionMethodVariant.Address": "http://invalid-bmc-address:8080",
+				"ConnectionMethodVariant.Authentication": {
+					"Username": "admin",
+					"Password": "password"
+				}
+			}`,
+			expectedStatus: http.StatusBadRequest,
+			checkResponse: func(t *testing.T, rec *httptest.ResponseRecorder) {
+				var errResp map[string]interface{}
+				if err := json.Unmarshal(rec.Body.Bytes(), &errResp); err != nil {
+					t.Fatalf("failed to parse error response: %v", err)
+				}
+				errObj, ok := errResp["error"].(map[string]interface{})
+				if !ok {
+					t.Error("expected error object in response")
+				}
+				// Should get ResourceCannotBeCreated or InternalError
+				code, _ := errObj["code"].(string)
+				if code != "Base.1.0.ResourceCannotBeCreated" && code != "Base.1.0.InternalError" {
+					t.Errorf("expected error code Base.1.0.ResourceCannotBeCreated or InternalError, got %q", code)
+				}
+			},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			req := httptest.NewRequest(tt.method, "/redfish/v1/AggregationService/ConnectionMethods", nil)
+			var req *http.Request
+			if tt.body != "" {
+				req = httptest.NewRequest(tt.method, "/redfish/v1/AggregationService/ConnectionMethods", strings.NewReader(tt.body))
+				req.Header.Set("Content-Type", "application/json")
+			} else {
+				req = httptest.NewRequest(tt.method, "/redfish/v1/AggregationService/ConnectionMethods", nil)
+			}
 			req.Header.Set("X-Auth-Token", adminToken)
 			rec := httptest.NewRecorder()
 			handler.ServeHTTP(rec, req)
