@@ -74,6 +74,10 @@ Open http://localhost:8080 and log in with `admin` / `admin` (change immediately
 
 Alternatively, download a prebuilt binary from [Releases](https://github.com/mattcburns/shoal/releases), make it executable, and run it.
 
+## Shoal
+
+This is an experimental fork of the [Shoal](https://github.com/mattcburns/shoal) redfish aggregator project.
+
 ## License
 
 AGPL-3.0. See `LICENSE`.
